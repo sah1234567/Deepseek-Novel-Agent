@@ -1,0 +1,28 @@
+.message-body .markdown-body {
+  line-height: 1.55;
+}
+
+.message-body .markdown-body pre {
+  overflow-x: auto;
+  background: var(--color-bg-muted);
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.8125rem;
+}
+
+.message-body .markdown-body code {
+  font-size: 0.875em;
+}
+
+.message-body .thinking-block {
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+  border-left: 2px solid #484f58;
+  padding-left: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.message-body .thinking-block summary {
+  cursor: pointer;
+  font-style: italic;
+}

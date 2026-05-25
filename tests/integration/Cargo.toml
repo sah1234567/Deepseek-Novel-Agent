@@ -1,0 +1,36 @@
+[package]
+name = "novel-integration-tests"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dev-dependencies]
+novel-compaction = { path = "../../crates/novel-compaction" }
+novel-config = { path = "../../crates/novel-config" }
+novel-logging = { path = "../../crates/novel-logging" }
+novel-core = { path = "../../crates/novel-core" }
+novel-knowledge = { path = "../../crates/novel-knowledge" }
+novel-skills = { path = "../../crates/novel-skills" }
+novel-state = { path = "../../crates/novel-state" }
+novel-tools = { path = "../../crates/novel-tools" }
+novel-server = { path = "../../crates/novel-server" }
+rstest = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true }
+
+[[test]]
+name = "boundary_conditions"
+path = "boundary_conditions.rs"
+
+[[test]]
+name = "fork_agent"
+path = "fork_agent.rs"
+
+[[test]]
+name = "knowledge_workflow"
+path = "knowledge_workflow.rs"
+
+[[test]]
+name = "tool_execution"
+path = "tool_execution.rs"

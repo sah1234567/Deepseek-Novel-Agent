@@ -1,0 +1,108 @@
+.tool-call {
+  align-self: flex-start;
+  background: #1c2128;
+  border: 1px dashed #484f58;
+  border-radius: 8px;
+  padding: 0.75rem;
+  font-size: 0.875rem;
+  max-width: 90%;
+}
+
+.tool-call.tool-pending { border-color: var(--color-warn); }
+.tool-call.tool-denied { opacity: 0.7; border-color: var(--color-danger); }
+
+.tool-call header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.tool-badge {
+  font-size: 0.6875rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  background: var(--color-warn);
+  color: #fff;
+}
+
+.tool-badge-info {
+  background: var(--color-accent-blue);
+}
+
+.tool-status-icon {
+  font-size: 0.75rem;
+  width: 1rem;
+  text-align: center;
+}
+
+.tool-status-icon.tool-pending { color: var(--color-text-muted); }
+.tool-status-icon.tool-running { color: var(--color-accent-blue); animation: pulse-dot 1s ease-in-out infinite; }
+.tool-status-icon.tool-denied { color: var(--color-danger); }
+.tool-status-icon.tool-done { color: #3fb950; }
+
+.tool-name {
+  color: var(--color-accent-blue);
+  font-size: 0.8rem;
+}
+
+.tool-summary {
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+}
+
+.tool-detail {
+  margin: 0.4rem 0 0;
+  font-size: 0.8rem;
+  color: var(--color-text);
+  line-height: 1.5;
+}
+
+.tool-badge-warn {
+  background: #9e6a03;
+}
+
+.tool-expand {
+  margin-top: 0.35rem;
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.75rem;
+  padding: 0;
+}
+
+.tool-result {
+  margin-top: 0.5rem;
+  color: var(--color-text-muted);
+  max-height: 240px;
+  overflow: auto;
+  font-size: 0.75rem;
+}
+
+.tool-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.65rem;
+}
+
+.tool-actions button {
+  border: none;
+  border-radius: 6px;
+  padding: 0.35rem 0.75rem;
+  cursor: pointer;
+  font: inherit;
+  background: var(--color-accent);
+  color: #fff;
+}
+
+.tool-actions .btn-deny {
+  background: var(--color-danger);
+}
+
+.message-tool .tool-label {
+  font-size: 0.75rem;
+  opacity: 0.7;
+  margin-bottom: 0.25rem;
+}

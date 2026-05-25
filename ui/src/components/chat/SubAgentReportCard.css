@@ -1,0 +1,29 @@
+.sub-agent-report-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.sub-agent-report-view-btn {
+  align-self: flex-start;
+  border: 1px solid #388bfd;
+  background: rgba(56, 139, 253, 0.1);
+  color: #58a6ff;
+  cursor: pointer;
+  border-radius: 6px;
+  padding: 0.35rem 0.75rem;
+  font: inherit;
+  font-size: 0.8125rem;
+}
+
+.sub-agent-report-view-btn:hover {
+  background: rgba(56, 139, 253, 0.2);
+}
+
+.message-subAgentReport {
+  border-left: 3px solid #8957e5;
+}
+
+.message-subAgentReport > header {
+  color: #bc8cff;
+}

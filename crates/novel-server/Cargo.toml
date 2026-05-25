@@ -1,0 +1,28 @@
+[package]
+name = "novel-server"
+version.workspace = true
+edition.workspace = true
+
+[features]
+default = []
+tauri = ["dep:tauri", "dep:uuid"]
+
+[dependencies]
+novel-config = { path = "../novel-config" }
+novel-core = { path = "../novel-core" }
+novel-knowledge = { path = "../novel-knowledge" }
+novel-logging = { path = "../novel-logging" }
+novel-state = { path = "../novel-state" }
+novel-tools = { path = "../novel-tools" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tauri = { version = "2", optional = true, features = [] }
+uuid = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+rstest = { workspace = true }
+chrono = { workspace = true }

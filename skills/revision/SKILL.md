@@ -1,0 +1,53 @@
+---
+name: revision
+description: 修订与级联改稿工作流——ImpactAnalysis 定位影响范围、按优先级级联 Edit。当用户要改稿、修设定、级联修改时使用。触发词："改稿"、"修订"、"修改设定"、"级联修改"
+when_to_use: 改稿/修设定/级联修改时使用。写新章、纯策划可忽略本 Skill。
+skill_kind: workflow
+allowed-tools: Read, Write, Edit, Glob, Grep, Bash, CharacterSearch, PlotGraph, ImpactAnalysis, InvokeSkill, AskUserQuestion, ForkSubAgent
+---
+
+# 修订与级联改稿工作流
+
+## 阶段说明
+
+本 Skill 覆盖**改稿阶段** SOP。主 Agent 可直接 Edit `chapters/**` 与 knowledge/**。
+
+## 第一步：影响分析（不可跳过）
+
+1. 解析用户反馈，确定受影响范围（角色性格、战力体系、情节走向、世界观设定等）
+2. 使用 **ImpactAnalysis** + Grep + CharacterSearch 定位所有影响点（**先 Grep/搜索定位，再按清单逐文件分段 Read**；禁止批量 full Read 多章正文）：
+   - 人物卡出场记录日志 → 章号列表
+   - PlotGraph backward → 如果修改影响伏笔或因果事件
+   - 伏笔追踪 → 检查关联人物列
+   - _关系与称呼索引 → 所有涉及该角色关系的行
+3. 产出影响报告（列出受影响的：人物卡、大纲、细纲、正文章节、伏笔、因果链）
+4. 影响范围超过 3 个文件时，使用 AskUserQuestion 向用户确认后再执行
+
+## 第二步：级联修改（确认后）
+
+修订正文时同步清除 AI 味：删改「不是…而是…」、破折号泛滥、「然后/首先/其次」堆砌、句长均匀、情感空标签、说明书式叙述；补入具体细节与闲笔，长短句交替。
+
+修改优先级（从基础到表层）：
+1. **世界观/战力文件**
+2. **大纲**
+3. **人物卡**
+4. **细纲**
+5. **正文章节**（优先改最近受影响的章节）
+
+每章修改后追加细纲修订记录行：
+| 日期/轮次 | 修订原因 | 修改范围 | 级联影响检查 |
+
+## 删章流程
+
+不直接删除文件（无 rm 工具）：
+1. 在伏笔追踪、因果链中追加"已废弃"标注
+2. 大纲中截断或标记废弃章
+3. 用 Write 空文件或 Edit 替换为废弃说明覆盖细纲/正文（或请作者在 IDE 中删除）
+4. 更新 INDEX.md 进度段
+
+## 本阶段完成后
+
+1. 向用户汇报修订摘要：已修改文件清单与变更要点。
+2. 若本轮 Edit/Write 了 `chapters/**`：**必须**在同一次 assistant 消息内并行 Fork 5 项 Subagent（LogIntegrityChecker + ConsistencyChecker + DialogueAnalyzer + PacingAnalyzer + EmotionAnalyzer），task 含受影响章节路径与改稿原因；按全部报告 Edit 修复。
+3. 若仅改 knowledge/ 未改正文：说明知识库已同步；若改动可能影响已写章节，**必须** Fork ConsistencyChecker（+ 三 Analyzer）审计最近相关章。
+4. 审计与修复完成后，向用户确认「修订完成」。

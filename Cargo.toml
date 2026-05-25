@@ -1,0 +1,48 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/novel-config",
+    "crates/novel-logging",
+    "crates/novel-state",
+    "crates/novel-knowledge",
+    "crates/novel-skills",
+    "crates/novel-tools",
+    "crates/novel-compaction",
+    "crates/novel-core",
+    "crates/novel-deepseek",
+    "crates/novel-server",
+    "src-tauri",
+    "tests/integration",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+async-trait = "0.1"
+backoff = { version = "0.4", features = ["tokio"] }
+chrono = { version = "0.4", features = ["serde"] }
+figment = { version = "0.10", features = ["env", "json"] }
+futures = "0.3"
+ignore = "0.4"
+petgraph = "0.6"
+r2d2 = "0.8"
+r2d2_sqlite = "0.24"
+regex = "1"
+rusqlite = { version = "0.31", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+thiserror = "1"
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+toml = "0.8"
+uuid = { version = "1", features = ["v4", "serde"] }
+walkdir = "2"
+tempfile = "3"
+rstest = "0.19"
+pretty_assertions = "1"

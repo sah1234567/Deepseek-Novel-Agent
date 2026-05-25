@@ -1,0 +1,9 @@
+.file-preview-body {
+  margin: 0;
+  padding: 1rem;
+  font-size: 0.875rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #e6edf3;
+}

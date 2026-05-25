@@ -1,0 +1,376 @@
+.status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.65rem 1.25rem;
+  border-bottom: 1px solid #30363d;
+  background: #161b22;
+  font-size: 0.9375rem;
+  min-height: 3.25rem;
+}
+
+.status-items {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.65rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.status-chip {
+  padding: 0.35rem 0.7rem;
+  border-radius: 999px;
+  background: #21262d;
+  border: 1px solid #30363d;
+  color: #c9d1d9;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  white-space: nowrap;
+  font-size: 0.9375rem;
+}
+
+.status-chip[data-mode="default"] {
+  border-color: #484f58;
+  color: #b1bac4;
+}
+
+.status-chip[data-mode="plan"] {
+  border-color: #1f6feb;
+  color: #79c0ff;
+}
+
+.status-chip[data-mode="yolo"] {
+  border-color: #9e6a03;
+  color: #d2991d;
+}
+
+.status-chip[data-mode="dontAsk"] {
+  border-color: #da3633;
+  color: #ffa198;
+}
+
+.session-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.55rem 0.3rem 0.65rem;
+  border-radius: 999px;
+  background: #21262d;
+  border: 1px solid #30363d;
+  font-size: 0.9375rem;
+}
+
+.session-control-label {
+  color: #8b949e;
+  white-space: nowrap;
+}
+
+.session-select {
+  background: #0d1117;
+  border: 1px solid #484f58;
+  color: #e6edf3;
+  border-radius: 6px;
+  padding: 0.3rem 0.5rem;
+  font: inherit;
+  font-size: 0.9375rem;
+  min-width: 10rem;
+  max-width: 16rem;
+  cursor: pointer;
+}
+
+.session-select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.session-select:focus {
+  outline: 2px solid #388bfd;
+  outline-offset: 1px;
+}
+
+.new-session-btn {
+  border: none;
+  background: transparent;
+  color: #58a6ff;
+  cursor: pointer;
+  font: inherit;
+  font-size: 1.25rem;
+  padding: 0 0.2rem;
+  line-height: 1;
+}
+
+.new-session-btn:hover:not(:disabled) {
+  color: #79c0ff;
+}
+
+.new-session-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.token-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.35rem 0.85rem;
+  border-radius: 8px;
+  background: #21262d;
+  border: 1px solid #30363d;
+  white-space: nowrap;
+}
+
+.token-group-turn {
+  border-color: #238636;
+}
+
+.token-group-session {
+  border-color: #388bfd;
+}
+
+.token-group-title {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.token-group-turn .token-group-title {
+  color: #3fb950;
+}
+
+.token-group-session .token-group-title {
+  color: #79c0ff;
+}
+
+.token-total {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #e6edf3;
+  font-variant-numeric: tabular-nums;
+  padding-right: 0.5rem;
+  margin-right: 0.25rem;
+  border-right: 1px solid #30363d;
+  min-width: 70px;
+  text-align: right;
+}
+
+.token-group-stats {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.85rem;
+}
+
+.token-stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3rem;
+}
+
+.token-stat-label {
+  color: #8b949e;
+  font-size: 0.8125rem;
+}
+
+.token-stat-value {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  font-size: 1.0625rem;
+  line-height: 1.2;
+}
+
+.token-stat-turn .token-stat-value {
+  color: #56d364;
+}
+
+.token-stat-session .token-stat-value {
+  color: #79c0ff;
+}
+
+.status-chip.status-hook {
+  border-color: #9e6a03;
+  color: #f0c14b;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.status-chip-clickable {
+  cursor: pointer;
+  font: inherit;
+}
+
+.status-chip-clickable:disabled {
+  cursor: default;
+  opacity: 0.85;
+}
+
+.status-chip-clickable:not(:disabled):hover {
+  border-color: #f0c14b;
+  background: rgba(240, 193, 75, 0.08);
+}
+
+.status-chip.status-warn {
+  border-color: #da3633;
+  color: #ffa198;
+}
+
+.settings-btn {
+  border: 1px solid #30363d;
+  background: #21262d;
+  color: #e6edf3;
+  border-radius: 6px;
+  padding: 0.45rem 0.9rem;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.9375rem;
+  flex-shrink: 0;
+}
+
+.settings-btn:hover {
+  background: #30363d;
+}
+
+/* ── Todo dropdown ── */
+.todo-dropdown-wrapper {
+  position: relative;
+}
+
+.todo-dropdown-btn {
+  border: 1px solid #30363d;
+  background: #21262d;
+  color: #8b949e;
+  font: inherit;
+  font-size: 0.8125rem;
+  border-radius: 6px;
+  padding: 0.35rem 0.75rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.todo-dropdown-btn.has-active {
+  color: #e6edf3;
+  border-color: #58a6ff;
+}
+
+.todo-dropdown-btn.is-open {
+  background: #30363d;
+  border-color: #58a6ff;
+}
+
+.todo-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  width: 320px;
+  max-height: 360px;
+  overflow-y: auto;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  z-index: 100;
+}
+
+.todo-dropdown-empty {
+  font-size: 0.8125rem;
+  color: #6e7681;
+  padding: 0.75rem 1rem;
+  margin: 0;
+}
+
+.todo-dropdown-list {
+  list-style: none;
+  margin: 0;
+  padding: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.todo-dropdown-item {
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 0.5rem 0.65rem;
+  background: #0d1117;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.todo-dropdown-status {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #8b949e;
+  border: none;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.todo-dropdown-icon {
+  font-size: 0.85rem;
+  flex-shrink: 0;
+}
+
+.todo-dropdown-pending .todo-dropdown-icon {
+  color: #6e7681;
+}
+
+.todo-dropdown-in_progress .todo-dropdown-icon {
+  color: #58a6ff;
+}
+
+.todo-dropdown-completed .todo-dropdown-icon {
+  color: #3fb950;
+}
+
+.todo-dropdown-cancelled .todo-dropdown-icon {
+  color: #6e7681;
+  text-decoration: line-through;
+}
+
+.todo-dropdown-status:hover {
+  text-decoration: underline;
+}
+
+.todo-dropdown-in_progress .todo-dropdown-status {
+  color: #79c0ff;
+}
+
+.todo-dropdown-completed .todo-dropdown-status {
+  color: #3fb950;
+}
+
+.todo-dropdown-content {
+  font-size: 0.8125rem;
+  line-height: 1.35;
+  color: #e6edf3;
+}
+
+@media (max-width: 1100px) {
+  .status-bar {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .token-group-stats {
+    flex-wrap: wrap;
+    gap: 0.5rem 0.75rem;
+  }
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.65;
+  }
+}

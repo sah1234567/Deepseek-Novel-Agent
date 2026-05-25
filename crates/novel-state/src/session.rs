@@ -1,0 +1,27 @@
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SessionSummary {
+    pub id: String,
+    pub title: Option<String>,
+    pub status: String,
+    pub last_active_at: DateTime<Utc>,
+    pub total_turns: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Session {
+    pub id: String,
+    pub project_root: String,
+    pub title: Option<String>,
+    pub status: String,
+    pub model: String,
+    pub provider: String,
+    pub created_at: DateTime<Utc>,
+    pub last_active_at: DateTime<Utc>,
+    pub cache_hit_tokens: i64,
+    pub cache_miss_tokens: i64,
+    pub completion_tokens: i64,
+    pub total_turns: i64,
+}

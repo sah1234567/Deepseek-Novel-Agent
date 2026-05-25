@@ -1,0 +1,14 @@
+[package]
+name = "novel-config"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+figment = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+rstest = { workspace = true }

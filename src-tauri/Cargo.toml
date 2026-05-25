@@ -1,0 +1,24 @@
+[package]
+name = "novel-agent"
+version.workspace = true
+edition.workspace = true
+description = "DeepSeek Novel Agent desktop shell (Tauri + React)"
+default-run = "novel-agent"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+novel-config = { path = "../crates/novel-config" }
+novel-core = { path = "../crates/novel-core" }
+novel-knowledge = { path = "../crates/novel-knowledge" }
+novel-server = { path = "../crates/novel-server", features = ["tauri"] }
+novel-state = { path = "../crates/novel-state" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tauri = { version = "2", features = [] }
+tokio = { workspace = true }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

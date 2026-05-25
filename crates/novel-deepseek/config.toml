@@ -1,0 +1,8 @@
+# Default DeepSeek API endpoints for novel-deepseek.
+# Override at runtime via DEEPSEEK_API_BASE / DEEPSEEK_WEB_SEARCH_MESSAGES_URL.
+
+[deepseek]
+# OpenAI-compatible Chat Completions base (client appends `/chat/completions`).
+chat_api_base = "https://api.deepseek.com/v1"
+# Anthropic Messages API for server-side `web_search_20250305`.
+web_search_messages_url = "https://api.deepseek.com/anthropic/v1/messages"

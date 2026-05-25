@@ -1,0 +1,62 @@
+/* Shared inner overlays: file preview & subagent — bounded by .dialog-viewport */
+.dialog-inner-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #0d1117;
+  border-radius: 6px;
+}
+
+.file-preview-overlay {
+  z-index: 20;
+}
+
+.sub-agent-overlay {
+  z-index: 25;
+}
+
+.dialog-inner-overlay-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.6rem 0.85rem;
+  border-bottom: 1px solid #21262d;
+  background: #161b22;
+  flex-shrink: 0;
+}
+
+.dialog-inner-overlay-title {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #e6edf3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.dialog-inner-overlay-close {
+  border: 1px solid #30363d;
+  background: transparent;
+  color: #8b949e;
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 0.2rem 0.5rem;
+  font: inherit;
+  font-size: 0.85rem;
+  flex-shrink: 0;
+}
+
+.dialog-inner-overlay-close:hover {
+  color: #f85149;
+  border-color: #f85149;
+}
+
+.dialog-inner-overlay-scroll {
+  flex: 1;
+  min-height: 0;
+}

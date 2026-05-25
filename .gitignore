@@ -1,0 +1,28 @@
+# ── Rust / Cargo ─────────────────────────────────────────────
+/target/
+**/target/
+
+# ── Node / 前端 ──────────────────────────────────────────────
+ui/node_modules/
+ui/dist/
+*.tsbuildinfo
+
+# ── 用户作品与本地状态（勿提交）──────────────────────────────
+works/*
+!works/.gitkeep
+
+# API Key 与本地 Agent 配置（用 env 或 Settings 自行配置）
+.novel-agent/api_config.json
+
+# ── 环境 / 日志 ──────────────────────────────────────────────
+.env
+.env.*
+*.log
+
+# ── OS / IDE ─────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~

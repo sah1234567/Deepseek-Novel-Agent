@@ -1,0 +1,81 @@
+---
+name: novel-planning
+description: 小说规划工作流——三级策划（世界观/人物 → 大纲 → 细纲）。当用户要新建作品、规划世界观、人物体系、大纲或细纲时使用。触发词："策划"、"规划"、"大纲"、"细纲"、"世界观"、"人物设定"、"开新书"
+when_to_use: 新建作品、规划世界观/人物/大纲/细纲时使用。与写章、改稿无关的任务可忽略本 Skill。
+skill_kind: workflow
+allowed-tools: Read, Write, Edit, Glob, Grep, Bash, WebSearch, InvokeSkill, AskUserQuestion, TodoWrite
+---
+
+# 小说规划工作流
+
+## 与本 Skill 相关的概念（请先读）
+
+| 概念 | 含义 |
+|------|------|
+| **本 Skill（novel-planning）** | **作品规划 SOP**：世界观、人物、大纲、细纲怎么建、先做什么后做什么。与界面权限下拉**无强绑定**。 |
+| **界面「策划 / Plan」权限模式** | 仅限制 **Write/Edit 路径**（默认只能写 `plan/`）。作者可选用它存放规划草案，**不是** Invoke 本 Skill 的前提。 |
+
+规划产出最终落在 `knowledge/`（背景、人物、大纲、细纲等）。若作者处于 Plan 权限模式，可先把调研笔记、讨论稿写在 `plan/`，定稿后再在**常规/自动/无人值守**模式下写入 `knowledge/`。
+
+用户意图为写章、改稿、审计时，**不必** Invoke 本 Skill。
+
+## WebSearch（规划前强烈建议）
+
+在写**大纲**和**细纲**之前，只要网络/API 可用，**优先**用 WebSearch 做一轮外部调研，再落笔知识库。不要跳过调研直接 Write 大纲/细纲。
+
+| 时机 | 建议检索方向（按 `aspect` 选用） |
+|------|--------------------------------|
+| **第一层（世界观/人物）之前或并行** | 对标作品、流派趋势、读者反馈、常见设定套路 |
+| **第二层（大纲）之前** | 同类书结构、热门梗、篇幅与节奏参考、平台偏好 |
+| **第三层（细纲）之前** | 分章节奏、开篇钩子、同类章节拆解、短剧/网文节奏参考 |
+
+检索结果可摘要写入 `plan/调研-*.md`（Plan 模式）或直接整理进后续 `knowledge/` 文件。每层开始前用 1–2 句说明「依据哪些检索结论做决策」。
+
+## 第一层：世界观 + 人物体系
+
+1. **WebSearch**（见上表）：至少覆盖对标作品 + 趋势/读者反馈
+2. 读取当前激活的流派 Skill 的「建议创建的知识库文件」指引。如有多个 Skill 叠加，使用 InvokeSkill 加载每个 Skill 的完整正文
+3. **技能冲突检查：** 加载新 Skill 正文后，检查其中是否声明了与已激活 Skill 的互斥关系。若冲突，以占比 ≥70% 的题材为主 Skill，在规划报告中标注冲突并说明决策。无法判断时用 AskUserQuestion 交作者确认
+4. **必建文件（任何题材都建）：**
+   - Write knowledge/shared-systems/背景设定.md
+   - Write knowledge/shared-systems/时间线.md
+5. **按题材按需创建可选文件**
+6. Write knowledge/characters/_template.md
+7. Write 每个主要人物的人物卡
+8. Write knowledge/characters/_关系与称呼索引.md
+
+## 第二层：大纲
+
+**进入本层前：** 完成或更新 WebSearch（大纲向），再 Write 下列文件。
+
+9. Write knowledge/plot/大纲.md
+10. Write knowledge/plot/伏笔追踪.md
+11. Write knowledge/plot/因果链.md
+
+## 第三层：细纲
+
+**进入本层前：** 完成或更新 WebSearch（细纲/节奏向），再分批写细纲。
+
+12. Write knowledge/plot/细纲/chapter-001-细纲.md 起（至少前 5 章）
+13. 后续细纲分批产出（每 5–10 章一批）
+
+**多世界题材：** 在 knowledge/worlds/ 下为每个持久世界创建 INDEX.md
+
+## 产出检查清单
+
+规划完成后使用 TodoWrite 标记：
+1. 外部调研（WebSearch）✓
+2. 世界观设定 ✓
+3. 人物体系 ✓
+4. 大纲 ✓
+5. 细纲 Ch1-5 ✓
+6. 开始编写第一章 (next)
+
+**分歧确认：** 主角性别、CP 走向、战力天花板、结局倾向等关键决策，必须使用 AskUserQuestion 确认。
+
+## 本阶段完成后
+
+1. 向用户汇报规划摘要：调研要点、已创建文件清单、待确认决策。
+2. 若细纲已覆盖前 5 章：建议 InvokeSkill(chapter-writing) 开始写第一章。
+3. 若用户仅要大纲不要写章：说明知识库已就绪，等待用户指令。
+4. 若已完成章节数 ≥ 已有细纲最大章号 + 5：建议继续补充细纲（Invoke 本 Skill 或自行 Write 细纲文件）。

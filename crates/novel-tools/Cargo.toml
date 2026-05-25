@@ -1,0 +1,25 @@
+[package]
+name = "novel-tools"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+dashmap = "6"
+novel-compaction = { path = "../novel-compaction" }
+novel-deepseek = { path = "../novel-deepseek" }
+novel-knowledge = { path = "../novel-knowledge" }
+novel-skills = { path = "../novel-skills" }
+novel-state = { path = "../novel-state" }
+regex = { workspace = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = "0.1"
+walkdir = { workspace = true }
+
+[dev-dependencies]
+rstest = { workspace = true }
+tempfile = { workspace = true }
