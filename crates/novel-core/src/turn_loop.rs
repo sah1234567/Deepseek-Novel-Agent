@@ -312,25 +312,9 @@ impl AgentEngine {
         if self.llm.is_some() {
             return;
         }
-        // Priority: DEEPSEEK_API_KEY (env) > agent api_config.json > offline mock
-        let api_key = std::env::var("DEEPSEEK_API_KEY")
-            .ok()
-            .or_else(|| {
-                novel_config::load_agent_api_config(&self.shared.global_config_path)
-                    .ok()
-                    .flatten()
-                    .and_then(|c| if c.api_key.is_empty() { None } else { Some(c.api_key) })
-            });
-        let api_base = std::env::var("DEEPSEEK_API_BASE")
-            .ok()
-            .or_else(|| {
-                novel_config::load_agent_api_config(&self.shared.global_config_path)
-                    .ok()
-                    .flatten()
-                    .map(|c| c.api_base)
-                    .filter(|b| !b.is_empty())
-            })
-            .unwrap_or_else(|| novel_deepseek::chat_api_base());
+        let api_key =
+            novel_config::resolve_agent_api_key(&self.shared.global_config_path);
+        let api_base = novel_config::resolve_agent_api_base(&self.shared.global_config_path);
         let model = &self.shared.settings.model.model;
         self.llm = match api_key {
             Some(key) => Some(ChatClient::deepseek(&key, model, &api_base, self.shared.settings.model.thinking_enabled)),
@@ -2293,25 +2277,8 @@ pub async fn run_subagent_async(
         task_len = task.len(),
         "subagent_async_start"
     );
-    // Init LLM from env/config (same logic as AgentEngine::init_llm)
-    let api_key = std::env::var("DEEPSEEK_API_KEY")
-        .ok()
-        .or_else(|| {
-            novel_config::load_agent_api_config(&shared.global_config_path)
-                .ok()
-                .flatten()
-                .and_then(|c| if c.api_key.is_empty() { None } else { Some(c.api_key) })
-        });
-    let api_base = std::env::var("DEEPSEEK_API_BASE")
-        .ok()
-        .or_else(|| {
-            novel_config::load_agent_api_config(&shared.global_config_path)
-                .ok()
-                .flatten()
-                .map(|c| c.api_base)
-                .filter(|b| !b.is_empty())
-        })
-        .unwrap_or_else(|| shared.settings.model.api_base.clone());
+    let api_key = novel_config::resolve_agent_api_key(&shared.global_config_path);
+    let api_base = novel_config::resolve_agent_api_base(&shared.global_config_path);
     let model = &shared.settings.model.model;
     let mut llm: Option<ChatClient> = match api_key {
         Some(key) => Some(ChatClient::deepseek(&key, model, &api_base, shared.settings.model.thinking_enabled)),
@@ -2416,6 +2383,7 @@ pub async fn run_subagent_async(
             allow_fork: false,
             fork_queue: None,
             skills_dir: Some(shared.agent_skills_dir.clone()),
+            global_api_config_path: Some(shared.global_config_path.clone()),
         };
 
         let completion = if let Some(ref mut client) = llm {

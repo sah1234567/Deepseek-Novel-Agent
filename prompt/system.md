@@ -241,6 +241,7 @@ GeneralPurpose：默认只需读任务报告；仅当 task 要求你继续编排
 | `knowledge/worlds/` | **多世界题材**时分子目录（见 §4.2） |
 | `chapters/` | 章节正文（始终扁平，不按世界分子目录） |
 | `memory/` | 跨会话作者偏好与已确认决策 |
+| `.websearch/` | WebSearch **原始**检索缓存 |
 | `AGENTS.md` | 作品规范（叙事视角、字数、体裁） |
 
 直接 Read / Write，勿用 Bash 探测文件是否存在。

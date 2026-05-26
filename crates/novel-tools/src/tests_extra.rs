@@ -123,37 +123,11 @@ mod novel_tools_tests {
 }
 
 #[cfg(test)]
-mod market_tests {
+mod permission_tests {
     use crate::{default_registry, PermissionMode, ToolContext, ToolExecutor};
     use serde_json::json;
     use std::sync::Arc;
     use tempfile::TempDir;
-
-    #[tokio::test(flavor = "current_thread")]
-    #[ignore = "requires DEEPSEEK_API_KEY and network"]
-    async fn web_search_writes_file() {
-        let tmp = TempDir::new().unwrap();
-        let reg = Arc::new(default_registry(tmp.path().to_path_buf()));
-        let ex = ToolExecutor::new(reg);
-        let ctx = ToolContext {
-            permission_mode: PermissionMode::Auto,
-            project_root: tmp.path().to_path_buf(),
-            ..ToolContext::new(tmp.path().to_path_buf())
-        };
-        let out = ex
-            .execute_one(
-                &crate::ToolCallSpec {
-                    id: "1".into(),
-                    name: "WebSearch".into(),
-                    input: json!({"query": "仙侠趋势", "aspect": "trending", "genre": "xianxia"}),
-                },
-                &ctx,
-            )
-            .await
-            .unwrap();
-        assert!(out.content.contains("summary"));
-        assert!(tmp.path().join("knowledge/market").exists());
-    }
 
     #[test]
     fn plan_mode_allows_write_under_plan_only() {

@@ -7,6 +7,7 @@ edition.workspace = true
 async-trait = { workspace = true }
 dashmap = "6"
 novel-compaction = { path = "../novel-compaction" }
+novel-config = { path = "../novel-config" }
 novel-deepseek = { path = "../novel-deepseek" }
 novel-knowledge = { path = "../novel-knowledge" }
 novel-skills = { path = "../novel-skills" }

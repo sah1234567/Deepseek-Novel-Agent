@@ -27,7 +27,7 @@
 
 **API Key 优先级：** `DEEPSEEK_API_KEY`（env）> `{agent_root}/.novel-agent/api_config.json` > 离线 mock
 
-API Key **不在** per-work `settings.json` 中持久化。全局读写：`load_agent_api_config` / `save_agent_api_config` / `AgentApiConfig`（全局 `api_config.json`，`state.db` 内旧表已移除）。
+API Key **不在** per-work `settings.json` 中持久化。全局读写：`load_agent_api_config` / `save_agent_api_config` / `AgentApiConfig`（全局 `api_config.json`，`state.db` 内旧表已移除）。运行时解析：`resolve_agent_api_key` / `resolve_agent_api_base`（`DEEPSEEK_*` env 优先，供 LLM 与 WebSearch 共用）。
 
 ### 1.3 settings.json 结构
 

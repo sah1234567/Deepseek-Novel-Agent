@@ -40,6 +40,8 @@ pub struct ToolContext {
     pub fork_queue: Option<ForkQueue>,
     /// Agent skills directory for resolving skill paths (e.g. `skills/plagiarism/`).
     pub skills_dir: Option<PathBuf>,
+    /// `{agent_root}/.novel-agent/api_config.json` — WebSearch loads API key when env is unset.
+    pub global_api_config_path: Option<PathBuf>,
 }
 
 impl ToolContext {
@@ -61,6 +63,15 @@ impl ToolContext {
             allow_fork: false,
             fork_queue: None,
             skills_dir: None,
+            global_api_config_path: None,
+        }
+    }
+
+    /// Same priority as `novel-core` LLM init (`novel_config::resolve_agent_api_key`).
+    pub fn resolve_deepseek_api_key(&self) -> Option<String> {
+        match &self.global_api_config_path {
+            Some(path) => novel_config::resolve_agent_api_key(path),
+            None => std::env::var("DEEPSEEK_API_KEY").ok().filter(|k| !k.is_empty()),
         }
     }
 

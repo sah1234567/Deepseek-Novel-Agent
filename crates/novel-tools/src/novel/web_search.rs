@@ -19,33 +19,36 @@ struct WebSearchOutput {
 
 pub struct WebSearchTool;
 
-async fn perform_search(query: &str) -> Vec<SearchSource> {
-    let api_key = match std::env::var("DEEPSEEK_API_KEY").ok() {
-        Some(k) if !k.is_empty() => k,
-        _ => {
-            tracing::warn!("WebSearch: no API key configured, returning empty results");
-            return vec![];
-        }
-    };
+/// Cached search results under `.websearch/` (Agent runtime cache, not novel canon).
+const CACHE_DIR: &str = ".websearch";
 
-    match novel_deepseek::ChatClient::web_search(&api_key, query, 8).await {
-        Ok(results) => results
-            .into_iter()
-            .map(|r| SearchSource {
-                title: r.title,
-                url: r.url,
-                key_points: if r.snippet.is_empty() {
-                    vec![]
-                } else {
-                    vec![r.snippet]
-                },
-            })
-            .collect(),
-        Err(e) => {
-            tracing::warn!("WebSearch failed (will cache as empty): {e}");
-            vec![]
-        }
-    }
+async fn perform_search(ctx: &ToolContext, query: &str) -> Result<Vec<SearchSource>, ToolError> {
+    let api_key = ctx.resolve_deepseek_api_key().ok_or_else(|| {
+        ToolError::Execution(
+            "联网搜索未配置 API Key：请在设置中填写 DeepSeek API Key，或设置环境变量 DEEPSEEK_API_KEY"
+                .into(),
+        )
+    })?;
+
+    let results = novel_deepseek::ChatClient::web_search(&api_key, query, 8)
+        .await
+        .map_err(|e| {
+            tracing::warn!(error = %e, "WebSearch API call failed");
+            ToolError::Execution(format!("联网搜索失败: {e}"))
+        })?;
+
+    Ok(results
+        .into_iter()
+        .map(|r| SearchSource {
+            title: r.title,
+            url: r.url,
+            key_points: if r.snippet.is_empty() {
+                vec![]
+            } else {
+                vec![r.snippet]
+            },
+        })
+        .collect())
 }
 
 #[async_trait]
@@ -54,7 +57,7 @@ impl Tool for WebSearchTool {
         "WebSearch"
     }
     fn description(&self) -> &str {
-        "通用网页搜索，基于 DeepSeek web_search_20250305 服务端搜索。可用于市场调研、对标作品分析、读者反馈、桥段参考等任何需要联网搜索的场景。结果缓存 knowledge/market/"
+        "通用网页搜索，基于 DeepSeek web_search_20250305 服务端搜索。可用于市场调研、对标作品分析、读者反馈、桥段参考等任何需要联网搜索的场景。原始结果缓存 .websearch/（非 knowledge 正典；纳入设定请再 Write 到 plan/ 或 knowledge/）"
     }
     fn input_schema(&self) -> Value {
         json!({
@@ -88,9 +91,9 @@ impl Tool for WebSearchTool {
             format!("{genre} {query} {aspect}")
         };
 
-        let sources = perform_search(&search_query).await;
+        let sources = perform_search(ctx, &search_query).await?;
         let summary = if sources.is_empty() {
-            format!("未找到联网结果（API key 未配置或搜索返回空），已记录搜索请求: {query} ({aspect})")
+            format!("未找到联网结果（搜索返回空），已记录搜索请求: {query} ({aspect})")
         } else {
             format!(
                 "找到 {} 条来源，主题: {query} / {aspect}{}",
@@ -103,7 +106,7 @@ impl Tool for WebSearchTool {
             )
         };
 
-        let dir = ctx.project_root.join("knowledge/market");
+        let dir = ctx.project_root.join(CACHE_DIR);
         crate::blocking::create_dir_all(dir.clone()).await?;
         let filename = format!("search-{}-{}.md", aspect, chrono_like_slug());
         let path = dir.join(&filename);
@@ -127,7 +130,7 @@ impl Tool for WebSearchTool {
         let output = WebSearchOutput {
             summary,
             sources,
-            cached_path: rel.clone(),
+            cached_path: rel,
         };
         Ok(ToolOutput {
             content: serde_json::to_string_pretty(&output)
@@ -148,11 +151,59 @@ fn chrono_like_slug() -> String {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn html_escape_trim_basic() {
-        assert_eq!(
-            "  hello &amp; world  ".replace("&amp;", "&").trim(),
-            "hello & world"
-        );
+    use super::*;
+    use crate::{default_registry, PermissionMode, ToolCallSpec, ToolExecutor};
+    use serde_json::json;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn errors_when_no_api_key() {
+        std::env::remove_var("DEEPSEEK_API_KEY");
+        let tmp = TempDir::new().unwrap();
+        let reg = Arc::new(default_registry(tmp.path().to_path_buf()));
+        let ex = ToolExecutor::new(reg);
+        let ctx = ToolContext {
+            permission_mode: PermissionMode::Auto,
+            ..ToolContext::new(tmp.path().to_path_buf())
+        };
+        let err = ex
+            .execute_one(
+                &ToolCallSpec {
+                    id: "1".into(),
+                    name: "WebSearch".into(),
+                    input: json!({"query": "test"}),
+                },
+                &ctx,
+            )
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("API Key"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    #[ignore = "requires DEEPSEEK_API_KEY and network"]
+    async fn writes_cache_under_dot_websearch() {
+        let tmp = TempDir::new().unwrap();
+        let reg = Arc::new(default_registry(tmp.path().to_path_buf()));
+        let ex = ToolExecutor::new(reg);
+        let ctx = ToolContext {
+            permission_mode: PermissionMode::Auto,
+            project_root: tmp.path().to_path_buf(),
+            ..ToolContext::new(tmp.path().to_path_buf())
+        };
+        let out = ex
+            .execute_one(
+                &ToolCallSpec {
+                    id: "1".into(),
+                    name: "WebSearch".into(),
+                    input: json!({"query": "仙侠趋势", "aspect": "trending", "genre": "xianxia"}),
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+        assert!(out.content.contains("summary"));
+        assert!(tmp.path().join(CACHE_DIR).exists());
     }
 }

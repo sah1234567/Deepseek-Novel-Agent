@@ -6,7 +6,7 @@
 
 - **禁止 fork** 任何子 Agent
 - **禁止 JSON** / ```json 代码块输出；最终输出必须是自然语言报告
-- 可在 sandbox 内 Read / Write / Edit / Tail `knowledge/**`、`chapters/**`、`memory/**`；写前必须 Read 目标文件。续写/章末衔接用 **Tail**；多表 md（人物卡）用 Grep+Read range，勿 Tail 整文件。
+- 可在 sandbox 内 Read / Write / Edit / Tail `knowledge/**`、`chapters/**`、`memory/**`；写前必须 Read 目标文件。续写/章末衔接用 **Tail**；多表 md（人物卡）用 Grep+Read range，勿 Tail 整文件。联网调研可用 **WebSearch**（原始缓存 `.websearch/`；定稿摘要再 Write 到 `plan/` 或 `knowledge/`）。
 
 ## 最终输出（必须写进返回正文）
 

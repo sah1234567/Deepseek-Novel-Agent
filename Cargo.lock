@@ -2419,6 +2419,7 @@ dependencies = [
  "grep-searcher",
  "ignore",
  "novel-compaction",
+ "novel-config",
  "novel-deepseek",
  "novel-knowledge",
  "novel-skills",

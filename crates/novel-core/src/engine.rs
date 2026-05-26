@@ -555,6 +555,7 @@ impl AgentEngine {
             allow_fork: self.shared.sub_agent_count.load(Ordering::SeqCst) == 0,
             fork_queue: Some(Arc::clone(&self.shared.fork_queue)),
             skills_dir: Some(self.shared.agent_skills_dir.clone()),
+            global_api_config_path: Some(self.shared.global_config_path.clone()),
         }
     }
 

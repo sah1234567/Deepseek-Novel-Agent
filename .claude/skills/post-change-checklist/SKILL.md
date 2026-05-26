@@ -24,6 +24,7 @@ description: >-
 | 资源 | 路径 | 作用域 |
 |------|------|--------|
 | 会话 DB | `works/{名}/.novel-agent/state.db` | 每作品独立 |
+| WebSearch 原始缓存 | `works/{名}/.websearch/` | 每作品；非 `knowledge/` 正典 |
 | 作品配置 | `works/{名}/settings.json` | 每作品 |
 | 全局 API | `{agent_root}/.novel-agent/api_config.json` | Agent 级（env 优先） |
 | 运行时 Skill | `{agent_root}/skills/`（Agent 级）+ `works/{name}/skills/`（project 级覆盖） | 二级加载，project 覆盖 Agent |

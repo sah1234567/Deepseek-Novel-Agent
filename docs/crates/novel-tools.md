@@ -115,7 +115,7 @@ Normal 模式下 Write/Edit 要求目标 path 已在 `read_file_cache` 中（本
 | CharacterSearch | 人物档案 + 演变日志末行 |
 | PlotGraph | 因果图 BFS |
 | ConsistencyCheck | 9 维原始数据采集；分批 aspects；输出 >80 行时 pipeline read_economy 拒绝 |
-| WebSearch | 通用网页搜索（DeepSeek `web_search_20250305`），结果缓存 knowledge/market/。支持 research/similar-works/reader-feedback/trope-reference/fact-check/writing-tips/trending/short-drama 等搜索角度 |
+| WebSearch | 通用网页搜索（DeepSeek `web_search_20250305`），API Key 与主对话相同：`DEEPSEEK_API_KEY` env 优先，否则 `{agent_root}/.novel-agent/api_config.json`（经 `ToolContext.global_api_config_path` → `novel_config::resolve_agent_api_key`）；失败返回 `ToolError` 而非空成功。原始结果缓存 `{project}/.websearch/`（非 `knowledge/` 正典）。支持 research/similar-works/reader-feedback/trope-reference/fact-check/writing-tips/trending/short-drama 等搜索角度 |
 | PlotGrid / ForeshadowTracker | 剧情网格 / 伏笔追踪（含可视化） |
 | Stats | 字数、完成率、连续天数 |
 | Corkboard | 细纲场景卡片 |
@@ -141,7 +141,7 @@ Normal 模式下 Write/Edit 要求目标 path 已在 `read_file_cache` 中（本
 
 `KnowledgeAuditor`, `ChapterCraftAnalyzer`, **`GeneralPurpose`**
 
-**GeneralPurpose 权限：** 精选 13 工具白名单（Read/Write/Edit/Glob/Grep/CharacterSearch/PlotGraph/Tail/Stats/InvokeSkill/ImpactAnalysis/TodoWrite/ConsistencyCheck）；无 ForkSubAgent（禁止嵌套 fork），无 Bash。含 Write/Edit 可在 sandbox 内写 chapters。
+**GeneralPurpose 权限：** 精选 14 工具白名单（Read/Write/Edit/Glob/Grep/CharacterSearch/PlotGraph/Tail/Stats/InvokeSkill/ImpactAnalysis/TodoWrite/ConsistencyCheck/WebSearch）；无 ForkSubAgent（禁止嵌套 fork），无 Bash。含 Write/Edit 可在 sandbox 内写 chapters；WebSearch 原始缓存 `{project}/.websearch/`。
 
 **与 PostToolUse 的关系：** 用户可在 `settings.json` 启用 PostToolUse matcher，工具执行后自动入队 **KnowledgeAuditor hook**（轻量遗漏扫描，`source=hook`，不 inject 主会话）。写章收尾仍须手动 Fork 完整 KnowledgeAuditor + ChapterCraftAnalyzer。
 

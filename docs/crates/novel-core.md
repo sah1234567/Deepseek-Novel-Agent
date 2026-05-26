@@ -101,11 +101,11 @@
 |-------|-----------------|----------|
 | KnowledgeAuditor | 40（settings 可覆盖） | Read/Tail/Grep/CharacterSearch/PlotGraph/ConsistencyCheck（只读） |
 | ChapterCraftAnalyzer | 25 | Read/Tail/Grep/CharacterSearch/Stats |
-| **GeneralPurpose** | 20 | 精选 13 工具白名单（Read/Write/Edit/Glob/Grep/CharacterSearch/PlotGraph/Tail/Stats/InvokeSkill/ImpactAnalysis/TodoWrite/ConsistencyCheck）；无 ForkSubAgent，无 Bash |
+| **GeneralPurpose** | 20 | 精选 14 工具白名单（Read/Write/Edit/Glob/Grep/CharacterSearch/PlotGraph/Tail/Stats/InvokeSkill/ImpactAnalysis/TodoWrite/ConsistencyCheck/WebSearch）；无 ForkSubAgent，无 Bash |
 
 **Workflow（策划/写章/改稿/写后）：** 经 **InvokeSkill** 加载 `skills/{novel-planning,chapter-writing,revision,post-chapter-checklist}/SKILL.md`，不再使用写稿 Subagent。
 
-**GeneralPurpose：** `task` = 完整执行指令；13 工具白名单（含 Write/Edit chapters），sandbox 路径校验。
+**GeneralPurpose：** `task` = 完整执行指令；14 工具白名单（含 Write/Edit/WebSearch），sandbox 路径校验。
 
 ### 1.4 System Prompt 与动态上下文
 

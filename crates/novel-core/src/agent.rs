@@ -83,6 +83,7 @@ impl AgentType {
                     "ImpactAnalysis".into(),
                     "TodoWrite".into(),
                     "ConsistencyCheck".into(),
+                    "WebSearch".into(),
                 ],
             },
         }
@@ -159,6 +160,7 @@ mod tests {
         assert!(!tools.contains(&"ForkSubAgent".into()));
         assert!(tools.contains(&"ConsistencyCheck".into()));
         assert!(tools.contains(&"Write".into()));
+        assert!(tools.contains(&"WebSearch".into()));
     }
 
     #[test]
