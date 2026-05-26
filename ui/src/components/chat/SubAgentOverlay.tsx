@@ -8,7 +8,8 @@ import "./SubAgentOverlay.css";
 
 function forkAgentLabel(agentType: string): string {
   const t = agentType.toLowerCase();
-  if (t.includes("logintegrity")) return "LogIntegrityChecker";
+  if (t.includes("knowledgeauditor")) return "KnowledgeAuditor";
+  if (t.includes("chaptercraft")) return "ChapterCraftAnalyzer";
   if (t.includes("general")) return "GeneralPurpose";
   return agentType || "Subagent";
 }

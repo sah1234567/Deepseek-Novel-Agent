@@ -10,6 +10,9 @@ use crate::message_bridge::{
     tool_result_message,
 };
 use crate::messages::{create_user_interruption_message, yield_missing_tool_result_blocks};
+use crate::subagent_react::{
+    react_limit_reminder_message, report_only_tool_rejection, SubagentLoopPhase,
+};
 use crate::subagent_overflow::{
     build_partial_report, task_preview_120, OVERFLOW_KIND_INPUT_REJECTED,
     OVERFLOW_KIND_OUTPUT_TRUNCATED,
@@ -273,11 +276,7 @@ impl StreamingToolDispatch {
         }
     }
 
-    fn poll_ui_results(
-        &mut self,
-        event_tx: Option<&mpsc::UnboundedSender<Event>>,
-        hooks: &novel_config::HookConfig,
-    ) {
+    fn poll_ui_results(&mut self, event_tx: Option<&mpsc::UnboundedSender<Event>>) {
         // Must not drain `completed` — results are collected once in get_remaining_results
         // for persistence and the next LLM call. Draining here caused UI success + missing
         // tool_result messages (model reports "timeout" / retries InvokeSkill).
@@ -291,7 +290,7 @@ impl StreamingToolDispatch {
                 continue;
             }
             let spec = self.executed_specs.iter().find(|s| s.id == id);
-            let content = format_tool_result_content(spec, &result, hooks);
+            let content = format_tool(spec, result).content;
             if let Some(tx) = event_tx {
                 let _ = tx.send(Event::ToolCallResult {
                     tool_call_id: id,
@@ -496,7 +495,7 @@ impl AgentEngine {
         tracing::debug!(
             session_id = %self.shared.session.id,
             agent_type = ?child.fork.agent_def.agent_type,
-            max_turns = child.fork.max_turns,
+            max_react_loops = child.fork.max_react_loops,
             %fork_run_id,
             "forked_agent_start"
         );
@@ -524,22 +523,32 @@ impl AgentEngine {
         self.active_sub_agent = Some(child.fork.agent_def.agent_type);
         let allowed = child.fork.agent_def.tools.clone();
         let schemas = tool_schemas_for_agent(&self.shared.registry, &allowed);
-        let mut turn_ctx = TurnContext::new(1, child.fork.max_turns);
+        let max_react_loops = child.fork.max_react_loops;
+        let mut turn_ctx = TurnContext::new(1, max_react_loops);
+        let mut phase = SubagentLoopPhase::Reacting;
         let task_text = child.fork.task_message.content.clone();
         loop {
             if self.interrupt_requested() {
                 self.active_sub_agent = None;
                 return Ok("子 Agent 已中断".into());
             }
-            if !turn_ctx.needs_continuation() {
-                break;
+            if matches!(phase, SubagentLoopPhase::Reacting) && !turn_ctx.needs_continuation() {
+                let spent = turn_ctx.inner_spent();
+                let reminder = react_limit_reminder_message(spent, max_react_loops);
+                child.messages.push(reminder);
+                phase = phase.enter_report_only();
             }
+            let active_schemas = if phase.is_report_only() {
+                &[] as &[(String, String, serde_json::Value)]
+            } else {
+                &schemas[..]
+            };
             let snapshot = child.messages.clone();
             let llm_msgs = to_llm_messages(&child.messages);
             match self
                 .call_llm_and_execute(
                     &llm_msgs,
-                    &schemas,
+                    active_schemas,
                     &mut turn_ctx,
                     event_tx,
                     Some(&mut child.messages),
@@ -578,8 +587,25 @@ impl AgentEngine {
                         child.messages.push(assistant_from_completion(&completion));
                         break;
                     }
-                    if let Err(TerminalReason::MaxTurns(_)) = turn_ctx.increment_inner() {
+                    if phase.is_report_only() {
+                        child.messages.push(assistant_from_completion(&completion));
+                        for tc in &tool_calls {
+                            child.messages.push(report_only_tool_rejection(&tc.id));
+                        }
+                        if let Some(next) = phase.consume_grace() {
+                            phase = next;
+                            continue;
+                        }
                         break;
+                    }
+                    if let Err(TerminalReason::MaxReactLoops(_)) = turn_ctx.increment_inner() {
+                        let spent = turn_ctx.inner_spent();
+                        child.messages.push(react_limit_reminder_message(
+                            spent,
+                            max_react_loops,
+                        ));
+                        phase = phase.enter_report_only();
+                        continue;
                     }
                 }
             }
@@ -680,7 +706,7 @@ impl AgentEngine {
                 return Ok(TerminalReason::Completed);
             }
             if !turn_ctx.needs_continuation() {
-                return Ok(TerminalReason::MaxTurns(turn_ctx.max_inner_turns));
+                return Ok(TerminalReason::MaxReactLoops(turn_ctx.max_inner_turns));
             }
 
             let schemas = tool_schemas_for_agent(&self.shared.registry, &self.main_tool_names());
@@ -780,7 +806,7 @@ impl AgentEngine {
 
             match turn_ctx.increment_inner() {
                 Ok(()) => {}
-                Err(TerminalReason::MaxTurns(n)) => return Ok(TerminalReason::MaxTurns(n)),
+                Err(TerminalReason::MaxReactLoops(n)) => return Ok(TerminalReason::MaxReactLoops(n)),
                 Err(other) => return Ok(other),
             }
         }
@@ -861,12 +887,11 @@ impl AgentEngine {
             let stream_done_poll = Arc::clone(&stream_done);
             let dispatch_poll = Arc::clone(&dispatch_arc);
             let event_tx_poll = event_tx.cloned();
-            let hooks_for_poll = self.shared.settings.hooks.clone();
             let poll_handle = tokio::spawn(async move {
                 while !stream_done_poll.load(Ordering::SeqCst) {
                     tokio::time::sleep(Duration::from_millis(40)).await;
                     if let Ok(mut d) = dispatch_poll.lock() {
-                        d.poll_ui_results(event_tx_poll.as_ref(), &hooks_for_poll);
+                        d.poll_ui_results(event_tx_poll.as_ref());
                     }
                 }
             });
@@ -1072,7 +1097,7 @@ impl AgentEngine {
                 }
                 self.has_interruptible_tool_in_progress =
                     dispatch.executor_mut().has_interruptible_tool_in_progress();
-                dispatch.poll_ui_results(event_tx, &self.shared.settings.hooks);
+                dispatch.poll_ui_results(event_tx);
                 let executor = dispatch.take_executor();
                 let executed_specs = std::mem::take(&mut dispatch.executed_specs);
                 let skip_result_events = std::mem::take(&mut dispatch.ui_result_emitted);
@@ -1164,86 +1189,22 @@ impl AgentEngine {
         }
     }
 
-    } // end of AgentEngine methods that reference PostToolInjection
+    } // end first impl AgentEngine block
 
-    /// Post-tool-use injection: [fact] annotations and hook tasks.
-    /// Unified entry point so new tools automatically gain these behaviours
-    /// without coupling to `execute_stream_results`.
-    struct PostToolInjection {
-        append_to_result: Option<String>,
-        hook_task: Option<String>,
-    }
-
-    fn post_tool_inject(
-        tool_name: &str,
-        tool_input: &serde_json::Value,
-        tool_output: &str,
-        hooks: &novel_config::HookConfig,
-    ) -> PostToolInjection {
-        let append = fact_annotation(tool_name, tool_input, tool_output);
-        let hook = if hooks.post_tool_use.is_empty() {
-            None
-        } else {
-            crate::hooks::log_integrity_checker_task(hooks, tool_name, Some(tool_input), tool_output)
-        };
-        PostToolInjection {
-            append_to_result: append,
-            hook_task: hook,
-        }
-    }
-
-    /// Annotate Write/Edit tool results with `[fact] touched: {path}` so the
-    /// main Agent can cross-reference its handoff claims against actual writes.
-    fn fact_annotation(
-        tool_name: &str,
-        tool_input: &serde_json::Value,
-        tool_output: &str,
-    ) -> Option<String> {
-        if tool_name != "Write" && tool_name != "Edit" {
-            return None;
-        }
-        let path = tool_input.get("path").and_then(|v| v.as_str())?;
-        let norm = path.replace('\\', "/");
-        Some(format!("{tool_output}\n[fact] touched: {norm}"))
-    }
-
-/// Tool result text for UI, SQLite, and the next LLM turn (includes post-tool injection).
-fn format_tool_result_content(
+fn format_tool(
     spec: Option<&ToolCallSpec>,
-    result: &Result<novel_tools::ToolOutput, novel_tools::ToolError>,
-    hooks: &novel_config::HookConfig,
-) -> String {
-    match result {
-        Err(e) => format!("Error: {e}"),
-        Ok(out) if out.is_error => format!("Error: {}", out.content),
-        Ok(out) => {
-            let injection = spec.map(|s| post_tool_inject(&s.name, &s.input, &out.content, hooks));
-            injection
-                .and_then(|inj| inj.append_to_result)
-                .unwrap_or_else(|| out.content.clone())
-        }
-    }
-}
-
-/// Like [`format_tool_result_content`] but also returns an optional PostToolUse hook task.
-fn format_tool_result_with_hook(
-    spec: Option<&ToolCallSpec>,
-    result: &Result<novel_tools::ToolOutput, novel_tools::ToolError>,
-    hooks: &novel_config::HookConfig,
-) -> (String, Option<String>) {
-    match result {
-        Err(e) => (format!("Error: {e}"), None),
-        Ok(out) if out.is_error => (format!("Error: {}", out.content), None),
-        Ok(out) => {
-            let injection = spec.map(|s| post_tool_inject(&s.name, &s.input, &out.content, hooks));
-            let content = injection
-                .as_ref()
-                .and_then(|inj| inj.append_to_result.clone())
-                .unwrap_or_else(|| out.content.clone());
-            let hook = injection.and_then(|inj| inj.hook_task);
-            (content, hook)
-        }
-    }
+    result: Result<novel_tools::ToolOutput, novel_tools::ToolError>,
+) -> novel_tools::FormattedToolResult {
+    let spec_ref = spec
+        .map(|s| novel_tools::ToolResultSpec {
+            tool_name: &s.name,
+            tool_input: Some(&s.input),
+        })
+        .unwrap_or(novel_tools::ToolResultSpec {
+            tool_name: "",
+            tool_input: None,
+        });
+    novel_tools::format_tool_result_for_llm(spec_ref, result)
 }
 
 impl AgentEngine {
@@ -1315,18 +1276,27 @@ impl AgentEngine {
             match result {
                 Ok(out) => {
                     let success = !out.is_error;
-                    let (content, hook_task) = format_tool_result_with_hook(
-                        spec,
-                        &Ok(out),
-                        &self.shared.settings.hooks,
-                    );
+                    let formatted = format_tool(spec, Ok(out));
+                    let content = formatted.content;
+                    let hook_task = if self.shared.settings.hooks.post_tool_use.is_empty() {
+                        None
+                    } else {
+                        spec.and_then(|s| {
+                            crate::hooks::knowledge_auditor_hook_task(
+                                &self.shared.settings.hooks,
+                                &s.name,
+                                Some(&s.input),
+                                &formatted.hook_preview,
+                            )
+                        })
+                    };
 
                     // Track last chapter written (for progress display in system prompt)
                     if let Some(s) = spec {
-                        if let Some(path) = s.input.get("path").and_then(|v| v.as_str()) {
-                            if path.replace('\\', "/").contains("chapters/") {
+                        if let Some(path) = novel_tools::optional_file_path(&s.input) {
+                            if novel_tools::normalize_rel_path(&path).contains("chapters/") {
                                 self.last_chapter_written =
-                                    Some(normalize_chapter_path(path));
+                                    Some(novel_tools::normalize_chapter_progress_path(&path));
                             }
                         }
                     }
@@ -1400,11 +1370,11 @@ impl AgentEngine {
                             }
                         }
                         if !self.is_forked_child && s.name == "Read" && success {
-                            if let Some(path) = s.input.get("path").and_then(|v| v.as_str()) {
+                            if let Some(path) = novel_tools::optional_file_path(&s.input) {
                                 if let Some((_, canonical)) = parse_skill_reference_path(
                                     &self.shared.session.project_root,
                                     &self.shared.agent_skills_dir,
-                                    path,
+                                    &path,
                                 ) {
                                     if !self
                                         .read_skill_reference_paths
@@ -1449,7 +1419,7 @@ impl AgentEngine {
                             payload: payload.clone(),
                         });
                     }
-                    let tool_msg = tool_result_message(&id, "等待用户回答问题后再继续。");
+                    let tool_msg = tool_result_message(&id, novel_tools::NEEDS_USER_INPUT_STUB);
                     if persist_tool_messages {
                         self.persist_message_alloc(&tool_msg)?;
                     }
@@ -1474,7 +1444,7 @@ impl AgentEngine {
                             success: false,
                         });
                     }
-                    let msg = format!("Error: {e}");
+                    let msg = format_tool(spec, Err(e)).content;
                     if let Some(tx) = event_tx {
                         let _ = tx.send(Event::ToolCallResult {
                             tool_call_id: id.clone(),
@@ -1518,11 +1488,8 @@ impl AgentEngine {
         let ctx = self.tool_context();
         let executor = ToolExecutor::new(Arc::clone(&self.shared.registry));
         let result = executor.execute_one_user_approved(&spec, &ctx).await;
-        let content = match &result {
-            Ok(out) => out.content.clone(),
-            Err(e) => format!("Error: {e}"),
-        };
-        let success = result.is_ok();
+        let success = matches!(&result, Ok(out) if !out.is_error);
+        let content = format_tool(Some(&spec), result).content;
         self.audit_log(LogEvent::ToolExecuted {
             session_id: self.shared.session.id.clone(),
             tool_name: spec.name.clone(),
@@ -1926,6 +1893,11 @@ impl AgentEngine {
         });
         self.messages = compaction_slice_to_chat(&final_msgs);
         self.sync_messages_to_db()?;
+        self.shared.clear_read_file_cache();
+        tracing::debug!(
+            session_id = %self.shared.session.id,
+            "read_file_cache_cleared_after_compaction"
+        );
         self.last_context_tokens = 0;
 
         // Success: reset fail counter
@@ -2185,13 +2157,13 @@ impl AgentEngine {
         &mut self,
         event_tx: Option<&mpsc::UnboundedSender<Event>>,
     ) -> Result<(), AgentError> {
-        // PostToolUse auto-trigger path (source=`hook`): LogIntegrityChecker subagent, no parent inject.
+        // PostToolUse auto-trigger path (source=`hook`): KnowledgeAuditor subagent, no parent inject.
         let tasks = std::mem::take(&mut self.pending_hook_tasks);
         if !tasks.is_empty() {
             tracing::debug!(hook_count = tasks.len(), "drain_pending_hooks");
         }
         for task in tasks {
-            self.run_log_integrity_checker(task, event_tx).await?;
+            self.run_knowledge_auditor_hook(task, event_tx).await?;
         }
         Ok(())
     }
@@ -2360,12 +2332,12 @@ pub async fn run_subagent_async(
         shared.session.id.clone(),
         agent_type,
         task.clone(),
-        agent_type.max_turns_for(&shared.settings.agent),
+        agent_type.max_react_loops_for(&shared.settings.agent),
         knowledge_snapshots,
         false,
     )
     .map_err(|e| {
-        if e == ForkError::InvalidMaxTurns(0) {
+        if e == ForkError::InvalidMaxReactLoops(0) {
             AgentError::NestedForkProhibited
         } else {
             AgentError::Fork(e)
@@ -2395,9 +2367,10 @@ pub async fn run_subagent_async(
     // Sub-agent inner loop
     let allowed = child.fork.agent_def.tools.clone();
     let schemas = tool_schemas_for_agent(&shared.registry, &allowed);
-    let max_turns = child.fork.max_turns;
+    let max_react_loops = child.fork.max_react_loops;
 
-    let mut turn_ctx = TurnContext::new(1, max_turns);
+    let mut turn_ctx = TurnContext::new(1, max_react_loops);
+    let mut phase = SubagentLoopPhase::Reacting;
     let mut was_interrupted = false;
     let mut interrupt_reason = "";
     loop {
@@ -2406,13 +2379,24 @@ pub async fn run_subagent_async(
             interrupt_reason = "用户取消";
             break;
         }
-        if !turn_ctx.needs_continuation() {
-            was_interrupted = true;
-            interrupt_reason = "达到最大轮次";
-            break;
+        if matches!(phase, SubagentLoopPhase::Reacting) && !turn_ctx.needs_continuation() {
+            let spent = turn_ctx.inner_spent();
+            let reminder = react_limit_reminder_message(spent, max_react_loops);
+            fork_child_push(
+                &shared.session.db,
+                &fork_run_id,
+                &mut child.messages,
+                reminder,
+            )?;
+            phase = phase.enter_report_only();
         }
         let llm_msgs = to_llm_messages(&child.messages);
         let snapshot = child.messages.clone();
+        let active_schemas: &[(String, String, serde_json::Value)] = if phase.is_report_only() {
+            &[]
+        } else {
+            &schemas[..]
+        };
 
         let mut fork_dispatch: Option<Arc<Mutex<StreamingToolDispatch>>> = None;
         let fork_ctx = ToolContext {
@@ -2458,7 +2442,7 @@ pub async fn run_subagent_async(
             let result = client
                 .create_stream(
                     &llm_msgs,
-                    &schemas,
+                    active_schemas,
                     shared.settings.model.max_output_tokens,
                     move |ev: StreamEvent| {
                         if let Some(ref tx) = event_tx_stream {
@@ -2628,6 +2612,30 @@ pub async fn run_subagent_async(
             break;
         }
 
+        if phase.is_report_only() {
+            fork_child_push(
+                &shared.session.db,
+                &fork_run_id,
+                &mut child.messages,
+                assistant_from_completion(&completion),
+            )?;
+            for tc in &tool_calls {
+                fork_child_push(
+                    &shared.session.db,
+                    &fork_run_id,
+                    &mut child.messages,
+                    report_only_tool_rejection(&tc.id),
+                )?;
+            }
+            if let Some(next) = phase.consume_grace() {
+                phase = next;
+                continue;
+            }
+            was_interrupted = true;
+            interrupt_reason = "报告收尾失败";
+            break;
+        }
+
         // Execute tools inline (sub-agent; streaming dispatch when LLM available)
         let results = if let Some(dispatch_arc) = fork_dispatch {
             let mut executor = {
@@ -2667,44 +2675,53 @@ pub async fn run_subagent_async(
             &mut child.messages,
             assistant_from_completion(&completion),
         )?;
+        let fork_spec_by_id: std::collections::HashMap<String, ToolCallSpec> = tool_calls
+            .iter()
+            .map(|tc| {
+                (
+                    tc.id.clone(),
+                    ToolCallSpec {
+                        id: tc.id.clone(),
+                        name: tc.name.clone(),
+                        input: parse_tool_call_input(&tc.arguments, &tc.id, &tc.name),
+                    },
+                )
+            })
+            .collect();
         for (id, result) in results {
-            match result {
-                Ok(out) => {
-                    let content = out.content.clone();
-                    if let Some(ref tx) = event_tx {
-                        let _ = tx.send(Event::SubAgentToolUpdate {
-                            fork_run_id: fork_run_id.clone(),
-                            phase: "result".into(),
-                            tool_call_id: id.clone(),
-                            tool_name: None,
-                            input: None,
-                            content: Some(content.clone()),
-                            needs_approval: None,
-                            status: None,
-                            description: None,
-                        });
-                    }
-                    fork_child_push(
-                        &shared.session.db,
-                        &fork_run_id,
-                        &mut child.messages,
-                        tool_result_message(&id, &content),
-                    )?;
-                }
-                Err(e) => {
-                    let content = format!("Error: {e}");
-                    fork_child_push(
-                        &shared.session.db,
-                        &fork_run_id,
-                        &mut child.messages,
-                        tool_result_message(&id, &content),
-                    )?;
-                }
+            let spec = fork_spec_by_id.get(&id);
+            let content = format_tool(spec, result).content;
+            if let Some(ref tx) = event_tx {
+                let _ = tx.send(Event::SubAgentToolUpdate {
+                    fork_run_id: fork_run_id.clone(),
+                    phase: "result".into(),
+                    tool_call_id: id.clone(),
+                    tool_name: spec.map(|s| s.name.clone()),
+                    input: None,
+                    content: Some(content.clone()),
+                    needs_approval: None,
+                    status: None,
+                    description: None,
+                });
             }
+            fork_child_push(
+                &shared.session.db,
+                &fork_run_id,
+                &mut child.messages,
+                tool_result_message(&id, &content),
+            )?;
         }
 
-        if let Err(TerminalReason::MaxTurns(_)) = turn_ctx.increment_inner() {
-            break;
+        if let Err(TerminalReason::MaxReactLoops(_)) = turn_ctx.increment_inner() {
+            let spent = turn_ctx.inner_spent();
+            fork_child_push(
+                &shared.session.db,
+                &fork_run_id,
+                &mut child.messages,
+                react_limit_reminder_message(spent, max_react_loops),
+            )?;
+            phase = phase.enter_report_only();
+            continue;
         }
     }
 
@@ -2736,7 +2753,7 @@ pub async fn run_subagent_async(
             agent_type,
             task_preview,
             turn_ctx.inner_turn,
-            max_turns,
+            max_react_loops,
             interrupt_reason,
             last_assistant,
         )
@@ -2766,15 +2783,6 @@ pub async fn run_subagent_async(
     );
 
     Ok(output)
-}
-
-fn normalize_chapter_path(path: &str) -> String {
-    let norm = path.replace('\\', "/");
-    if norm.starts_with("chapters/") {
-        norm
-    } else {
-        format!("chapters/{}", norm.trim_start_matches('/'))
-    }
 }
 
 #[cfg(test)]
@@ -2823,10 +2831,10 @@ mod tests {
 
     #[tokio::test]
     async fn default_hooks_do_not_enqueue_tasks() {
-        use crate::hooks::{default_hook_config, log_integrity_checker_task};
+        use crate::hooks::{default_hook_config, knowledge_auditor_hook_task};
         let hooks = default_hook_config();
-        let input = serde_json::json!({"path": "chapters/chapter-001.md"});
-        assert!(log_integrity_checker_task(&hooks, "Write", Some(&input), "written").is_none());
+        let input = serde_json::json!({"file_path": "chapters/chapter-001.md"});
+        assert!(knowledge_auditor_hook_task(&hooks, "Write", Some(&input), "written").is_none());
     }
 
     #[tokio::test]
@@ -2858,7 +2866,7 @@ mod tests {
             ToolCallSpec {
                 id: "write-1".into(),
                 name: "Write".into(),
-                input: serde_json::json!({"path": "notes.md", "content": "x"}),
+                input: serde_json::json!({"file_path": "notes.md", "content": "x"}),
             },
         );
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -2907,7 +2915,7 @@ mod tests {
         engine.messages.push(assistant);
 
         engine
-            .inject_sub_agent_report(AgentType::ConsistencyChecker, "POV ok", None)
+            .inject_sub_agent_report(AgentType::KnowledgeAuditor, "POV ok", None)
             .unwrap();
 
         let stored = engine
@@ -2955,7 +2963,7 @@ mod tests {
         engine.messages.push(ChatMessage {
             role: "user".into(),
             content: format!(
-                "{} ConsistencyChecker]\nreport",
+                "{} KnowledgeAuditor]\nreport",
                 AgentEngine::SUB_AGENT_REPORT_PREFIX
             ),
             tool_call_id: None,
@@ -3007,7 +3015,7 @@ mod tests {
                 .lock()
                 .expect("fork queue lock");
             guard.push((
-                "ConsistencyChecker".into(),
+                "KnowledgeAuditor".into(),
                 "审计 chapters/chapter-001.md".into(),
             ));
         }
@@ -3071,7 +3079,7 @@ mod tests {
                 .lock()
                 .expect("fork queue lock");
             guard.push((
-                "ConsistencyChecker".into(),
+                "KnowledgeAuditor".into(),
                 "审计 chapters/chapter-001.md".into(),
             ));
         }
@@ -3160,11 +3168,11 @@ mod tests {
                 .lock()
                 .expect("fork queue lock");
             guard.push((
-                "ConsistencyChecker".into(),
+                "KnowledgeAuditor".into(),
                 "任务 A：chapter-001".into(),
             ));
             guard.push((
-                "PacingAnalyzer".into(),
+                "ChapterCraftAnalyzer".into(),
                 "任务 B：chapter-001".into(),
             ));
         }
@@ -3188,13 +3196,13 @@ mod tests {
             reports[0]
                 .content_json
                 .to_string()
-                .contains("ConsistencyChecker")
+                .contains("KnowledgeAuditor")
         );
         assert!(
             reports[1]
                 .content_json
                 .to_string()
-                .contains("PacingAnalyzer")
+                .contains("ChapterCraftAnalyzer")
         );
     }
 
@@ -3248,27 +3256,70 @@ mod tests {
         assert!(!should_continue_inner_after_completion(&with_text));
     }
 
-    #[test]
-    fn format_tool_result_injects_fact_and_errors() {
-        use crate::hooks::default_hook_config;
-        use novel_tools::ToolOutput;
+    #[tokio::test]
+    async fn compact_and_sync_clears_read_file_cache() {
+        use novel_tools::{ReadCacheEntry, ReadCacheSource};
+        use std::path::PathBuf;
 
-        let hooks = default_hook_config();
-        let spec = ToolCallSpec {
-            id: "tc1".into(),
-            name: "Write".into(),
-            input: serde_json::json!({"path": "chapters/ch01.md"}),
-        };
-        let ok = Ok(ToolOutput {
-            content: "written".into(),
-            is_error: false,
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("skills")).unwrap();
+        let mut engine = AgentEngine::new(test_config(&tmp)).unwrap();
+        engine.messages.push(ChatMessage {
+            role: "user".into(),
+            content: "chapter work".into(),
+            tool_call_id: None,
+            tool_calls: None,
+            reasoning_content: None,
         });
-        let text = format_tool_result_content(Some(&spec), &ok, &hooks);
-        assert!(text.contains("written"));
-        assert!(text.contains("[fact] touched: chapters/ch01.md"));
+        engine.messages.push(ChatMessage {
+            role: "assistant".into(),
+            content: "ok".into(),
+            tool_call_id: None,
+            tool_calls: None,
+            reasoning_content: None,
+        });
+        engine.last_context_tokens = 850_000;
 
-        let err = Err(novel_tools::ToolError::PermissionDenied("denied".into()));
-        let err_text = format_tool_result_content(Some(&spec), &err, &hooks);
-        assert_eq!(err_text, "Error: Permission denied: denied");
+        engine.shared.read_file_cache.insert(
+            PathBuf::from("chapters/ch01.md"),
+            ReadCacheEntry {
+                mtime_secs: 1,
+                raw_content: "line".into(),
+                offset: None,
+                limit: None,
+                total_lines: 1,
+                source: ReadCacheSource::Read,
+            },
+        );
+        assert_eq!(engine.shared.read_file_cache.len(), 1);
+
+        engine.compact_and_sync(None).await.unwrap();
+        assert!(engine.shared.read_file_cache.is_empty());
+    }
+
+    #[tokio::test]
+    async fn compact_and_sync_skipped_when_under_threshold_keeps_read_cache() {
+        use novel_tools::{ReadCacheEntry, ReadCacheSource};
+        use std::path::PathBuf;
+
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("skills")).unwrap();
+        let mut engine = AgentEngine::new(test_config(&tmp)).unwrap();
+        engine.last_context_tokens = 0;
+
+        engine.shared.read_file_cache.insert(
+            PathBuf::from("chapters/ch01.md"),
+            ReadCacheEntry {
+                mtime_secs: 1,
+                raw_content: "line".into(),
+                offset: None,
+                limit: None,
+                total_lines: 1,
+                source: ReadCacheSource::Read,
+            },
+        );
+
+        engine.compact_and_sync(None).await.unwrap();
+        assert_eq!(engine.shared.read_file_cache.len(), 1);
     }
 }

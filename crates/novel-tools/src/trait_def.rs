@@ -1,5 +1,5 @@
 use crate::abort::InterruptBehavior;
-use crate::{PermissionMode, PermissionResult, ToolContext, ValidationError};
+use crate::{optional_file_path, PermissionMode, PermissionResult, ToolContext, ValidationError};
 use async_trait::async_trait;
 use serde_json::Value;
 
@@ -38,7 +38,10 @@ pub trait Tool: Send + Sync {
     }
 
     fn check_permissions(&self, input: &Value, ctx: &ToolContext) -> PermissionResult {
-        if let Some(reason) = ctx.deny_rule_block(self.name(), tool_target_path(input)) {
+        if let Some(reason) = ctx.deny_rule_block(
+            self.name(),
+            optional_file_path(input).as_deref(),
+        ) {
             return PermissionResult::Deny { reason };
         }
         if self.name() == "ForkSubAgent" && !ctx.allow_fork {
@@ -59,8 +62,8 @@ pub trait Tool: Send + Sync {
                 return PermissionResult::Allow;
             }
             if matches!(self.name(), "Write" | "Edit") {
-                if let Some(p) = tool_target_path(input) {
-                    if ToolContext::is_under_plan_dir(p) {
+                if let Some(p) = optional_file_path(input) {
+                    if ToolContext::is_under_plan_dir(&p) {
                         return PermissionResult::Allow;
                     }
                 }
@@ -96,11 +99,4 @@ pub trait Tool: Send + Sync {
     fn get_summary(&self, input: &Value) -> String {
         format!("{} {:?}", self.name(), input)
     }
-}
-
-fn tool_target_path(input: &Value) -> Option<&str> {
-    input
-        .get("path")
-        .or_else(|| input.get("file_path"))
-        .and_then(|v| v.as_str())
 }

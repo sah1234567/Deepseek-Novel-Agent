@@ -484,7 +484,7 @@ mod tests {
         ex.add_tool(ToolCallSpec {
             id: "t1".into(),
             name: "Read".into(),
-            input: serde_json::json!({"path": "missing.txt"}),
+            input: serde_json::json!({"file_path": "missing.txt"}),
         });
         tx.send(AbortSignal::UserCancel).unwrap();
         let results = ex.get_remaining_results().await;

@@ -69,7 +69,7 @@ async fn fork_max_turns_boundary() {
     let engine = AgentEngine::new(engine_config(&tmp)).unwrap();
     assert!(matches!(
         engine
-            .fork(AgentType::ConsistencyChecker, "  ".into())
+            .fork(AgentType::KnowledgeAuditor, "  ".into())
             .await,
         Err(novel_core::AgentError::Fork(ForkError::EmptyTask))
     ));

@@ -1,3 +1,5 @@
+use crate::paths::{normalize_rel_path, resolve_under_project};
+use crate::read_cache::{read_range_key, ReadCacheEntry};
 use crate::ToolError;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -31,8 +33,7 @@ pub struct ToolContext {
     /// Live permission override (UI permission mode selector).
     pub permission_mode_override: Option<Arc<Mutex<PermissionMode>>>,
     /// Paths read this session (canonical) for read-before-write enforcement and dedup.
-    /// Value: (mtime_secs, cached_content) — mtime used for dedup, content for reference
-    pub read_file_cache: Option<Arc<dashmap::DashMap<PathBuf, (u64, String)>>>,
+    pub read_file_cache: Option<Arc<dashmap::DashMap<PathBuf, ReadCacheEntry>>>,
     /// Main session only; false while any sub-agent inner loop runs (blocks nested fork).
     pub allow_fork: bool,
     /// Engine fork queue; present only on main-session tool context.
@@ -49,7 +50,7 @@ impl ToolContext {
             always_allow: vec![
                 "CharacterSearch".into(),
                 "PlotGraph".into(),
-                "ChapterRead".into(),
+                "Tail".into(),
                 "TodoWrite".into(),
             ],
             project_root,
@@ -91,8 +92,7 @@ impl ToolContext {
 
     /// Whether a tool `path` argument targets the project `plan/` directory.
     pub fn is_under_plan_dir(path: &str) -> bool {
-        let norm = path.replace('\\', "/");
-        let norm = norm.trim_start_matches("./");
+        let norm = normalize_rel_path(path);
         norm == "plan" || norm.starts_with("plan/")
     }
 
@@ -111,29 +111,125 @@ impl ToolContext {
     }
 
     pub fn resolve_path(&self, rel: &str) -> PathBuf {
-        let normalized = rel.replace('/', std::path::MAIN_SEPARATOR_STR);
-        let p = PathBuf::from(normalized);
-        if p.is_absolute() {
-            p
-        } else {
-            self.project_root.join(p)
-        }
+        resolve_under_project(&self.project_root, rel)
     }
 
     pub fn is_tool_always_allowed(&self, tool_name: &str) -> bool {
         self.always_allow.iter().any(|n| n == tool_name)
     }
 
-    pub fn mark_read(&self, path: &PathBuf) {
+    pub fn store_read_cache(&self, path: &PathBuf, entry: ReadCacheEntry) {
         if let Some(cache) = &self.read_file_cache {
-            cache.entry(path.clone()).or_insert((0, String::new()));
+            cache.insert(path.clone(), entry);
         }
+    }
+
+    pub fn read_cache_entry(&self, path: &PathBuf) -> Option<ReadCacheEntry> {
+        self.read_file_cache
+            .as_ref()
+            .and_then(|c| c.get(path).map(|e| e.clone()))
     }
 
     pub fn was_read(&self, path: &PathBuf) -> bool {
         self.read_file_cache
             .as_ref()
             .is_some_and(|c| c.contains_key(path))
+    }
+
+    /// Normal mode read-before-write. Set `only_if_exists` for Write (skip new files).
+    pub fn require_read_before_write(
+        &self,
+        full: &PathBuf,
+        path: &str,
+        action: &str,
+        only_if_exists: bool,
+    ) -> Result<(), ToolError> {
+        if matches!(
+            self.effective_permission_mode(),
+            PermissionMode::Auto | PermissionMode::Plan | PermissionMode::Unattended
+        ) {
+            return Ok(());
+        }
+        if only_if_exists && !full.exists() {
+            return Ok(());
+        }
+        if !self.was_read(full) {
+            return Err(ToolError::Execution(format!(
+                "Read {path} before {action} (read-before-write policy)"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Edit only: old_string must lie in the cached Read/Tail slice (full read always OK).
+    pub fn require_edit_in_read_slice(&self, full: &PathBuf, old_string: &str) -> Result<(), ToolError> {
+        let Some(entry) = self.read_cache_entry(full) else {
+            return Ok(());
+        };
+        if entry.is_full_read() || entry.covers_edit_target(old_string) {
+            return Ok(());
+        }
+        Err(ToolError::Execution(
+            "Edit target not in the read slice (only read a portion of this file). \
+             Read with offset/limit covering old_string, or Read full file."
+                .into(),
+        ))
+    }
+
+    /// True if cached mtime matches and the same offset/limit was read before.
+    pub fn read_dedup_hit(
+        &self,
+        path: &PathBuf,
+        offset: Option<usize>,
+        limit: Option<usize>,
+        current_mtime: u64,
+    ) -> bool {
+        let Some(entry) = self.read_cache_entry(path) else {
+            return false;
+        };
+        let (off, lim) = read_range_key(offset, limit);
+        entry.source.is_dedup_eligible()
+            && entry.mtime_secs == current_mtime
+            && entry.same_range(off, lim)
+    }
+
+    /// Tail dedup: same mtime, range, total line count, and dedup-eligible source.
+    pub fn tail_dedup_hit(
+        &self,
+        path: &PathBuf,
+        start_line: usize,
+        take: usize,
+        total_lines: usize,
+        current_mtime: u64,
+    ) -> bool {
+        let Some(entry) = self.read_cache_entry(path) else {
+            return false;
+        };
+        entry.source.is_dedup_eligible()
+            && entry.mtime_secs == current_mtime
+            && entry.offset == Some(start_line)
+            && entry.limit == Some(take)
+            && entry.total_lines == total_lines
+    }
+
+    /// After Edit/Write, refresh cache with new file content (full read semantics).
+    pub fn refresh_cache_after_write(&self, path: &PathBuf, raw_content: &str, mtime_secs: u64) {
+        let total_lines = if raw_content.is_empty() {
+            0
+        } else {
+            raw_content.lines().count()
+        };
+        self.store_read_cache(
+            path,
+            ReadCacheEntry {
+                mtime_secs,
+                raw_content: raw_content.to_string(),
+                offset: None,
+                limit: None,
+                total_lines,
+                source: crate::read_cache::ReadCacheSource::WriteRefresh,
+            },
+        );
     }
 
     // Paths within project root that must never be written or edited.
@@ -216,7 +312,7 @@ impl ToolContext {
 }
 
 fn path_matches_rule(rule: &str, path: &str) -> bool {
-    let norm = path.replace('\\', "/");
+    let norm = normalize_rel_path(path);
     if rule.contains("chapters/**") {
         return norm.contains("chapters/");
     }

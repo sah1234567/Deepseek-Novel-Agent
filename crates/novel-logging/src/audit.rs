@@ -41,7 +41,7 @@ pub enum LogEvent {
         tool_name: String,
         success: bool,
     },
-    LogIntegrityCheckerForked {
+    KnowledgeAuditorHookForked {
         session_id: String,
         trigger_tool: String,
     },

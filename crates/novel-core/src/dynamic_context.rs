@@ -220,16 +220,6 @@ pub fn build_dynamic_context(
     }
 }
 
-fn normalize_read_path(project_root: &Path, read_path: &str) -> PathBuf {
-    let normalized = read_path.replace('/', std::path::MAIN_SEPARATOR_STR);
-    let p = PathBuf::from(normalized);
-    if p.is_absolute() {
-        p
-    } else {
-        project_root.join(p)
-    }
-}
-
 fn match_reference_under_base(full: &Path, base: &Path) -> Option<(String, String)> {
     let rel = full.strip_prefix(base).ok()?;
     let rel_str = rel.to_string_lossy().replace('\\', "/");
@@ -256,7 +246,7 @@ pub fn parse_skill_reference_path(
     agent_skills_dir: &Path,
     read_path: &str,
 ) -> Option<(String, String)> {
-    let full = normalize_read_path(project_root, read_path);
+    let full = novel_tools::resolve_under_project(project_root, read_path);
     let project_skills = project_root.join("skills");
     for base in [&project_skills, agent_skills_dir] {
         if let Some(found) = match_reference_under_base(&full, base) {

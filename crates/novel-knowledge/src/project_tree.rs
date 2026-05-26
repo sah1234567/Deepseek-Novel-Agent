@@ -3,7 +3,7 @@ use crate::KnowledgeStore;
 use serde::{Deserialize, Serialize};
 use std::path::{Component, Path};
 
-const ROOT_DIRS: &[&str] = &["knowledge", "chapters", "plot", "memory", "worlds"];
+const ROOT_DIRS: &[&str] = &["knowledge", "chapters", "memory", "worlds"];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -12,7 +12,7 @@ pub struct ProjectFileEntry {
     pub is_dir: bool,
 }
 
-/// List project files under knowledge/chapters/plot/memory (relative POSIX paths).
+/// List project files under knowledge/chapters/memory/worlds (relative POSIX paths).
 pub fn list_project_files(root: impl AsRef<Path>) -> Result<Vec<ProjectFileEntry>, KnowledgeError> {
     let root = root.as_ref();
     let mut entries = Vec::new();

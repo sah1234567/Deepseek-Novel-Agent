@@ -21,6 +21,7 @@ mod session;
 mod system_prompt;
 mod turn;
 mod subagent_overflow;
+mod subagent_react;
 mod turn_loop;
 mod types;
 

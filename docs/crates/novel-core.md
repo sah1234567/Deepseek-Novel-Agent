@@ -50,7 +50,7 @@
 | 路径 | 执行函数 | 同步/异步 | 主会话 inject | Transcript |
 |------|----------|-----------|---------------|------------|
 | `ForkSubAgent` 工具 | `drain_pending_forks` → 并行 `run_subagent_async` → join → `inject_sub_agent_report` | **同步（foreground）** | 一条摘要 | `fork_messages` + UI overlay |
-| PostToolUse 自动触发 | `drain_pending_hooks` → `run_log_integrity_checker`（LogIntegrityChecker subagent，`source=hook`） | 同步 | **无** | `fork_messages` + UI overlay |
+| PostToolUse 自动触发 | `drain_pending_hooks` → `run_knowledge_auditor_hook`（KnowledgeAuditor subagent，`source=hook`） | 同步 | **无** | `fork_messages` + UI overlay |
 | `Op::ForkSubAgent` / Tauri IPC | `tokio::spawn(run_subagent_async)` | 异步（debug） | 无 | `fork_messages` |
 
 `ForkSubAgent` 工具路径：`drain_pending_forks` 在本轮 tool 执行结束后 **await 本批全部 subagent**，按 fork_queue FIFO 注入 `[子 Agent 完成: …]` 报告（`persist_message_alloc_ex` + `fork_run_id` 元数据，不占 seq 0）。`subagent_result_rx/tx` 为 legacy channel，**无 consumer inject** 主会话。
@@ -89,22 +89,19 @@
 
 **类型注册：**
 
-- `AgentType` 枚举 + `AgentType::definition()` 工具白名单 / max_turns
-- `FORKABLE_AGENT_TYPE_NAMES` / `all_forkable_names()` — ForkSubAgent 可用类型（含 LogIntegrityChecker、GeneralPurpose）
+- `AgentType` 枚举 + `AgentType::definition()` 工具白名单 / `max_react_loops`
+- `FORKABLE_AGENT_TYPE_NAMES` / `all_forkable_names()` — ForkSubAgent 可用类型（KnowledgeAuditor、ChapterCraftAnalyzer、GeneralPurpose）
 - `AgentType::parse(name)` — PascalCase / kebab-case 统一解析（Tauri `parse_agent_type` 亦调用此函数）
 
 ### 1.3 Agent 类型与工具
 
 详细 prompt 来自 `prompt/agents/*.md`（`include_str!`）；fork 路径以 `prompt_loader` 为准。**主 Agent 读不到这些文件**——Checker/Analyzer 须在返回报告末尾输出 **`## 接下来（主 Agent 必读）`**；prompt 内 `## 「接下来」写作参考` 仅为子 Agent 写作模板。
 
-| Agent | Max Turns | 工具概要 |
-|-------|-----------|----------|
-| LogIntegrityChecker | 15 | Read/Grep/CharacterSearch（只读） |
-| ConsistencyChecker | 50 | Read/Grep/CharacterSearch/PlotGraph/ChapterRead + ConsistencyCheck（只读，无 Edit/Write） |
-| DialogueAnalyzer | 10 | Read/Grep/CharacterSearch |
-| PacingAnalyzer | 10 | Read/Grep/Stats/ChapterRead |
-| EmotionAnalyzer | 10 | Read/Grep/CharacterSearch |
-| **GeneralPurpose** | 20 | 精选 13 工具白名单（Read/Write/Edit/Glob/Grep/CharacterSearch/PlotGraph/ChapterRead/Stats/InvokeSkill/ImpactAnalysis/TodoWrite/ConsistencyCheck）；无 ForkSubAgent，无 Bash |
+| Agent | max_react_loops | 工具概要 |
+|-------|-----------------|----------|
+| KnowledgeAuditor | 40（settings 可覆盖） | Read/Tail/Grep/CharacterSearch/PlotGraph/ConsistencyCheck（只读） |
+| ChapterCraftAnalyzer | 25 | Read/Tail/Grep/CharacterSearch/Stats |
+| **GeneralPurpose** | 20 | 精选 13 工具白名单（Read/Write/Edit/Glob/Grep/CharacterSearch/PlotGraph/Tail/Stats/InvokeSkill/ImpactAnalysis/TodoWrite/ConsistencyCheck）；无 ForkSubAgent，无 Bash |
 
 **Workflow（策划/写章/改稿/写后）：** 经 **InvokeSkill** 加载 `skills/{novel-planning,chapter-writing,revision,post-chapter-checklist}/SKILL.md`，不再使用写稿 Subagent。
 
@@ -118,7 +115,9 @@
 
 **skill 加载：** Agent 级 `skills/` + 可选作品级 `works/{名}/skills/`（同 id 覆盖）；system prompt 只含摘要；body 经 InvokeSkill；references 经 Read 渐进加载。
 
-**读盘经济（prompt）：** `system.md` §2.3 要求 Grep/CharacterSearch 定位 → Read offset/limit 或 ChapterRead head/tail/range → 非必要不全文 Read；Read 全量上限 256KB，Grep 结果上限 20k 字符（工具层 enforce）。
+**读盘经济：** `system.md` §2.3 + `novel-tools::format_tool_result_for_llm` pipeline 内 `read_economy` 硬限（knowledge/** >80 行拒绝注入）；Grep 使用 ripgrep 生态；Read 256KB 硬限。
+
+**术语：** **Session Turn** = 用户一条消息跑完 inner loop；**ReAct loop** = Turn 内单次 LLM→工具循环（`max_react_loops` 为 Subagent 预算，非 Session Turn）。达 Subagent ReAct 上限时注入提醒 + report-only 收尾轮（禁 tool），非硬截断。
 
 **压缩后序列：** 刷新 system → `[激活 Skill]`（去重 id，有则必选）→ `[会话历史摘要]` → 最近 5 轮 ReAct。
 
@@ -128,11 +127,11 @@
 
 **工具停滞保护：** `get_remaining_results` 连续 10 次迭代无进展 → abort 所有剩余工具 + 注入 `ToolError::Internal("stalled")`。
 
-### 1.6 LogIntegrityChecker（opt-in）
+### 1.6 KnowledgeAuditor Hook（opt-in）
 
-`default_hook_config()` 返回**空** `post_tool_use`。用户可在 `settings.json` 启用 PostToolUse matcher 后，`drain_pending_hooks` 同步 fork LogIntegrityChecker（Unattended 模式）。
+`default_hook_config()` 返回**空** `post_tool_use`。用户可在 `settings.json` 启用 PostToolUse matcher 后，`drain_pending_hooks` 同步 fork 轻量 KnowledgeAuditor（Unattended 模式，仅扫描本次 Write/Edit 遗漏）。
 
-**写后流程（prompt 强制，非引擎硬编码）：** `system.md` 要求每章 Write + 知识库 append 后**同批 Fork 5 项** Subagent（LogIntegrityChecker + ConsistencyChecker + 三 Analyzer），按报告 Edit 后再向作者宣告完成。PostToolUse Hook 不能替代手动签收。
+**写后流程（prompt 强制，非引擎硬编码）：** `system.md` 要求每章 Write + 知识库 append 后**同批 Fork 2 项** Subagent（KnowledgeAuditor + ChapterCraftAnalyzer），按报告 Edit 后再向作者宣告完成。PostToolUse Hook 不能替代完整写章收尾 Fork。
 
 ### 1.7 AskUserQuestion 暂停/恢复
 
@@ -155,7 +154,7 @@
 1. `call_llm_and_execute`：`create_stream` 传入 `cancel_flag`；`run_abort_bridge` 同步到 `StreamingToolExecutor`
 2. 流取消：持久化 partial assistant → 补 tool_result → `append_interrupt_message`（SubmitInterrupt 跳过）
 3. 工具阶段 abort：`TerminalReason::AbortedTools`
-4. Compaction：`interrupt_requested()` 时跳过 LLM 摘要，降级为规则截断
+4. Compaction：`interrupt_requested()` 时跳过 LLM 摘要，降级为规则截断；成功写回 DB 后 **`clear_read_file_cache()`**（避免 Read dedup 指向已压缩掉的 tool_result）
 
 **TerminalReason：** `AbortedStreaming` · `AbortedTools` · `Completed`
 
@@ -191,7 +190,7 @@
 
 **中断：** `AbortController` 触发时 `executor.discard()`（`StreamingFallback`）；partial assistant 持久化但不执行未完成 tool。
 
-Fork 子 Agent：`run_subagent_async` 发出 `SubAgentStarted` / `SubAgentComplete`（含 task_preview）；LogIntegrityChecker 同步路径经 `run_forked_agent_inner` 亦发事件。分析类 / GeneralPurpose 子 Agent 工具流 `event_tx = None`（无逐 tool UI）。
+Fork 子 Agent：`run_subagent_async` 发出 `SubAgentStarted` / `SubAgentComplete`（含 task_preview）；KnowledgeAuditor Hook 同步路径经 `run_forked_agent_inner` 亦发事件。分析类 / GeneralPurpose 子 Agent 工具流 `event_tx = None`（无逐 tool UI）。
 
 ### 1.11 模块索引
 
@@ -202,9 +201,9 @@ Fork 子 Agent：`run_subagent_async` 发出 `SubAgentStarted` / `SubAgentComple
 | `prompt_loader` | 加载 `prompt/agents/*.md`，`format_fork_task` |
 | `dynamic_context` | `build_dynamic_context`、`format_activated_skill_block`、skill reference 解析/加载、memory/progress 加载 |
 | `subagent_overflow` | 子 Agent 400/length 极简部分报告 |
-| `hooks` | PostToolUse 匹配、LogIntegrityChecker task 生成 |
+| `hooks` | PostToolUse 匹配、KnowledgeAuditor hook task 生成 |
 | `message_bridge` | ChatMessage ↔ LlmChatMessage；`parse_tool_call_input` |
-| `turn_loop` | inner loop、compaction、**StreamingToolDispatch**、hook drain、approve/deny/answer |
+| `turn_loop` | inner loop、compaction、**StreamingToolDispatch**、hook drain、approve/deny/answer；tool result 格式化委托 `novel_tools::format_tool_result_for_llm` |
 
 ---
 

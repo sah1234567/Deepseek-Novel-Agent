@@ -2,20 +2,11 @@ use crate::{AgentError, AgentType};
 
 fn fallback_prompt(agent_type: AgentType) -> &'static str {
     match agent_type {
-        AgentType::LogIntegrityChecker => {
-            "你是 Hook 扫描 Agent。只读检查知识库更新遗漏，输出自然语言报告与「接下来」指引。"
+        AgentType::KnowledgeAuditor => {
+            "你是知识库审计 Agent。只读检查遗漏与设定一致性，输出自然语言报告与「接下来」指引。"
         }
-        AgentType::ConsistencyChecker => {
-            "你是一致性审查员。只读深度审计，输出自然语言报告与修复建议。禁止 Write/Edit。"
-        }
-        AgentType::DialogueAnalyzer => {
-            "你是对话分析 Agent。分析章节对话问题，输出自然语言报告。禁止 fork 与 JSON。"
-        }
-        AgentType::PacingAnalyzer => {
-            "你是节奏分析 Agent。分析章节节奏比例与异常，输出自然语言报告。禁止 fork 与 JSON。"
-        }
-        AgentType::EmotionAnalyzer => {
-            "你是情感分析 Agent。分析角色情感轨迹，输出自然语言报告。禁止 fork 与 JSON。"
+        AgentType::ChapterCraftAnalyzer => {
+            "你是章节文笔分析 Agent。分析对话、节奏、情感，输出自然语言报告。禁止 fork 与 JSON。"
         }
         AgentType::GeneralPurpose => {
             "你是通用子 Agent。严格按下方自定义任务执行，输出自然语言报告。禁止 fork。"
@@ -25,13 +16,10 @@ fn fallback_prompt(agent_type: AgentType) -> &'static str {
 
 fn embedded_prompt(agent_type: AgentType) -> &'static str {
     match agent_type {
-        AgentType::LogIntegrityChecker => include_str!("../../../prompt/agents/log-integrity-checker.md"),
-        AgentType::ConsistencyChecker => {
-            include_str!("../../../prompt/agents/consistency_checker.md")
+        AgentType::KnowledgeAuditor => include_str!("../../../prompt/agents/knowledge-auditor.md"),
+        AgentType::ChapterCraftAnalyzer => {
+            include_str!("../../../prompt/agents/chapter-craft-analyzer.md")
         }
-        AgentType::DialogueAnalyzer => include_str!("../../../prompt/agents/dialogue-analyzer.md"),
-        AgentType::PacingAnalyzer => include_str!("../../../prompt/agents/pacing-analyzer.md"),
-        AgentType::EmotionAnalyzer => include_str!("../../../prompt/agents/emotion-analyzer.md"),
         AgentType::GeneralPurpose => include_str!("../../../prompt/agents/general_purpose.md"),
     }
 }
@@ -46,9 +34,6 @@ pub fn load_agent_prompt(agent_type: AgentType) -> Result<String, AgentError> {
 }
 
 /// Format task message: agent instructions + constraints + user task.
-/// Parent `messages[0]` system prompt is unchanged (DeepSeek KV cache prefix).
-///
-/// For `GeneralPurpose`, `user_task` is the main custom prompt body (Cursor generalPurpose alignment).
 pub fn format_fork_task(
     agent_type: AgentType,
     user_task: &str,
@@ -86,8 +71,8 @@ mod tests {
 
     #[test]
     fn format_fork_task_includes_separator_and_tools() {
-        let tools = AgentType::ConsistencyChecker.definition().tools;
-        let t = format_fork_task(AgentType::ConsistencyChecker, "审计第1章", &tools).expect("task");
+        let tools = AgentType::KnowledgeAuditor.definition().tools;
+        let t = format_fork_task(AgentType::KnowledgeAuditor, "审计第1章", &tools).expect("task");
         assert!(t.contains("---"));
         assert!(t.contains("审计第1章"));
         assert!(t.contains("禁止嵌套 fork"));
@@ -95,32 +80,17 @@ mod tests {
     }
 
     #[test]
-    fn consistency_checker_prompt_has_next_steps_not_handoff() {
-        let p = load_agent_prompt(AgentType::ConsistencyChecker).expect("prompt");
+    fn knowledge_auditor_prompt_has_next_steps() {
+        let p = load_agent_prompt(AgentType::KnowledgeAuditor).expect("prompt");
         assert!(p.contains("接下来"));
         assert!(p.contains("读不到本 prompt"));
-        assert!(p.contains("必须写进返回正文"));
-        assert!(!p.contains("引擎交接"));
     }
 
     #[test]
-    fn consistency_checker_prompt_is_natural_language() {
-        let p = load_agent_prompt(AgentType::ConsistencyChecker).expect("prompt");
-        assert!(p.contains("自然语言"));
-        assert!(!p.contains("严格 JSON"));
-    }
-
-    #[test]
-    fn analyzers_forbid_json_output() {
-        for ty in [
-            AgentType::DialogueAnalyzer,
-            AgentType::PacingAnalyzer,
-            AgentType::EmotionAnalyzer,
-        ] {
-            let p = load_agent_prompt(ty).expect("prompt");
-            assert!(p.contains("禁止 JSON"), "{ty}");
-            assert!(p.contains("禁止 fork"), "{ty}");
-        }
+    fn chapter_craft_analyzer_forbids_json() {
+        let p = load_agent_prompt(AgentType::ChapterCraftAnalyzer).expect("prompt");
+        assert!(p.contains("禁止 JSON"));
+        assert!(p.contains("禁止 fork"));
     }
 
     #[test]
@@ -130,13 +100,5 @@ mod tests {
         let t = format_fork_task(AgentType::GeneralPurpose, custom, &tools).expect("task");
         assert!(t.contains("## 自定义任务"));
         assert!(t.contains(custom));
-        assert!(t.contains("禁止嵌套 fork"));
-    }
-
-    #[test]
-    fn log_integrity_checker_prompt_requires_next_steps_in_output() {
-        let p = load_agent_prompt(AgentType::LogIntegrityChecker).expect("prompt");
-        assert!(p.contains("接下来"));
-        assert!(p.contains("必须写进返回正文"));
     }
 }

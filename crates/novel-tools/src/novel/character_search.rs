@@ -110,6 +110,10 @@ impl Tool for CharacterSearchTool {
         true
     }
 
+    fn usage_hint(&self) -> &str {
+        "定位人物卡路径；详情用 Grep + Read(offset/limit)。返回正文 >80 行会被拒绝。"
+    }
+
     async fn call(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
         let query = require_str(&input, "query")?;
         let field = input.get("field").and_then(|v| v.as_str()).unwrap_or("all");

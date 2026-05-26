@@ -53,7 +53,7 @@ cargo tauri dev
 - TokenAudit — 单次 LLM 调用的 cache_hit / cache_miss / completion tokens
 - ToolExecuted — 工具名与 success
 - Error — 可恢复错误（流式错误、用户中断等）
-- LogIntegrityCheckerForked — PostToolUse 钩子触发完整性检查子 Agent
+- KnowledgeAuditorHookForked — PostToolUse 钩子触发轻量知识库扫描子 Agent
 - CompactionTriggered — 上下文 level4 压缩（含 tokens_before）
 
 **token_audit.jsonl：** 仅 TokenAudit 事件副本，便于 jq 汇总。

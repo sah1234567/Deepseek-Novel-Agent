@@ -1,3 +1,12 @@
+export function extractSearchRoot(input: unknown): string | null {
+  if (!input || typeof input !== "object") return null;
+  const obj = input as Record<string, unknown>;
+  if (typeof obj.search_root === "string" && obj.search_root.trim()) return obj.search_root;
+  // legacy SQLite messages
+  if (typeof obj.path === "string" && obj.path.trim()) return obj.path;
+  return null;
+}
+
 export function extractToolPath(input: unknown): string | null {
   if (!input || typeof input !== "object") return null;
   const obj = input as Record<string, unknown>;
@@ -9,8 +18,12 @@ export function extractToolPath(input: unknown): string | null {
 }
 
 export function formatToolSummary(name: string, input: unknown): string {
+  if (/^(Grep|Glob)/i.test(name)) {
+    const root = extractSearchRoot(input);
+    if (root) return name + ": " + root;
+  }
   const path = extractToolPath(input);
-  if (path && /^(Read|Write|Edit|Glob|Grep)/i.test(name)) {
+  if (path && /^(Read|Write|Edit|Tail)/i.test(name)) {
     return name + ": " + path;
   }
   if (input && typeof input === "object") {
@@ -33,9 +46,6 @@ export function formatToolSummary(name: string, input: unknown): string {
     }
     if (name === "Bash" && typeof obj.command === "string") {
       return obj.command.length > 60 ? obj.command.slice(0, 60) + "…" : obj.command;
-    }
-    if (name === "ChapterRead" && typeof obj.chapter === "string") {
-      return obj.chapter;
     }
   }
   return "";
@@ -65,7 +75,8 @@ export function formatToolInput(name: string, input: unknown): string {
     }
     case "Grep": {
       const pat = typeof obj.pattern === "string" ? obj.pattern : "?";
-      const pth = typeof obj.path === "string" ? " in " + obj.path : "";
+      const root = extractSearchRoot(obj);
+      const pth = root ? " in " + root : "";
       return "搜索 \"" + pat + "\"" + pth;
     }
     case "Glob": {
@@ -77,7 +88,8 @@ export function formatToolInput(name: string, input: unknown): string {
             : typeof obj.glob === "string"
               ? obj.glob
               : "?";
-      const pth = extractToolPath(obj) ? " in " + extractToolPath(obj) : "";
+      const root = extractSearchRoot(obj);
+      const pth = root ? " in " + root : "";
       return "匹配 " + pat + pth;
     }
     case "Bash": {
@@ -107,10 +119,10 @@ export function formatToolInput(name: string, input: unknown): string {
     case "ConsistencyCheck": {
       return "执行一致性检查";
     }
-    case "ChapterRead": {
-      const ch = typeof obj.chapter === "string" ? obj.chapter : "?";
-      const mode = typeof obj.mode === "string" ? obj.mode : "";
-      return "读取章节: " + ch + (mode ? " (" + mode + ")" : "");
+    case "Tail": {
+      const fp = extractToolPath(obj) ?? "?";
+      const lines = typeof obj.lines === "number" ? obj.lines : 80;
+      return "读末 " + lines + " 行: " + fp;
     }
     case "AskUserQuestion": {
       const qs = Array.isArray(obj.questions) ? obj.questions : [];

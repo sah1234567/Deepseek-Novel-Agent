@@ -17,7 +17,7 @@ async fn fork_shares_system_prompt() {
     engine.handle_message("策划世界观").await.unwrap();
     let child = engine
         .fork(
-            AgentType::ConsistencyChecker,
+            AgentType::KnowledgeAuditor,
             "审计第1章：chapters/chapter-001.md".into(),
         )
         .await
@@ -48,7 +48,7 @@ async fn fork_from_system_only_deepseek_cache() {
             .unwrap();
     }
     let child = engine
-        .fork(AgentType::LogIntegrityChecker, "扫描 chapter-001 日志遗漏".into())
+        .fork(AgentType::KnowledgeAuditor, "扫描 chapter-001 知识库遗漏".into())
         .await
         .unwrap();
     // 始终从 system prompt 开始
@@ -74,7 +74,7 @@ async fn nested_fork_rejected_when_is_forked_child() {
     // Mark engine as forked child
     engine.is_forked_child = true;
     let result = engine
-        .fork(AgentType::LogIntegrityChecker, "写第2章".into())
+        .fork(AgentType::KnowledgeAuditor, "写第2章".into())
         .await;
     assert!(result.is_err());
 }

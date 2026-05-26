@@ -16,7 +16,8 @@ use novel_deepseek::ChatClient;
 use novel_logging::{AuditLogger, LogEvent};
 
 use novel_tools::{
-    default_registry, ForkQueue, PermissionMode, ToolCallSpec, ToolContext, ToolRegistry,
+    default_registry, ForkQueue, PermissionMode, ReadCacheEntry, ToolCallSpec, ToolContext,
+    ToolRegistry,
 };
 
 use std::collections::HashMap;
@@ -81,7 +82,7 @@ pub struct EngineShared {
     pub context_manager: ContextManager,
     pub abort_controller: Arc<AbortController>,
     pub permission_mode_override: Arc<Mutex<PermissionMode>>,
-    pub read_file_cache: Arc<DashMap<PathBuf, (u64, String)>>,
+    pub read_file_cache: Arc<DashMap<PathBuf, ReadCacheEntry>>,
     pub fork_queue: ForkQueue,
     pub agents_md: String,
     pub agent_skills_dir: PathBuf,
@@ -102,6 +103,11 @@ impl EngineShared {
                 tracing::warn!(error = %e, "audit log write failed");
             }
         }
+    }
+
+    /// Drop all session read-cache entries (e.g. after context compaction).
+    pub fn clear_read_file_cache(&self) {
+        self.read_file_cache.clear();
     }
 }
 
@@ -149,7 +155,7 @@ pub struct AgentEngine {
     pub(crate) llm: Option<ChatClient>,
     pub(crate) invoked_skill_ids: Vec<String>,
     pub(crate) read_skill_reference_paths: Vec<String>,
-    /// PostToolUse auto-trigger: LogIntegrityChecker subagent task prompts (drain via `drain_pending_hooks`).
+    /// PostToolUse auto-trigger: KnowledgeAuditor subagent task prompts (drain via `drain_pending_hooks`).
     pub(crate) pending_hook_tasks: Vec<String>,
     pub(crate) last_chapter_written: Option<String>,
     pub(crate) compaction_fail_count: u32,
@@ -521,12 +527,12 @@ impl AgentEngine {
             self.shared.session.id.clone(),
             agent_type,
             task_prompt,
-            agent_type.max_turns_for(&self.shared.settings.agent),
+            agent_type.max_react_loops_for(&self.shared.settings.agent),
             snapshots,
             self.is_forked_child,
         )
         .map_err(|e| {
-            if e == ForkError::InvalidMaxTurns(0) {
+            if e == ForkError::InvalidMaxReactLoops(0) {
                 AgentError::NestedForkProhibited
             } else {
                 AgentError::Fork(e)
@@ -552,24 +558,24 @@ impl AgentEngine {
         }
     }
 
-    /// PostToolUse auto-trigger: runs LogIntegrityChecker subagent synchronously.
+    /// PostToolUse auto-trigger: runs KnowledgeAuditor subagent synchronously.
     /// Does not inject report into parent `messages` (avoids polluting main LLM context).
-    pub async fn run_log_integrity_checker(
+    pub async fn run_knowledge_auditor_hook(
         &mut self,
         task: String,
         event_tx: Option<&mpsc::UnboundedSender<Event>>,
     ) -> Result<(), AgentError> {
         if self.hook_running {
-            tracing::debug!("log_integrity_checker skipped: hook already running");
+            tracing::debug!("knowledge_auditor_hook skipped: hook already running");
             return Ok(());
         }
         let trigger_preview: String = task.chars().take(120).collect();
         tracing::debug!(
             session_id = %self.shared.session.id,
             trigger_preview = %trigger_preview,
-            "log_integrity_checker_start"
+            "knowledge_auditor_hook_start"
         );
-        self.audit_log(LogEvent::LogIntegrityCheckerForked {
+        self.audit_log(LogEvent::KnowledgeAuditorHookForked {
             session_id: self.shared.session.id.clone(),
             trigger_tool: trigger_preview,
         });
@@ -578,13 +584,13 @@ impl AgentEngine {
             &self.shared.session.db,
             &self.shared.session.id,
             self.turn_number as i32,
-            "LogIntegrityChecker",
+            "KnowledgeAuditor",
             &task,
             "hook",
         )?;
         let result = async {
             let mut child = self
-                .fork(AgentType::LogIntegrityChecker, task)
+                .fork(AgentType::KnowledgeAuditor, task)
                 .await?;
             let saved = self.shared.permission_mode_override.clone();
             if let Ok(mut g) = self.shared.permission_mode_override.lock() {
@@ -610,10 +616,10 @@ impl AgentEngine {
         match &result {
             Ok(()) => tracing::debug!(
                 session_id = %self.shared.session.id,
-                "log_integrity_checker_complete"
+                "knowledge_auditor_hook_complete"
             ),
             Err(e) => {
-                tracing::warn!(error = %e, "log_integrity_checker_failed");
+                tracing::warn!(error = %e, "knowledge_auditor_hook_failed");
                 self.audit_error(e.to_string(), true);
             }
         }
@@ -732,10 +738,10 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         std::fs::create_dir_all(tmp.path().join("skills")).unwrap();
         let mut engine = AgentEngine::new(test_config(&tmp)).unwrap();
-        engine.active_sub_agent = Some(AgentType::ConsistencyChecker);
+        engine.active_sub_agent = Some(AgentType::KnowledgeAuditor);
         engine.shared.sub_agent_count.store(1, Ordering::SeqCst);
         let err = engine
-            .fork(AgentType::LogIntegrityChecker, "扫描第31章".into())
+            .fork(AgentType::ChapterCraftAnalyzer, "分析第31章".into())
             .await
             .unwrap_err();
         assert!(matches!(err, AgentError::NestedForkProhibited));
@@ -748,7 +754,7 @@ mod tests {
         std::fs::create_dir_all(tmp.path().join("skills")).unwrap();
         let engine = AgentEngine::new(test_config(&tmp)).unwrap();
         let child = engine
-            .fork(AgentType::ConsistencyChecker, "审计第31章".into())
+            .fork(AgentType::KnowledgeAuditor, "审计第31章".into())
             .await
             .unwrap();
         assert!(child.is_child);
@@ -761,7 +767,7 @@ mod tests {
         std::fs::create_dir_all(tmp.path().join("skills")).unwrap();
         let engine = AgentEngine::new(test_config(&tmp)).unwrap();
         let err = engine
-            .fork(AgentType::ConsistencyChecker, "  ".into())
+            .fork(AgentType::KnowledgeAuditor, "  ".into())
             .await
             .unwrap_err();
         assert!(matches!(err, AgentError::Fork(ForkError::EmptyTask)));
@@ -803,5 +809,29 @@ mod tests {
         let sid = engine.shared.session.id.clone();
         let resumed = AgentEngine::resume(cfg, &sid).unwrap();
         assert!(resumed.messages.len() >= 2);
+    }
+
+    #[test]
+    fn clear_read_file_cache_removes_all_entries() {
+        use novel_tools::{ReadCacheEntry, ReadCacheSource};
+        use std::path::PathBuf;
+
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("skills")).unwrap();
+        let engine = AgentEngine::new(test_config(&tmp)).unwrap();
+        engine.shared.read_file_cache.insert(
+            PathBuf::from("a.md"),
+            ReadCacheEntry {
+                mtime_secs: 1,
+                raw_content: "x".into(),
+                offset: None,
+                limit: None,
+                total_lines: 1,
+                source: ReadCacheSource::WriteRefresh,
+            },
+        );
+        assert_eq!(engine.shared.read_file_cache.len(), 1);
+        engine.shared.clear_read_file_cache();
+        assert!(engine.shared.read_file_cache.is_empty());
     }
 }

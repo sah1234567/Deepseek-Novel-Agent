@@ -13,7 +13,7 @@ pub fn build_summary_trailing_user_prompt() -> String {
      ## 作者意图与待办\n\
      用户明确要求、待确认项、进行中的 Todo\n\n\
      ## 子 Agent 结论\n\
-     ConsistencyChecker / LogIntegrityChecker / 分析类 subagent 报告要点（若有）\n\n\
+     KnowledgeAuditor / ChapterCraftAnalyzer / GeneralPurpose subagent 报告要点（若有）\n\n\
      输出要求：\n\
      - 只输出摘要正文（Markdown），不要前言或「以下是摘要」类套话\n\
      - 使用简体中文，保留章节号、人物名、文件路径等可操作细节\n\

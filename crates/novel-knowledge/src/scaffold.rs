@@ -43,6 +43,9 @@ mod tests {
         assert!(tmp.path().join("memory/MEMORY.md").exists());
         assert!(tmp.path().join("memory/genre.md").exists());
         assert!(tmp.path().join("memory/decisions.md").exists());
+        assert!(tmp.path().join("knowledge/plot/大纲.md").exists());
+        assert!(!tmp.path().join("plot").exists());
+        assert!(!tmp.path().join("shared-systems").exists());
         assert!(!tmp.path().join("skills").exists());
     }
 

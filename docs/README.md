@@ -82,7 +82,7 @@ Claude Code 文件夹格式：`skills/<id>/SKILL.md` + 可选 `references/`。
 | 检查 Subagent | ForkSubAgent（同批 5 项写后必做） | 一致性、日志遗漏、三 Analyzer |
 | GeneralPurpose | ForkSubAgent，task = 完整 prompt | 一次性自定义任务 |
 
-主 LLM 仅见工具路径的一条 `[子 Agent 完成: …]` 摘要；完整 transcript 在 `fork_messages` + overlay。Hook 路径（LogIntegrityChecker）**不 inject** 主会话。
+主 LLM 仅见工具路径的一条 `[子 Agent 完成: …]` 摘要；完整 transcript 在 `fork_messages` + overlay。Hook 路径（KnowledgeAuditor）**不 inject** 主会话。
 
 ## 前后端 Tool 事件契约
 

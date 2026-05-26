@@ -46,7 +46,7 @@ impl Default for PermissionsConfig {
             always_allow: vec![
                 "CharacterSearch".into(),
                 "PlotGraph".into(),
-                "ChapterRead".into(),
+                "Tail".into(),
                 "TodoWrite".into(),
             ],
         }
@@ -59,7 +59,7 @@ fn default_max_tool_concurrency() -> usize {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
-    pub consistency_checker_max_turns: u32,
+    pub knowledge_auditor_max_react_loops: u32,
     #[serde(default = "default_max_tool_concurrency")]
     pub max_tool_concurrency: usize,
 }
@@ -67,7 +67,7 @@ pub struct AgentConfig {
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
-            consistency_checker_max_turns: 50,
+            knowledge_auditor_max_react_loops: 40,
             max_tool_concurrency: default_max_tool_concurrency(),
         }
     }

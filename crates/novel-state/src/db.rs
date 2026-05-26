@@ -884,7 +884,7 @@ mod tests {
         let db = test_db();
         let sid = db.create_session("/tmp/proj", "deepseek-chat").unwrap();
         let run_id = db
-            .create_fork_run(&sid, 1, "ConsistencyChecker", "audit ch1", "tool")
+            .create_fork_run(&sid, 1, "KnowledgeAuditor", "audit ch1", "tool")
             .unwrap();
         db.insert_fork_message(
             &run_id,

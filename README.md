@@ -4,7 +4,7 @@
 
 技术栈：Rust + Tauri + React；默认对接 **DeepSeek V4 Pro**（百万上下文、KV cache 命中低价、流式工具调用）。
 
-**架构要点：** 针对 V4 Pro 的 prefix cache 计费，主会话需保持 system prompt 与对话前缀尽量稳定。因此 **Fork SubAgent** 只用于**专项并行审计**（写后/改稿后的一致性、日志、对话/节奏/情感检查等）——子 Agent 在独立上下文里跑完，主 Agent 只收一条摘要，完整 transcript 不进主 LLM。日常策划、写章、改稿所需的 Read / Grep / ChapterRead 等仍由**主 Agent**直接调用（读盘经济见 `prompt/system.md`）。默认模型 `deepseek-v4-pro`；Fork 细节见 [FRAMEWORK.md §2.3](FRAMEWORK.md#23-fork-子-agent)。
+**架构要点：** 针对 V4 Pro 的 prefix cache 计费，主会话需保持 system prompt 与对话前缀尽量稳定。因此 **Fork SubAgent** 只用于**专项并行审计**（写后/改稿后的 KnowledgeAuditor + ChapterCraftAnalyzer）——子 Agent 在独立上下文里跑完，主 Agent 只收一条摘要，完整 transcript 不进主 LLM。日常策划、写章、改稿所需的 Read / Tail / Grep 等仍由**主 Agent**直接调用（读盘经济见 `prompt/system.md`）。默认模型 `deepseek-v4-pro`；Fork 细节见 [FRAMEWORK.md §2.3](FRAMEWORK.md#23-fork-子-agent)。
 
 ---
 
@@ -16,7 +16,7 @@
 | **策划** | 大纲、细纲、人物卡、伏笔与因果链；Plan 模式下草案可写入 `plan/` |
 | **写章** | 按细纲撰写 2000–3000 字/章；写后同步知识库演变日志 |
 | **改稿** | 影响分析 + 级联修改正文与设定 |
-| **质量检查** | 子 Agent 并行审计（一致性、日志遗漏、对话/节奏/情感分析） |
+| **质量检查** | 子 Agent 并行审计（KnowledgeAuditor、ChapterCraftAnalyzer） |
 | **流派扩展** | 30+ 题材 Skill（仙侠、科幻、快穿等）按需加载 |
 | **权限模式** | 常规 / 策划 / 自动 / 无人值守，控制 Write/Edit 是否需作者确认 |
 

@@ -166,7 +166,7 @@ pub enum ContentBlockKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TerminalReason {
     Completed,
-    MaxTurns(u32),
+    MaxReactLoops(u32),
     AbortedStreaming,
     AbortedTools,
     ModelError {

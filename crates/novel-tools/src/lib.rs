@@ -8,7 +8,13 @@ mod context;
 mod error;
 mod executor;
 mod novel;
+mod paths;
+mod read_cache;
+mod read_economy;
 mod registry;
+mod tool_error_hints;
+mod tool_result_format;
+mod tool_result_middleware;
 mod trait_def;
 
 #[cfg(test)]
@@ -22,12 +28,24 @@ pub use error::{optional_str_any, require_str, require_str_any, ToolError, Valid
 pub use executor::{
     StreamingToolExecutor, ToolCallSpec, ToolExecutor, DEFAULT_MAX_CONCURRENT_TOOLS,
 };
+pub use paths::{
+    extract_file_path, normalize_chapter_progress_path, normalize_rel_path, optional_file_path,
+    optional_search_root, resolve_under_project,
+};
+pub use read_cache::{
+    add_line_numbers, file_mtime_secs, read_range_key, ReadCacheEntry, ReadCacheSource,
+    FILE_UNCHANGED_STUB,
+};
+pub use tool_result_format::{
+    format_tool_result_for_llm, FormattedToolResult, ToolResultSpec, NEEDS_USER_INPUT_STUB,
+};
 pub use registry::ToolRegistry;
 pub use trait_def::{Tool, ToolOutput};
 
 pub fn default_registry(_project_root: std::path::PathBuf) -> ToolRegistry {
     let mut reg = ToolRegistry::new();
     reg.register(Box::new(builtin::ReadTool));
+    reg.register(Box::new(builtin::TailTool));
     reg.register(Box::new(builtin::WriteTool));
     reg.register(Box::new(builtin::EditTool));
     reg.register(Box::new(builtin::GrepTool));
@@ -38,7 +56,6 @@ pub fn default_registry(_project_root: std::path::PathBuf) -> ToolRegistry {
     reg.register(Box::new(novel::CharacterSearchTool));
     reg.register(Box::new(novel::PlotGraphTool));
     reg.register(Box::new(novel::ConsistencyCheckTool));
-    reg.register(Box::new(novel::ChapterReadTool));
     reg.register(Box::new(novel::WebSearchTool));
     reg.register(Box::new(novel::PlotGridTool));
     reg.register(Box::new(novel::ForeshadowTrackerTool));

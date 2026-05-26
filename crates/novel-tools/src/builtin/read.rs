@@ -1,5 +1,6 @@
 use super::super::{
-    require_str_any, Tool, ToolContext, ToolError, ToolOutput, ValidationError,
+    add_line_numbers, extract_file_path, file_mtime_secs, read_range_key, ReadCacheEntry,
+    ReadCacheSource, Tool, ToolContext, ToolError, ToolOutput, ValidationError, FILE_UNCHANGED_STUB,
 };
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -19,18 +20,6 @@ fn format_file_size(bytes: usize) -> String {
     } else {
         format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
     }
-}
-
-fn add_line_numbers(content: &str, start_line: usize) -> String {
-    if content.is_empty() {
-        return String::new();
-    }
-    content
-        .lines()
-        .enumerate()
-        .map(|(i, line)| format!("{}\t{}", i + start_line, line))
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 /// Fast path: read entire file into memory, slice by lines.
@@ -110,13 +99,25 @@ impl Tool for ReadTool {
          Prefer Grep to locate content first, then Read only the needed lines. \
          Full-file reads are limited to 256 KB; use offset+limit or Grep for larger files."
     }
+    fn usage_hint(&self) -> &str {
+        "knowledge/** must use offset+limit (max 80 lines). Same path+range+mtime repeat returns stub — use earlier tool_result."
+    }
     fn input_schema(&self) -> Value {
         json!({
             "type": "object",
             "properties": {
-                "file_path": {"type": "string"},
-                "offset": {"type": "integer"},
-                "limit": {"type": "integer"}
+                "file_path": {
+                    "type": "string",
+                    "description": "Relative path under project root"
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "1-indexed start line (default 1)"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max lines to read from offset"
+                }
             },
             "required": ["file_path"]
         })
@@ -126,12 +127,12 @@ impl Tool for ReadTool {
     }
 
     fn validate_input(&self, input: &Value) -> Result<(), ValidationError> {
-        require_str_any(input, &["file_path", "path"])?;
+        extract_file_path(input)?;
         Ok(())
     }
 
     async fn call(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
-        let path = require_str_any(&input, &["file_path", "path"])?;
+        let path = extract_file_path(&input)?;
         let full = ctx.resolve_path(&path);
         let offset = input.get("offset").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
         let limit = input.get("limit").and_then(|v| v.as_u64()).map(|l| l as usize);
@@ -142,7 +143,17 @@ impl Tool for ReadTool {
         // ── Empty file check ──
         match fs::metadata(&full).await {
             Ok(meta) if meta.len() == 0 => {
-                ctx.mark_read(&full);
+                ctx.store_read_cache(
+                    &full,
+                    ReadCacheEntry {
+                        mtime_secs: file_mtime_secs(&meta),
+                        raw_content: String::new(),
+                        offset: None,
+                        limit: None,
+                        total_lines: 0,
+                        source: ReadCacheSource::Read,
+                    },
+                );
                 return Ok(ToolOutput {
                     content: "<system-reminder>Warning: the file exists but the contents are empty.</system-reminder>".into(),
                     is_error: false,
@@ -154,28 +165,22 @@ impl Tool for ReadTool {
             _ => {}
         }
 
-        // ── Dedup check (mtime-based) ──
-        // IMPORTANT: copy mtime out first, then drop the read guard before calling
-        // mark_read() which acquires a write lock on the same DashMap shard.
-        if let Some(ref cache) = ctx.read_file_cache {
-            let cached_mtime = cache.get(&full).map(|e| e.0);
-            if let Some(cached_mtime) = cached_mtime {
-                // read guard dropped here — safe to acquire write lock below
-                if let Ok(meta) = fs::metadata(&full).await {
-                    let current_mtime = meta
-                        .modified()
-                        .ok()
-                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map(|d| d.as_secs())
-                        .unwrap_or(0);
-                    if current_mtime == cached_mtime {
-                        ctx.mark_read(&full);
-                        return Ok(ToolOutput {
-                            content: "<system-reminder>File has not been changed since last read. Refer to the earlier Read tool_result in this conversation rather than re-reading.</system-reminder>".into(),
-                            is_error: false,
-                        });
-                    }
-                }
+        // ── Dedup check (mtime + range) ──
+        if let Ok(meta) = fs::metadata(&full).await {
+            let current_mtime = file_mtime_secs(&meta);
+            let (cache_off, cache_lim) = read_range_key(
+                if limit.is_some() || offset > 1 {
+                    Some(offset)
+                } else {
+                    None
+                },
+                limit,
+            );
+            if ctx.read_dedup_hit(&full, cache_off, cache_lim, current_mtime) {
+                return Ok(ToolOutput {
+                    content: FILE_UNCHANGED_STUB.into(),
+                    is_error: false,
+                });
             }
         }
 
@@ -188,9 +193,10 @@ impl Tool for ReadTool {
             read_streaming(&full, line_offset, limit).await?
         };
 
+        crate::read_economy::read_pre_check(&path, limit, total_lines)?;
+
         // ── Offset beyond file ──
         if content.is_empty() && line_offset >= total_lines && total_lines > 0 {
-            ctx.mark_read(&full);
             return Ok(ToolOutput {
                 content: format!(
                     "<system-reminder>Warning: the file has only {} lines, but offset is {}. No content to read.</system-reminder>",
@@ -211,23 +217,31 @@ impl Tool for ReadTool {
 
         // ── Add line numbers ──
         let formatted = if content.is_empty() {
-            content
+            String::new()
         } else {
             add_line_numbers(&content, offset.max(1))
         };
 
-        ctx.mark_read(&full);
-
-        // ── Cache for dedup ──
-        if let Some(ref cache) = ctx.read_file_cache {
-            let mtime = metadata
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            cache.insert(full, (mtime, formatted.clone()));
-        }
+        let mtime = file_mtime_secs(&metadata);
+        let (cache_off, cache_lim) = read_range_key(
+            if limit.is_some() || offset > 1 {
+                Some(offset)
+            } else {
+                None
+            },
+            limit,
+        );
+        ctx.store_read_cache(
+            &full,
+            ReadCacheEntry {
+                mtime_secs: mtime,
+                raw_content: content,
+                offset: cache_off,
+                limit: cache_lim,
+                total_lines,
+                source: ReadCacheSource::Read,
+            },
+        );
 
         Ok(ToolOutput {
             content: formatted,
@@ -370,5 +384,35 @@ mod tests {
             .await
             .unwrap();
         assert!(out2.content.contains("has not been changed since last read"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn write_refresh_cache_does_not_dedup_read() {
+        use crate::ReadCacheSource;
+
+        let tmp = TempDir::new().unwrap();
+        write_file(tmp.path(), "edited.md", "after edit");
+        let mut ctx = test_ctx(&tmp);
+        ctx.read_file_cache = Some(Arc::new(dashmap::DashMap::new()));
+        let full = ctx.resolve_path("edited.md");
+        let meta = std::fs::metadata(&full).unwrap();
+        ctx.store_read_cache(
+            &full,
+            ReadCacheEntry {
+                mtime_secs: crate::file_mtime_secs(&meta),
+                raw_content: "after edit".into(),
+                offset: None,
+                limit: None,
+                total_lines: 1,
+                source: ReadCacheSource::WriteRefresh,
+            },
+        );
+
+        let out = ReadTool
+            .call(json!({"file_path": "edited.md"}), &ctx)
+            .await
+            .unwrap();
+        assert!(out.content.contains("after edit"));
+        assert!(!out.content.contains("has not been changed since last read"));
     }
 }

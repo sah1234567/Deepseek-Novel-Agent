@@ -214,6 +214,10 @@ impl Tool for ConsistencyCheckTool {
         true
     }
 
+    fn usage_hint(&self) -> &str {
+        "写章过程中快速采集原始数据；分批 aspects，输出 >80 行会被拒绝。写后签收用 ForkSubAgent(KnowledgeAuditor)。"
+    }
+
     async fn call(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
         let chapter_path = require_str(&input, "chapter_path")?;
         let aspects = parse_aspects(&input);

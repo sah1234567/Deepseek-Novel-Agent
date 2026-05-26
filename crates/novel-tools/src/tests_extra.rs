@@ -76,7 +76,7 @@ mod novel_tools_tests {
             "CharacterSearch",
             "PlotGraph",
             "ConsistencyCheck",
-            "ChapterRead",
+            "Tail",
             "WebSearch",
             "PlotGrid",
             "ForeshadowTracker",
@@ -157,7 +157,7 @@ mod market_tests {
 
     #[test]
     fn plan_mode_allows_write_under_plan_only() {
-        use crate::{PermissionResult, Tool};
+        use crate::PermissionResult;
         let tmp = TempDir::new().unwrap();
         let reg = default_registry(tmp.path().to_path_buf());
         let write = reg.get("Write").expect("Write");
@@ -167,12 +167,12 @@ mod market_tests {
             ..ToolContext::new(tmp.path().to_path_buf())
         };
         let ok = write.check_permissions(
-            &json!({"path": "plan/outline.md", "content": "x"}),
+            &json!({"file_path": "plan/outline.md", "content": "x"}),
             &ctx,
         );
         assert!(matches!(ok, PermissionResult::Allow));
         let bad = write.check_permissions(
-            &json!({"path": "knowledge/plot/大纲.md", "content": "x"}),
+            &json!({"file_path": "knowledge/plot/大纲.md", "content": "x"}),
             &ctx,
         );
         assert!(matches!(bad, PermissionResult::Deny { .. }));
@@ -206,7 +206,7 @@ mod market_tests {
         let spec = crate::ToolCallSpec {
             id: "w1".into(),
             name: "Write".into(),
-            input: json!({"path": "approved.md", "content": "ok"}),
+            input: json!({"file_path": "approved.md", "content": "ok"}),
         };
         assert!(matches!(
             ex.execute_one(&spec, &ctx).await,
@@ -217,7 +217,7 @@ mod market_tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn glob_accepts_glob_pattern_and_file_path_root() {
+    async fn glob_accepts_search_root() {
         use crate::Tool;
         let tmp = TempDir::new().unwrap();
         std::fs::write(tmp.path().join("hello.txt"), "x").unwrap();
@@ -228,7 +228,7 @@ mod market_tests {
         };
         let out = crate::builtin::GlobTool
             .call(
-                json!({"glob_pattern": "*hello*", "file_path": "."}),
+                json!({"glob_pattern": "*hello*", "search_root": "."}),
                 &ctx,
             )
             .await

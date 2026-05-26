@@ -49,7 +49,7 @@ scene / prop / faction / skill_encyclopedia / index（rebuild_index, ensure_inde
 
 Tauri `init_novel_project` / `create_work` / 启动时 `works/default` → 调用 scaffold；`project_initialized` 反映 knowledge 目录是否存在。
 
-**模板来源 `{agent_root}/templates/`（walkdir 递归）：** 典型文件包括 `AGENTS.md`、`knowledge/characters/_template.md`、`knowledge/plot/*.md`、`knowledge/shared-systems/*.md`、`memory/MEMORY.md`、`memory/preferences.md`、`memory/genre.md`、`memory/decisions.md`。已存在文件不覆盖。
+**模板来源 `{agent_root}/templates/`（walkdir 递归）：** 文件须落在 `knowledge/`、`memory/`、`chapters/`（目录由 `SCAFFOLD_DIRS` 创建）、`AGENTS.md`、`plan/` 等作品根下路径。**勿**在 `templates/` 下放顶层 `plot/` 或 `shared-systems/`（会复制到错误路径；剧情/设定模板只用 `templates/knowledge/plot/`、`templates/knowledge/shared-systems/`）。典型文件：`AGENTS.md`、`knowledge/characters/_template.md`、`knowledge/plot/*.md`、`memory/*.md`。已存在文件不覆盖。
 
 **单世界（默认）：**
 

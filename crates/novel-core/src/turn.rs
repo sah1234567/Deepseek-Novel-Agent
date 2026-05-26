@@ -42,7 +42,7 @@ impl TurnContext {
         }
     }
 
-    fn inner_spent(&self) -> u32 {
+    pub fn inner_spent(&self) -> u32 {
         self.inner_turn.saturating_sub(self.inner_turn_at_start)
     }
 
@@ -53,7 +53,7 @@ impl TurnContext {
     pub fn increment_inner(&mut self) -> Result<(), TerminalReason> {
         self.inner_turn += 1;
         if self.inner_spent() >= self.max_inner_turns {
-            return Err(TerminalReason::MaxTurns(self.max_inner_turns));
+            return Err(TerminalReason::MaxReactLoops(self.max_inner_turns));
         }
         Ok(())
     }
@@ -68,7 +68,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn max_turns_reached() {
+    fn max_react_loops_reached() {
         let mut t = TurnContext::new(1, 2);
         assert!(t.needs_continuation());
         assert!(t.increment_inner().is_ok());

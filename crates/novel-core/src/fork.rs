@@ -5,8 +5,8 @@ use std::path::PathBuf;
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum ForkError {
-    #[error("Invalid max turns: {0}")]
-    InvalidMaxTurns(u32),
+    #[error("Invalid max react loops: {0}")]
+    InvalidMaxReactLoops(u32),
     #[error("Empty task message")]
     EmptyTask,
     #[error("Knowledge file missing: {0}")]
@@ -19,7 +19,7 @@ pub struct ConversationFork {
     pub frozen_knowledge_snapshots: HashMap<PathBuf, String>,
     pub agent_def: AgentDefinition,
     pub task_message: ChatMessage,
-    pub max_turns: u32,
+    pub max_react_loops: u32,
 }
 
 impl ConversationFork {
@@ -30,8 +30,8 @@ impl ConversationFork {
     }
 
     pub fn validate(&self) -> Result<(), ForkError> {
-        if self.max_turns == 0 || self.max_turns > 80 {
-            return Err(ForkError::InvalidMaxTurns(self.max_turns));
+        if self.max_react_loops == 0 || self.max_react_loops > 80 {
+            return Err(ForkError::InvalidMaxReactLoops(self.max_react_loops));
         }
         if self.task_message.content.trim().is_empty() {
             return Err(ForkError::EmptyTask);
@@ -44,36 +44,29 @@ impl ConversationFork {
 pub struct ForkedAgentContext {
     pub fork: ConversationFork,
     pub messages: Vec<ChatMessage>,
-    pub turn_count: u32,
+    pub react_loop_count: u32,
     pub is_child: bool,
 }
 
 impl ForkedAgentContext {
-    /// 从父 Engine fork 创建子 Agent —— 唯一创建方式。
-    /// 子 agent 消息 = parent_messages[0]（system prompt）+ task_message。
-    /// system prompt 是父对话所有请求的固定前缀 → DeepSeek cache 必然命中。
     pub fn fork(
         parent_system_message: &ChatMessage,
         parent_session_id: String,
         agent_type: AgentType,
         task_prompt: String,
-        max_turns: u32,
+        max_react_loops: u32,
         knowledge_snapshots: HashMap<PathBuf, String>,
         parent_is_forked: bool,
     ) -> Result<Self, ForkError> {
         if parent_is_forked {
-            return Err(ForkError::InvalidMaxTurns(0)); // mapped to NestedFork in engine
+            return Err(ForkError::InvalidMaxReactLoops(0)); // mapped to NestedFork in engine
         }
         let agent_def = agent_type.definition();
-        if max_turns == 0 || max_turns > 80 {
-            return Err(ForkError::InvalidMaxTurns(max_turns));
+        if max_react_loops == 0 || max_react_loops > 80 {
+            return Err(ForkError::InvalidMaxReactLoops(max_react_loops));
         }
-        let formatted_task = format_fork_task(
-            agent_type,
-            &task_prompt,
-            &agent_def.tools,
-        )
-        .map_err(|_| ForkError::EmptyTask)?;
+        let formatted_task = format_fork_task(agent_type, &task_prompt, &agent_def.tools)
+            .map_err(|_| ForkError::EmptyTask)?;
         let fork = ConversationFork {
             parent_session_id,
             frozen_knowledge_snapshots: knowledge_snapshots,
@@ -85,14 +78,14 @@ impl ForkedAgentContext {
                 tool_calls: None,
                 reasoning_content: None,
             },
-            max_turns,
+            max_react_loops,
         };
         fork.validate()?;
         let messages = fork.build_messages(parent_system_message);
         Ok(Self {
             fork,
             messages,
-            turn_count: 0,
+            react_loop_count: 0,
             is_child: true,
         })
     }
@@ -101,10 +94,10 @@ impl ForkedAgentContext {
         &self.messages
     }
 
-    pub fn increment_turn(&mut self) -> Result<(), ForkError> {
-        self.turn_count += 1;
-        if self.turn_count >= self.fork.max_turns {
-            return Err(ForkError::InvalidMaxTurns(self.fork.max_turns));
+    pub fn increment_react_loop(&mut self) -> Result<(), ForkError> {
+        self.react_loop_count += 1;
+        if self.react_loop_count >= self.fork.max_react_loops {
+            return Err(ForkError::InvalidMaxReactLoops(self.fork.max_react_loops));
         }
         Ok(())
     }
@@ -132,9 +125,9 @@ mod tests {
         let fork = ConversationFork {
             parent_session_id: "s".into(),
             frozen_knowledge_snapshots: HashMap::new(),
-            agent_def: AgentType::ConsistencyChecker.definition(),
+            agent_def: AgentType::KnowledgeAuditor.definition(),
             task_message: msg("user", "task"),
-            max_turns: 10,
+            max_react_loops: 10,
         };
         assert!(fork.validate().is_ok());
         let built = fork.build_messages(&sys);
@@ -145,21 +138,21 @@ mod tests {
 
     #[rstest]
     #[test]
-    fn invalid_max_turns() {
+    fn invalid_max_react_loops() {
         let fork = ConversationFork {
             parent_session_id: "s".into(),
             frozen_knowledge_snapshots: HashMap::new(),
-            agent_def: AgentType::ConsistencyChecker.definition(),
+            agent_def: AgentType::KnowledgeAuditor.definition(),
             task_message: msg("user", "task"),
-            max_turns: 0,
+            max_react_loops: 0,
         };
-        assert_eq!(fork.validate(), Err(ForkError::InvalidMaxTurns(0)));
+        assert_eq!(fork.validate(), Err(ForkError::InvalidMaxReactLoops(0)));
 
         let fork2 = ConversationFork {
-            max_turns: 81,
+            max_react_loops: 81,
             ..fork
         };
-        assert_eq!(fork2.validate(), Err(ForkError::InvalidMaxTurns(81)));
+        assert_eq!(fork2.validate(), Err(ForkError::InvalidMaxReactLoops(81)));
     }
 
     #[rstest]
@@ -168,9 +161,9 @@ mod tests {
         let fork = ConversationFork {
             parent_session_id: "s".into(),
             frozen_knowledge_snapshots: HashMap::new(),
-            agent_def: AgentType::ConsistencyChecker.definition(),
+            agent_def: AgentType::KnowledgeAuditor.definition(),
             task_message: msg("user", "   "),
-            max_turns: 10,
+            max_react_loops: 10,
         };
         assert_eq!(fork.validate(), Err(ForkError::EmptyTask));
     }
@@ -182,12 +175,12 @@ mod tests {
         let result = ForkedAgentContext::fork(
             &sys,
             "s".into(),
-            AgentType::ConsistencyChecker,
+            AgentType::KnowledgeAuditor,
             "task".into(),
             10,
             HashMap::new(),
-            true, // parent is already forked
+            true,
         );
-        assert_eq!(result, Err(ForkError::InvalidMaxTurns(0)));
+        assert_eq!(result, Err(ForkError::InvalidMaxReactLoops(0)));
     }
 }

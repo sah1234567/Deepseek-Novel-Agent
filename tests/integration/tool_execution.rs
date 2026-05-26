@@ -19,7 +19,7 @@ async fn read_write_edit_chain() {
             id: "1".into(),
             name: "Write".into(),
             input: serde_json::json!({
-                "path": "knowledge/draft.md",
+                "file_path": "knowledge/draft.md",
                 "content": "林若烟入门。\n陈默旁观。"
             }),
         },
@@ -44,7 +44,7 @@ async fn read_write_edit_chain() {
             id: "3".into(),
             name: "Edit".into(),
             input: serde_json::json!({
-                "path": "knowledge/draft.md",
+                "file_path": "knowledge/draft.md",
                 "old_string": "陈默旁观。",
                 "new_string": "陈默冷淡旁观。"
             }),
@@ -60,7 +60,7 @@ async fn read_write_edit_chain() {
                 name: "Grep".into(),
                 input: serde_json::json!({
                     "pattern": "冷淡",
-                    "path": "."
+                    "search_root": "."
                 }),
             },
             &ctx,
@@ -87,7 +87,7 @@ async fn main_session_may_write_chapter_in_sandbox() {
             id: "1".into(),
             name: "Write".into(),
             input: serde_json::json!({
-                "path": "chapters/chapter-001.md",
+                "file_path": "chapters/chapter-001.md",
                 "content": "正文"
             }),
         },

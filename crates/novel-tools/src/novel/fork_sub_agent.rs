@@ -4,13 +4,9 @@ use serde_json::{json, Value};
 
 pub struct ForkSubAgentTool;
 
-/// Must stay in sync with `novel_core::FORKABLE_AGENT_TYPE_NAMES`.
 const VALID_AGENT_TYPES: &[&str] = &[
-    "ConsistencyChecker",
-    "LogIntegrityChecker",
-    "DialogueAnalyzer",
-    "PacingAnalyzer",
-    "EmotionAnalyzer",
+    "KnowledgeAuditor",
+    "ChapterCraftAnalyzer",
     "GeneralPurpose",
 ];
 
@@ -27,13 +23,9 @@ impl Tool for ForkSubAgentTool {
     }
 
     fn usage_hint(&self) -> &str {
-        "Main session only. Foreground/sync — main agent waits for reports. \
-         REQUIRED after each chapter Write (same message, parallel): LogIntegrityChecker, ConsistencyChecker, \
-         DialogueAnalyzer, PacingAnalyzer, EmotionAnalyzer. \
-         REQUIRED after revising chapters/**: same 5 forks on affected chapters. \
+        "Main session only. After each chapter Write (same message, parallel): KnowledgeAuditor + ChapterCraftAnalyzer. \
          Parallel: send all ForkSubAgent tool calls in one assistant message. \
-         Predefined: agent_type + short task. Custom: agent_type=GeneralPurpose, task=full custom prompt. \
-         Do NOT use ConsistencyCheck tool as a substitute for these forks at chapter close."
+         Do NOT use ConsistencyCheck as substitute at chapter close."
     }
 
     fn input_schema(&self) -> Value {
@@ -121,7 +113,7 @@ mod tests {
         };
         let err = tool
             .call(
-                json!({"agent_type": "ConsistencyChecker", "task": "审计第1章"}),
+                json!({"agent_type": "KnowledgeAuditor", "task": "审计第1章"}),
                 &ctx,
             )
             .await
@@ -140,43 +132,18 @@ mod tests {
             ..ToolContext::new(std::path::PathBuf::from("."))
         };
         tool.call(
-            json!({"agent_type": "LogIntegrityChecker", "task": "扫描第1章日志遗漏"}),
+            json!({"agent_type": "KnowledgeAuditor", "task": "扫描第1章"}),
             &ctx,
         )
         .await
         .unwrap();
         let guard = queue.lock().unwrap();
         assert_eq!(guard.len(), 1);
-        assert_eq!(guard[0].0, "LogIntegrityChecker");
+        assert_eq!(guard[0].0, "KnowledgeAuditor");
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn enqueues_general_purpose_custom_fork() {
-        let tool = ForkSubAgentTool;
-        let queue = Arc::new(Mutex::new(Vec::new()));
-        let ctx = ToolContext {
-            permission_mode: PermissionMode::Auto,
-            allow_fork: true,
-            fork_queue: Some(Arc::clone(&queue)),
-            ..ToolContext::new(std::path::PathBuf::from("."))
-        };
-        tool.call(
-            json!({
-                "agent_type": "GeneralPurpose",
-                "task": "对比两章细纲人物出场差异",
-                "description": "细纲对比"
-            }),
-            &ctx,
-        )
-        .await
-        .unwrap();
-        let guard = queue.lock().unwrap();
-        assert_eq!(guard[0].0, "GeneralPurpose");
-        assert!(guard[0].1.contains("细纲"));
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn rejects_removed_writer_types() {
+    async fn rejects_removed_agent_types() {
         let tool = ForkSubAgentTool;
         let queue = Arc::new(Mutex::new(Vec::new()));
         let ctx = ToolContext {
@@ -187,7 +154,7 @@ mod tests {
         };
         let err = tool
             .call(
-                json!({"agent_type": "ChapterWriter", "task": "写第1章"}),
+                json!({"agent_type": "ConsistencyChecker", "task": "审计"}),
                 &ctx,
             )
             .await

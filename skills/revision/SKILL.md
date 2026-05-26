@@ -3,7 +3,7 @@ name: revision
 description: 修订与级联改稿工作流——ImpactAnalysis 定位影响范围、按优先级级联 Edit。当用户要改稿、修设定、级联修改时使用。触发词："改稿"、"修订"、"修改设定"、"级联修改"
 when_to_use: 改稿/修设定/级联修改时使用。写新章、纯策划可忽略本 Skill。
 skill_kind: workflow
-allowed-tools: Read, Write, Edit, Glob, Grep, Bash, CharacterSearch, PlotGraph, ImpactAnalysis, InvokeSkill, AskUserQuestion, ForkSubAgent
+allowed-tools: Read, Write, Edit, Glob, Grep, Bash, CharacterSearch, PlotGraph, ImpactAnalysis, Tail, InvokeSkill, AskUserQuestion, ForkSubAgent
 ---
 
 # 修订与级联改稿工作流
@@ -15,7 +15,7 @@ allowed-tools: Read, Write, Edit, Glob, Grep, Bash, CharacterSearch, PlotGraph, 
 ## 第一步：影响分析（不可跳过）
 
 1. 解析用户反馈，确定受影响范围（角色性格、战力体系、情节走向、世界观设定等）
-2. 使用 **ImpactAnalysis** + Grep + CharacterSearch 定位所有影响点（**先 Grep/搜索定位，再按清单逐文件分段 Read**；禁止批量 full Read 多章正文）：
+2. 使用 **ImpactAnalysis** + Grep + CharacterSearch 定位所有影响点（**先 Grep/搜索定位，再按清单逐文件分段 Read**；改稿读章末衔接用 **Tail**；中间段用 Read offset/limit；禁止批量 full Read 多章正文）：
    - 人物卡出场记录日志 → 章号列表
    - PlotGraph backward → 如果修改影响伏笔或因果事件
    - 伏笔追踪 → 检查关联人物列
@@ -26,6 +26,8 @@ allowed-tools: Read, Write, Edit, Glob, Grep, Bash, CharacterSearch, PlotGraph, 
 ## 第二步：级联修改（确认后）
 
 修订正文时同步清除 AI 味：删改「不是…而是…」、破折号泛滥、「然后/首先/其次」堆砌、句长均匀、情感空标签、说明书式叙述；补入具体细节与闲笔，长短句交替。
+
+**Edit 后读盘**：每文件 Edit 后 Read/Tail **改动段一次**再改下一处；禁止对同一 `offset`/`limit`（或 Tail `lines`）连读两次（引擎返回 stub）。session cache 已更新 ≠ 对话 context 已更新。
 
 修改优先级（从基础到表层）：
 1. **世界观/战力文件**
@@ -48,6 +50,6 @@ allowed-tools: Read, Write, Edit, Glob, Grep, Bash, CharacterSearch, PlotGraph, 
 ## 本阶段完成后
 
 1. 向用户汇报修订摘要：已修改文件清单与变更要点。
-2. 若本轮 Edit/Write 了 `chapters/**`：**必须**在同一次 assistant 消息内并行 Fork 5 项 Subagent（LogIntegrityChecker + ConsistencyChecker + DialogueAnalyzer + PacingAnalyzer + EmotionAnalyzer），task 含受影响章节路径与改稿原因；按全部报告 Edit 修复。
-3. 若仅改 knowledge/ 未改正文：说明知识库已同步；若改动可能影响已写章节，**必须** Fork ConsistencyChecker（+ 三 Analyzer）审计最近相关章。
+2. 若本轮 Edit/Write 了 `chapters/**`：**必须**在同一次 assistant 消息内并行 Fork 2 项 Subagent（KnowledgeAuditor + ChapterCraftAnalyzer），task 含受影响章节路径与改稿原因；按全部报告 Edit 修复。
+3. 若仅改 knowledge/ 未改正文：说明知识库已同步；若改动可能影响已写章节，**必须** Fork KnowledgeAuditor（+ 必要时 ChapterCraftAnalyzer）审计最近相关章。
 4. 审计与修复完成后，向用户确认「修订完成」。

@@ -8,7 +8,10 @@ status: alive
 povCharacter: false
 ---
 
+<!-- lastUpdate: 每次写章 append 知识库后更新为最新章号 -->
+
 ## 当前状态快照
+<!-- 写前优先 Read 本节（≤15 行），勿通读全文 -->
 - 姓名: 角色名
 
 ## 身份演变日志

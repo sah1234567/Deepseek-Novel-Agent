@@ -1,4 +1,4 @@
-use super::super::{blocking, optional_str_any, Tool, ToolContext, ToolError, ToolOutput};
+use super::super::{blocking, optional_search_root, optional_str_any, Tool, ToolContext, ToolError, ToolOutput};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -60,7 +60,10 @@ impl Tool for GlobTool {
             "type": "object",
             "properties": {
                 "pattern": {"type": "string"},
-                "path": {"type": "string"}
+                "search_root": {
+                    "type": "string",
+                    "description": "Directory to search under project root (default: project root)"
+                }
             },
             "required": ["pattern"]
         })
@@ -72,7 +75,7 @@ impl Tool for GlobTool {
     async fn call(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
         let pattern = optional_str_any(&input, &["pattern", "glob_pattern", "glob"])
             .unwrap_or_else(|| "*".into());
-        let root = optional_str_any(&input, &["path", "file_path", "directory", "dir"])
+        let root = optional_search_root(&input)
             .map(|p| ctx.resolve_path(&p))
             .unwrap_or_else(|| ctx.project_root.clone());
         let project_root = ctx.project_root.clone();

@@ -207,8 +207,8 @@ function applyForkToolUpdate(run: ForkRunState, p: ToolCallRequest): ForkRunStat
   return run;
 }
 
-function isLogIntegrityAgent(agentType: string): boolean {
-  return agentType.toLowerCase().includes("logintegrity");
+function isKnowledgeAuditorHook(agentType: string): boolean {
+  return agentType.toLowerCase().includes("knowledgeauditor");
 }
 
 export function useAgent(onTurnComplete?: () => void) {
@@ -752,7 +752,7 @@ export function useAgent(onTurnComplete?: () => void) {
           activeForkCountRef.current += 1;
           setActiveForkCount(activeForkCountRef.current);
           setActiveSubAgent(agentType ?? "");
-          if (isLogIntegrityAgent(agentType ?? "")) setHookRunning(true);
+          if (isKnowledgeAuditorHook(agentType ?? "")) setHookRunning(true);
           setForkRuns((prev) => {
             const next = new Map(prev);
             next.set(forkRunId, {
@@ -825,7 +825,7 @@ export function useAgent(onTurnComplete?: () => void) {
             const next = new Map(prev);
             const finished = flushForkStreaming(run);
             next.set(forkRunId, finished);
-            if (isLogIntegrityAgent(finished.agentType)) {
+            if (isKnowledgeAuditorHook(finished.agentType)) {
               setHookForkBanner({ forkRunId, agentType: finished.agentType });
             }
             return next;

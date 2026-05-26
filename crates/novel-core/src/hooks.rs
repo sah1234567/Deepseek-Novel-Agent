@@ -1,12 +1,11 @@
-//! PostToolUse hook matchers (settings opt-in). Matching rules enqueue **LogIntegrityChecker subagent**
-//! tasks into `pending_hook_tasks` → `drain_pending_hooks`. "Hook" is the PostToolUse trigger path,
-//! not a separate agent type from Subagent/fork.
+//! PostToolUse hook matchers (settings opt-in). Matching rules enqueue **KnowledgeAuditor subagent**
+//! tasks into `pending_hook_tasks` → `drain_pending_hooks`.
 
 use novel_config::{HookConfig, HookMatcher};
-use novel_tools::ToolRegistry;
+use novel_tools::{normalize_rel_path, optional_file_path, ToolRegistry};
 use serde_json::Value;
 
-/// Default hooks: empty (LLM decides when to Fork LogIntegrityChecker). Users may opt in via settings.json.
+/// Default hooks: empty (LLM decides when to Fork KnowledgeAuditor). Users may opt in via settings.json.
 pub fn default_hook_config() -> HookConfig {
     HookConfig {
         post_tool_use: vec![],
@@ -42,8 +41,7 @@ pub fn run_post_tool_use_hooks(
 }
 
 /// Build sub-agent task prompt when PostToolUse hooks match.
-/// Matching is driven by `hooks.post_tool_use[].matcher` — no tool-name hardcoding.
-pub fn log_integrity_checker_task(
+pub fn knowledge_auditor_hook_task(
     hooks: &HookConfig,
     tool_name: &str,
     tool_input: Option<&Value>,
@@ -54,7 +52,7 @@ pub fn log_integrity_checker_task(
         return None;
     }
     Some(format!(
-        "LogIntegrityChecker 扫描任务：\n{}\n\n请检查上述工具输出，列出演变日志遗漏并给出建议 append 行（只读报告，禁止 Write/Edit）。",
+        "KnowledgeAuditor 轻量扫描任务：\n{}\n\n请检查上述工具输出，列出演变日志遗漏并给出建议 append 行（只读报告，禁止 Write/Edit）。",
         prompts.join("\n\n---\n\n")
     ))
 }
@@ -79,14 +77,6 @@ pub fn tool_schemas_for_agent(
         .collect()
 }
 
-fn tool_target_path(input: Option<&Value>) -> Option<String> {
-    let v = input?;
-    v.get("file_path")
-        .or_else(|| v.get("path"))
-        .and_then(|p| p.as_str())
-        .map(String::from)
-}
-
 fn matcher_matches(matcher: &str, tool_name: &str, tool_input: Option<&Value>) -> bool {
     if matcher == "*" || matcher.is_empty() {
         return true;
@@ -95,8 +85,11 @@ fn matcher_matches(matcher: &str, tool_name: &str, tool_input: Option<&Value>) -
         if tool_name != "Write" && tool_name != "Edit" {
             return false;
         }
-        return tool_target_path(tool_input)
-            .is_some_and(|p| p.replace('\\', "/").contains("chapters/"));
+        let Some(v) = tool_input else {
+            return false;
+        };
+        return optional_file_path(v)
+            .is_some_and(|p| normalize_rel_path(&p).contains("chapters/"));
     }
     if matcher.starts_with("Write|Edit") {
         return tool_name == "Write" || tool_name == "Edit";
@@ -124,10 +117,10 @@ mod tests {
     }
 
     #[test]
-    fn log_integrity_checker_skips_when_no_hooks() {
+    fn knowledge_auditor_hook_skips_when_no_hooks() {
         let hooks = default_hook_config();
         let input = serde_json::json!({"file_path": "chapters/chapter-031.md"});
-        assert!(log_integrity_checker_task(&hooks, "Write", Some(&input), "w").is_none());
+        assert!(knowledge_auditor_hook_task(&hooks, "Write", Some(&input), "w").is_none());
     }
 
     #[test]

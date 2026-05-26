@@ -39,7 +39,7 @@ API Key **不在** per-work `settings.json` 中持久化。全局读写：`load_
 
 **permissions：** mode, deny_rules, always_allow
 
-**agent：** consistency_checker_max_turns, max_tool_concurrency
+**agent：** knowledge_auditor_max_react_loops, max_tool_concurrency
 
 ### 1.4 Hook 配置结构
 
@@ -60,7 +60,7 @@ API Key **不在** per-work `settings.json` 中持久化。全局读写：`load_
 
 - `HookMatcher.matcher` — 工具名 + 可选路径模式
 - `HookRule.hook_type` — `"agent"` 或 `"prompt"`
-- `HookRule.prompt` — 注入 LogIntegrityChecker task 的指令
+- `HookRule.prompt` — 注入 KnowledgeAuditor hook task 的指令
 - 代码默认：`novel-core::hooks::default_hook_config()`
 
 ### 1.5 配置加载

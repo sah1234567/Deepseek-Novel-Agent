@@ -106,12 +106,9 @@ function TodoDropdown({
 
 function subAgentStatusLabel(agentType: string): string {
   const t = agentType.toLowerCase();
-  if (t.includes("logintegrity")) return "日志完整性检查中…";
+  if (t.includes("knowledgeauditor")) return "知识库审计中…";
+  if (t.includes("chaptercraft")) return "章节工艺分析中…";
   if (t.includes("general")) return "自定义 Subagent 运行中…";
-  if (t.includes("consistency")) return "一致性审计中…";
-  if (t.includes("dialogue")) return "对话分析中…";
-  if (t.includes("pacing")) return "节奏分析中…";
-  if (t.includes("emotion")) return "情感分析中…";
   return `${agentType} 运行中…`;
 }
 
@@ -391,7 +388,7 @@ export function StatusBar({
             }}
             title={runningForkRunId ? "查看 Subagent 详情" : "Subagent 运行中"}
           >
-            {subAgentStatusLabel(activeSubAgent ?? "LogIntegrityChecker")}
+            {subAgentStatusLabel(activeSubAgent ?? "KnowledgeAuditor")}
             {activeForkCount > 1 ? ` (${activeForkCount})` : ""}
           </button>
         )}

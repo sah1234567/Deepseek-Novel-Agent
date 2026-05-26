@@ -1,5 +1,4 @@
 mod fork_sub_agent;
-mod chapter_read;
 mod character_rotate;
 mod character_search;
 mod common;
@@ -15,7 +14,6 @@ mod plot_grid;
 mod stats;
 
 pub use fork_sub_agent::ForkSubAgentTool;
-pub use chapter_read::ChapterReadTool;
 pub use character_rotate::CharacterRotateTool;
 pub use character_search::CharacterSearchTool;
 pub use consistency_check::ConsistencyCheckTool;
