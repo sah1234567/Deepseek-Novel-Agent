@@ -109,7 +109,7 @@ Normal 模式下 Write/Edit 要求目标 path 已在 `read_file_cache` 中（本
 | **Tail** | 读文件物理末尾 N 行（默认 80）；续写衔接；写入 partial read cache（source=Tail）；knowledge ≤80 / chapters ≤200 行硬限 |
 | Write / Edit | 写/精确替换；`replace_all`；Edit 要求唯一匹配（非 replace_all）；stale/partial read 守卫 |
 | Grep | ripgrep 生态；`search_root` 可选（默认作品根）；匹配 ≤80 行 |
-| Glob | 通配符搜路径；`search_root` 可选 |
+| Glob | 通配符搜路径（`*`/`**`/`?`；带 `/` 的前缀 pattern；无 `/` 则任意深度；`dir/*` 等价 `dir/**`）；`search_root` 可选；输出统一 `/` |
 | Bash | Shell 命令 |
 | TodoWrite | SQLite `session_todos`，merge 模式；Normal 模式直接 Allow |
 | CharacterSearch | 人物档案 + 演变日志末行 |
