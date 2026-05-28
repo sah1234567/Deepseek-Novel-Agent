@@ -130,16 +130,6 @@ pub fn list_character_names(store: &KnowledgeStore) -> Vec<String> {
     names
 }
 
-pub fn extract_names_in_text(text: &str, known: &[String]) -> Vec<String> {
-    let mut found = Vec::new();
-    for name in known {
-        if text.contains(name.as_str()) && !found.contains(name) {
-            found.push(name.clone());
-        }
-    }
-    found
-}
-
 pub fn parse_table_rows(content: &str) -> Vec<Vec<String>> {
     let re = table_row_re();
     let mut rows = Vec::new();
@@ -157,12 +147,6 @@ pub fn parse_table_rows(content: &str) -> Vec<Vec<String>> {
         rows.push(cells);
     }
     rows
-}
-
-pub fn last_data_row(content: &str, table_heading: &str) -> Option<String> {
-    novel_knowledge::find_table_last_row(content, table_heading)
-        .ok()
-        .flatten()
 }
 
 pub fn list_chapter_files(root: &Path) -> Vec<(u32, PathBuf)> {
@@ -219,7 +203,15 @@ pub fn in_chapter_range(num: u32, range: Option<(u32, u32)>) -> bool {
 }
 
 pub fn count_chinese_chars(text: &str) -> u32 {
-    text.chars().filter(|c| !c.is_whitespace()).count() as u32
+    text.chars()
+        .filter(|c| {
+            matches!(*c as u32,
+                0x4E00..=0x9FFF |   // CJK Unified Ideographs (common)
+                0x3400..=0x4DBF |   // CJK Extension A
+                0x20000..=0x2A6DF   // CJK Extension B
+            )
+        })
+        .count() as u32
 }
 
 #[cfg(test)]

@@ -22,8 +22,6 @@ impl InterruptReason {
     }
 }
 
-pub const INTERRUPT_MESSAGE: &str = "[Request interrupted by user]";
-pub const INTERRUPT_MESSAGE_FOR_TOOL_USE: &str = "[Request interrupted by user for tool use]";
 pub const ERROR_MESSAGE_USER_ABORT: &str = "API Error: Request was aborted.";
 
 /// Shared abort controller for the active turn.

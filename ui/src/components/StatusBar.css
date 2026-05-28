@@ -188,27 +188,6 @@
   color: #79c0ff;
 }
 
-.status-chip.status-hook {
-  border-color: #9e6a03;
-  color: #f0c14b;
-  animation: pulse 1.5s ease-in-out infinite;
-}
-
-.status-chip-clickable {
-  cursor: pointer;
-  font: inherit;
-}
-
-.status-chip-clickable:disabled {
-  cursor: default;
-  opacity: 0.85;
-}
-
-.status-chip-clickable:not(:disabled):hover {
-  border-color: #f0c14b;
-  background: rgba(240, 193, 75, 0.08);
-}
-
 .status-chip.status-warn {
   border-color: #da3633;
   color: #ffa198;
@@ -365,12 +344,3 @@
   }
 }
 
-@keyframes pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.65;
-  }
-}

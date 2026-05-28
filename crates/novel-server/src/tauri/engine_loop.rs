@@ -1,6 +1,6 @@
 use crate::AppConfig;
 use novel_core::{
-    run_subagent_async, AgentEngine, AgentError, AgentType, EngineStatus, Event,
+    AbortController, AgentEngine, AgentError, EngineStatus, Event,
     TerminalReason,
 };
 use novel_config::ensure_work_under_works;
@@ -31,14 +31,14 @@ pub struct AppStatus {
     pub session_cache_hit: i64,
     pub session_cache_miss: i64,
     pub session_completion: i64,
-    pub session_total_tokens: i64,
-    pub project_root: String,
+    pub context_tokens: i64,
     pub active_work_name: String,
 }
 
 pub enum EngineCommand {
     SendMessage {
         content: String,
+        model: Option<String>,
         event_tx: Option<mpsc::UnboundedSender<Event>>,
         reply: oneshot::Sender<Result<TerminalReason, String>>,
     },
@@ -52,12 +52,6 @@ pub enum EngineCommand {
         reason: Option<String>,
         event_tx: Option<mpsc::UnboundedSender<Event>>,
         reply: oneshot::Sender<Result<(), String>>,
-    },
-    ForkSubAgent {
-        agent_type: AgentType,
-        task: String,
-        event_tx: Option<mpsc::UnboundedSender<Event>>,
-        reply: oneshot::Sender<Result<(String, String), String>>,
     },
     AnswerQuestion {
         tool_call_id: String,
@@ -102,8 +96,7 @@ fn build_app_status(engine: &AgentEngine, active_work_name: &str) -> AppStatus {
         .db
         .list_session_todos(&session_id)
         .unwrap_or_default();
-    let (hit, miss, comp) = engine.session_token_summary();
-    let total = hit + miss + comp;
+    let (hit, miss, comp, ctx) = engine.session_token_summary();
     AppStatus {
         session_id,
         permission_mode,
@@ -116,8 +109,7 @@ fn build_app_status(engine: &AgentEngine, active_work_name: &str) -> AppStatus {
         session_cache_hit: hit,
         session_cache_miss: miss,
         session_completion: comp,
-        session_total_tokens: total,
-        project_root: engine.shared.session.project_root.display().to_string(),
+        context_tokens: ctx,
         active_work_name: active_work_name.to_string(),
     }
 }
@@ -136,6 +128,7 @@ pub fn spawn_engine_loop(
     engine: AgentEngine,
     mut cmd_rx: mpsc::UnboundedReceiver<EngineCommand>,
     config: Arc<RwLock<AppConfig>>,
+    abort_controller: Arc<AbortController>,
 ) {
     tauri::async_runtime::spawn(async move {
         let mut engine = engine;
@@ -143,13 +136,14 @@ pub fn spawn_engine_loop(
             match cmd {
                 EngineCommand::SendMessage {
                     content,
+                    model,
                     event_tx,
                     reply,
                 } => {
                     tracing::debug!(content_len = content.len(), "engine_command SendMessage");
                     engine.clear_interrupt();
                     let result = engine
-                        .handle_message_with_events(&content, event_tx.as_ref())
+                        .handle_message_with_events(&content, model.as_deref(), event_tx.as_ref())
                         .await
                         .map_err(|e: AgentError| {
                             tracing::warn!(error = %e, "engine_command SendMessage failed");
@@ -189,49 +183,6 @@ pub fn spawn_engine_loop(
                         });
                     let _ = reply.send(result);
                 }
-                EngineCommand::ForkSubAgent {
-                    agent_type,
-                    task,
-                    event_tx,
-                    reply,
-                } => {
-                    tracing::debug!(?agent_type, task_len = task.len(), "engine_command ForkSubAgent");
-                    let agent_id = uuid::Uuid::new_v4().to_string();
-                    // Debug-only IPC: fire-and-forget subagent; does not inject into parent session.
-                    let fork_run_id = match novel_core::fork_transcript::create_fork_run(
-                        &engine.shared.session.db,
-                        &engine.shared.session.id,
-                        engine.turn_number as i32,
-                        &agent_type.to_string(),
-                        &task,
-                        "tool",
-                    ) {
-                        Ok(id) => id,
-                        Err(e) => {
-                            let _ = reply.send(Err(e.to_string()));
-                            continue;
-                        }
-                    };
-                    let shared = engine.shared.clone();
-                    let tx = engine.subagent_result_tx.clone();
-                    engine.sub_agent_inc();
-                    tokio::spawn(async move {
-                        let output = run_subagent_async(
-                            shared,
-                            agent_type,
-                            task,
-                            fork_run_id,
-                            event_tx,
-                        )
-                        .await
-                        .unwrap_or_else(|e| format!("子 Agent 错误: {e}"));
-                        let _ = tx.send((agent_type, output));
-                    });
-                    let _ = reply.send(Ok((
-                        agent_id,
-                        "子 Agent 已在后台启动（debug IPC；主会话不自动 inject）".into(),
-                    )));
-                }
                 EngineCommand::AnswerQuestion {
                     tool_call_id,
                     answers,
@@ -267,11 +218,10 @@ pub fn spawn_engine_loop(
                 } => {
                     tracing::debug!(%session_id, "engine_command ResumeSession");
                     let ecfg = config.read().await.engine_config();
-                    let abort = Arc::clone(&engine.shared.abort_controller);
                     let result = match AgentEngine::resume_with_abort(
                         ecfg,
                         &session_id,
-                        abort,
+                        Arc::clone(&abort_controller),
                     ) {
                         Ok(e) => {
                             let sid = e.shared.session.id.clone();
@@ -288,7 +238,7 @@ pub fn spawn_engine_loop(
                 EngineCommand::CreateSession { reply } => {
                     tracing::debug!("engine_command CreateSession");
                     let ecfg = config.read().await.engine_config();
-                    let result = match AgentEngine::new(ecfg) {
+                    let result = match AgentEngine::new_with_abort(ecfg, Arc::clone(&abort_controller)) {
                         Ok(e) => {
                             let sid = e.shared.session.id.clone();
                             engine = e;
@@ -322,7 +272,7 @@ pub fn spawn_engine_loop(
                     if let Some(parent) = ecfg.db_path.parent() {
                         let _ = std::fs::create_dir_all(parent);
                     }
-                    let result = match AgentEngine::new(ecfg) {
+                    let result = match AgentEngine::new_with_abort(ecfg, Arc::clone(&abort_controller)) {
                         Ok(e) => {
                             let sid = e.shared.session.id.clone();
                             engine = e;

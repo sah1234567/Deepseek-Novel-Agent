@@ -42,9 +42,7 @@ pub use turn_loop::run_subagent_async;
 pub use error::AgentError;
 pub use fork::{ConversationFork, ForkError, ForkedAgentContext};
 pub use interrupt::{AbortController, InterruptReason, ERROR_MESSAGE_USER_ABORT};
-pub use messages::{
-    create_user_interruption_message, is_synthetic_message, yield_missing_tool_result_blocks,
-};
+pub use messages::yield_missing_tool_result_blocks;
 pub use prompt_loader::{format_fork_task, load_agent_prompt};
 pub use session::SessionHandle;
 pub use system_prompt::{DynamicContext, StaticPrompt, SystemPromptBuilder};

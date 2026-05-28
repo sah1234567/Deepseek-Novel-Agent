@@ -98,41 +98,6 @@ async fn main_session_may_write_chapter_in_sandbox() {
 }
 
 #[tokio::test]
-async fn main_session_may_call_consistency_check() {
-    let tmp = TempDir::new().unwrap();
-    let root = tmp.path().to_path_buf();
-    std::fs::create_dir_all(root.join("chapters")).unwrap();
-    std::fs::create_dir_all(root.join("knowledge/plot")).unwrap();
-    std::fs::write(
-        root.join("chapters/chapter-001.md"),
-        "# 第一章\n\n测试正文。",
-    )
-    .unwrap();
-    let reg = Arc::new(default_registry(root.clone()));
-    let ex = ToolExecutor::new(reg);
-    let ctx = ToolContext {
-        permission_mode: PermissionMode::Auto,
-        project_root: root,
-        ..ToolContext::new(tmp.path().to_path_buf())
-    };
-    let out = ex
-        .execute_one(
-            &ToolCallSpec {
-                id: "1".into(),
-                name: "ConsistencyCheck".into(),
-                input: serde_json::json!({
-                    "chapter_path": "chapters/chapter-001.md",
-                    "aspects": ["viewpoint"]
-                }),
-            },
-            &ctx,
-        )
-        .await
-        .unwrap();
-    assert!(!out.content.is_empty());
-}
-
-#[tokio::test]
 async fn character_search_finds_name() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path().to_path_buf();

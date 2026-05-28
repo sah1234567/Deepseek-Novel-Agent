@@ -12,7 +12,9 @@ export interface SessionSummary {
   id: string;
   title: string | null;
   status: string;
+  model: string;
   last_active_at: string;
+  created_at: string;
   total_turns: number;
 }
 
@@ -34,8 +36,7 @@ export interface AppStatus {
   sessionCacheHit: number;
   sessionCacheMiss: number;
   sessionCompletion: number;
-  sessionTotalTokens: number;
-  projectRoot: string;
+  contextTokens: number;
   activeWorkName: string;
 }
 

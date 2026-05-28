@@ -9,7 +9,7 @@ use crate::message_bridge::{
     compaction_slice_to_chat, parse_tool_call_input, to_llm_messages,
     tool_result_message,
 };
-use crate::messages::{create_user_interruption_message, yield_missing_tool_result_blocks};
+use crate::messages::yield_missing_tool_result_blocks;
 use crate::subagent_react::{
     react_limit_reminder_message, report_only_tool_rejection, SubagentLoopPhase,
 };
@@ -334,6 +334,7 @@ impl AgentEngine {
     pub async fn handle_message_with_events(
         &mut self,
         content: &str,
+        model_override: Option<&str>,
         event_tx: Option<&mpsc::UnboundedSender<Event>>,
     ) -> Result<TerminalReason, AgentError> {
         if content.trim().is_empty() {
@@ -355,6 +356,29 @@ impl AgentEngine {
         }
         self.clear_interrupt();
         self.turn_number += 1;
+
+        // Set session title from first user message
+        if self.turn_number == 1 {
+            let title: String = content.chars().take(50).collect();
+            let _ = self.shared.session.db.set_session_title(
+                &self.shared.session.id,
+                &title,
+            );
+        }
+        // Apply model override for this turn (no persistent settings change)
+        self.last_api_model = self.shared.settings.model.model.clone();
+        if let Some(m) = model_override {
+            if !m.is_empty() && m != self.shared.settings.model.model {
+                let api_key = novel_config::resolve_agent_api_key(&self.shared.global_config_path);
+                let api_base = novel_config::resolve_agent_api_base(&self.shared.global_config_path);
+                self.llm = match &api_key {
+                    Some(key) => Some(ChatClient::deepseek(key, m, &api_base, true)),
+                    None => ChatClient::from_env(m).ok(),
+                };
+                self.last_api_model = m.to_string();
+            }
+        }
+
         self.pending_tools.clear();
         let user_msg = ChatMessage {
             role: "user".into(),
@@ -393,7 +417,7 @@ impl AgentEngine {
         let mut turn_ctx = TurnContext::new(self.turn_number, MAIN_MAX_INNER_TURNS);
         let reason = self.run_inner_turn_loop(&mut turn_ctx, event_tx).await?;
 
-        let (hit, miss, comp) = self.session_token_summary();
+        let (hit, miss, comp, _ctx) = self.session_token_summary();
         let (th, tm, tc) = self
             .last_turn_usage
             .as_ref()
@@ -798,13 +822,10 @@ impl AgentEngine {
 
     // ── LLM call + streaming tool execution (unified path) ────
 
-    fn append_interrupt_message(&mut self, tool_use: bool) -> Result<(), AgentError> {
-        if self.abort_reason() == Some(InterruptReason::SubmitInterrupt) {
-            return Ok(());
-        }
-        let msg = create_user_interruption_message(tool_use);
-        self.persist_message_alloc(&msg)?;
-        self.messages.push(msg);
+    fn append_interrupt_message(&mut self, _tool_use: bool) -> Result<(), AgentError> {
+        // Suppressed — "[Request interrupted by user]" bubble is pointless noise.
+        // Drain request (max_tokens=1, stream=false) runs in background to
+        // keep session token counts accurate (see drain_usage_background).
         Ok(())
     }
 
@@ -995,11 +1016,12 @@ impl AgentEngine {
                 };
                 if let Some(ref u) = effective_usage {
                     self.last_turn_usage = Some(u.clone());
-                    let _ = self.shared.session.db.add_session_tokens(
+                    let _ = self.shared.session.db.accumulate_session_tokens(
                         &self.shared.session.id,
                         u.cache_hit_tokens,
                         u.cache_miss_tokens,
                         u.completion_tokens,
+                        &self.last_api_model,
                     );
                     tracing::debug!(
                         cache_hit = u.cache_hit_tokens,
@@ -1624,7 +1646,7 @@ impl AgentEngine {
             "turn_continue_resume_inner_turn"
         );
         let reason = self.run_inner_turn_loop(&mut turn_ctx, event_tx).await?;
-        let (hit, miss, comp) = self.session_token_summary();
+        let (hit, miss, comp, _ctx) = self.session_token_summary();
         let (th, tm, tc) = self
             .last_turn_usage
             .as_ref()
@@ -2100,11 +2122,12 @@ impl AgentEngine {
     fn record_usage(&mut self, completion: &LlmCompletion) {
         if let Some(u) = &completion.usage {
             self.last_turn_usage = Some(u.clone());
-            let _ = self.shared.session.db.add_session_tokens(
+            let _ = self.shared.session.db.accumulate_session_tokens(
                 &self.shared.session.id,
                 u.cache_hit_tokens,
                 u.cache_miss_tokens,
                 u.completion_tokens,
+                &self.last_api_model,
             );
             tracing::debug!(
                 cache_hit = u.cache_hit_tokens,
@@ -2123,14 +2146,14 @@ impl AgentEngine {
         }
     }
 
-    pub fn session_token_summary(&self) -> (i64, i64, i64) {
+    pub fn session_token_summary(&self) -> (i64, i64, i64, i64) {
         self.shared.session
             .db
             .get_session(&self.shared.session.id)
             .ok()
             .flatten()
-            .map(|s| (s.cache_hit_tokens, s.cache_miss_tokens, s.completion_tokens))
-            .unwrap_or((0, 0, 0))
+            .map(|s| (s.cache_hit_tokens, s.cache_miss_tokens, s.completion_tokens, s.context_tokens))
+            .unwrap_or((0, 0, 0, 0))
     }
 
     fn main_tool_names(&self) -> Vec<String> {
@@ -2487,11 +2510,12 @@ pub async fn run_subagent_async(
                         _ => partial.usage.clone(),
                     };
                     if let Some(u) = &usage {
-                        let _ = shared.session.db.add_session_tokens(
+                        let _ = shared.session.db.accumulate_session_tokens(
                             &shared.session.id,
                             u.cache_hit_tokens,
                             u.cache_miss_tokens,
                             u.completion_tokens,
+                            &shared.settings.model.model,
                         );
                     }
                     break;
@@ -2554,11 +2578,12 @@ pub async fn run_subagent_async(
         }
 
         if let Some(u) = &completion.usage {
-            let _ = shared.session.db.add_session_tokens(
+            let _ = shared.session.db.accumulate_session_tokens(
                 &shared.session.id,
                 u.cache_hit_tokens,
                 u.cache_miss_tokens,
                 u.completion_tokens,
+                &shared.settings.model.model,
             );
         }
 

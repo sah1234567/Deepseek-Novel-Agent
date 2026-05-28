@@ -24,8 +24,7 @@ impl Tool for ForkSubAgentTool {
 
     fn usage_hint(&self) -> &str {
         "Main session only. After each chapter Write (same message, parallel): KnowledgeAuditor + ChapterCraftAnalyzer. \
-         Parallel: send all ForkSubAgent tool calls in one assistant message. \
-         Do NOT use ConsistencyCheck as substitute at chapter close."
+         Parallel: send all ForkSubAgent tool calls in one assistant message."
     }
 
     fn input_schema(&self) -> Value {

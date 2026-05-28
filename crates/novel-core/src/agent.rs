@@ -46,7 +46,9 @@ impl AgentType {
                     "CharacterSearch".into(),
                     "PlotGraph".into(),
                     "Tail".into(),
-                    "ConsistencyCheck".into(),
+                    "TrackingQuery".into(),
+                    "RelationQuery".into(),
+                    "ForeshadowTracker".into(),
                 ],
             },
             AgentType::ChapterCraftAnalyzer => AgentDefinition {
@@ -82,7 +84,6 @@ impl AgentType {
                     "InvokeSkill".into(),
                     "ImpactAnalysis".into(),
                     "TodoWrite".into(),
-                    "ConsistencyCheck".into(),
                     "WebSearch".into(),
                 ],
             },
@@ -127,9 +128,9 @@ mod tests {
     use novel_config::AgentConfig;
 
     #[test]
-    fn knowledge_auditor_has_consistency_check_not_edit() {
+    fn knowledge_auditor_has_tracking_query_not_edit() {
         let tools = AgentType::KnowledgeAuditor.definition().tools;
-        assert!(tools.contains(&"ConsistencyCheck".into()));
+        assert!(tools.contains(&"TrackingQuery".into()));
         assert!(!tools.contains(&"Edit".into()));
         assert!(!tools.contains(&"Write".into()));
     }
@@ -155,10 +156,9 @@ mod tests {
     }
 
     #[test]
-    fn general_purpose_has_write_and_consistency_check() {
+    fn general_purpose_has_write_not_fork() {
         let tools = AgentType::GeneralPurpose.definition().tools;
         assert!(!tools.contains(&"ForkSubAgent".into()));
-        assert!(tools.contains(&"ConsistencyCheck".into()));
         assert!(tools.contains(&"Write".into()));
         assert!(tools.contains(&"WebSearch".into()));
     }

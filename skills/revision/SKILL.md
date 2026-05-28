@@ -3,7 +3,7 @@ name: revision
 description: 修订与级联改稿工作流——ImpactAnalysis 定位影响范围、按优先级级联 Edit。当用户要改稿、修设定、级联修改时使用。触发词："改稿"、"修订"、"修改设定"、"级联修改"
 when_to_use: 改稿/修设定/级联修改时使用。写新章、纯策划可忽略本 Skill。
 skill_kind: workflow
-allowed-tools: Read, Write, Edit, Glob, Grep, Bash, CharacterSearch, PlotGraph, ImpactAnalysis, Tail, InvokeSkill, AskUserQuestion, ForkSubAgent
+allowed-tools: Read, Write, Edit, Glob, Grep, Bash, CharacterSearch, PlotGraph, ImpactAnalysis, Tail, InvokeSkill, AskUserQuestion, ForkSubAgent, TrackingQuery, RelationQuery, ForeshadowTracker
 ---
 
 # 修订与级联改稿工作流
@@ -15,11 +15,13 @@ allowed-tools: Read, Write, Edit, Glob, Grep, Bash, CharacterSearch, PlotGraph, 
 ## 第一步：影响分析（不可跳过）
 
 1. 解析用户反馈，确定受影响范围（角色性格、战力体系、情节走向、世界观设定等）
-2. 使用 **ImpactAnalysis** + Grep + CharacterSearch 定位所有影响点（**先 Grep/搜索定位，再按清单逐文件分段 Read**；改稿读章末衔接用 **Tail**；中间段用 Read offset/limit；禁止批量 full Read 多章正文）：
-   - 人物卡出场记录日志 → 章号列表
-   - PlotGraph backward → 如果修改影响伏笔或因果事件
-   - 伏笔追踪 → 检查关联人物列
-   - _关系与称呼索引 → 所有涉及该角色关系的行
+2. 使用 **ImpactAnalysis** 获取级联影响概览，再用以下专用工具定位所有影响点。**优先用专用工具**——Grep/Read 仅当专用工具未覆盖或需精确行号时作为后备：
+   - 人物卡出场记录日志 → `CharacterSearch` 找到相关人物卡
+   - 追踪文件 → `TrackingQuery(file="...", operation="search", keyword="角色名")` 查场景/道具/势力/时间线/战力/功法中受影响的条目
+   - 因果关系 → `PlotGraph(event="事件名", direction="both")` 追溯因果链
+   - 伏笔追踪 → `ForeshadowTracker(character="角色名")` 查关联伏笔
+   - 关系/称呼 → `RelationQuery(character="角色名", include_history=true)` 查所有关系变化
+   定位完成后按清单逐文件分段 Read（改稿读章末衔接用 Tail；中间段用 Read offset/limit；禁止批量 full Read）
 3. 产出影响报告（列出受影响的：人物卡、大纲、细纲、正文章节、伏笔、因果链）
 4. 影响范围超过 3 个文件时，使用 AskUserQuestion 向用户确认后再执行
 

@@ -77,15 +77,6 @@ function AppShell({
     }
   }, [status?.sessionId, agent.hydrateMessages]);
 
-  const hookActive = agent.hookRunning || (status?.hookRunning ?? false);
-
-  const runningForkRunId = (() => {
-    for (const [id, run] of agent.forkRuns) {
-      if (run.status === "running") return id;
-    }
-    return null;
-  })();
-
   const bannerError = errorDismissed
     ? null
     : error ?? agent.questionError ?? projectFiles.error;
@@ -104,12 +95,6 @@ function AppShell({
       />
       <StatusBar
         status={status}
-        hookRunning={hookActive}
-        activeSubAgent={agent.activeSubAgent}
-        activeForkCount={agent.activeForkCount}
-        runningForkRunId={runningForkRunId}
-        onOpenForkOverlay={(forkRunId) => void agent.openForkOverlay(forkRunId)}
-        lastTurnStats={agent.lastTurnStats}
         listWorks={listWorks}
         listSessions={listSessions}
         onOpenWork={async (name) => {
@@ -122,19 +107,18 @@ function AppShell({
         }}
         onResumeSession={async (sessionId) => {
           await resumeSession(sessionId);
+          await refresh();
           setErrorDismissed(false);
         }}
         onOpenSettings={() => setSettingsOpen(true)}
-        onNewSession={() => {
-          void (async () => {
-            try {
-              await createSession();
-              await refresh();
-              setErrorDismissed(false);
-            } catch {
-              // error shown via ErrorBanner
-            }
-          })();
+        onNewSession={async () => {
+          try {
+            await createSession();
+            await refresh();
+            setErrorDismissed(false);
+          } catch {
+            // error shown via ErrorBanner
+          }
         }}
         onCycleTodo={(todoId, nextStatus) =>
           void updateSessionTodo(todoId, nextStatus)

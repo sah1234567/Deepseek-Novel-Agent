@@ -26,6 +26,7 @@ pub struct ChatMessage {
 pub enum Op {
     SendMessage {
         content: String,
+        model: Option<String>,
     },
     Interrupt,
     ApproveTool {

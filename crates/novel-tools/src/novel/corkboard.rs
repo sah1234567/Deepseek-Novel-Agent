@@ -16,6 +16,7 @@ struct CorkboardCard {
     characters: Vec<String>,
     foreshadowings: Vec<String>,
     word_count_estimate: u32,
+    world: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -86,9 +87,12 @@ fn parse_scene_sections(content: &str, chapter_num: u32) -> Vec<CorkboardCard> {
             characters: extract_characters(content),
             foreshadowings: extract_foreshadowings(content),
             word_count_estimate: count_chinese_chars(content) / scene_starts.len().max(1) as u32,
+            world: extract_world(content),
         });
         return cards;
     }
+
+    let doc_world = extract_world(content);
 
     for (i, (scene_num, title, start_line)) in scene_starts.iter().enumerate() {
         let end_line = scene_starts
@@ -129,6 +133,11 @@ fn parse_scene_sections(content: &str, chapter_num: u32) -> Vec<CorkboardCard> {
             characters: extract_characters(&section),
             foreshadowings: extract_foreshadowings(&section),
             word_count_estimate: word_est,
+            world: extract_world(&section)
+                .lines()
+                .next()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| doc_world.clone()),
         });
     }
     cards
@@ -169,6 +178,29 @@ fn extract_characters(text: &str) -> Vec<String> {
     chars
 }
 
+fn extract_world(text: &str) -> String {
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("所在世界:") || trimmed.starts_with("所在世界：") {
+            return trimmed
+                .split([':', '：'])
+                .nth(1)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+        }
+        if trimmed.starts_with("副本:") || trimmed.starts_with("副本：") {
+            return trimmed
+                .split([':', '：'])
+                .nth(1)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+        }
+    }
+    String::new()
+}
+
 fn extract_foreshadowings(text: &str) -> Vec<String> {
     let mut fs = Vec::new();
     let re = foreshadow_regex();
@@ -206,7 +238,9 @@ impl Tool for CorkboardTool {
                     "properties": {
                         "pov": {"type": "string"},
                         "character": {"type": "string"},
-                        "foreshadowing": {"type": "string"}
+                        "foreshadowing": {"type": "string"},
+                        "world": {"type": "string"},
+                        "prop": {"type": "string"}
                     }
                 }
             }
@@ -239,6 +273,14 @@ impl Tool for CorkboardTool {
             .get("filter")
             .and_then(|f| f.get("foreshadowing"))
             .and_then(|v| v.as_str());
+        let filter_world = input
+            .get("filter")
+            .and_then(|f| f.get("world"))
+            .and_then(|v| v.as_str());
+        let filter_prop = input
+            .get("filter")
+            .and_then(|f| f.get("prop"))
+            .and_then(|v| v.as_str());
 
         let mut cards = Vec::new();
         for (num, path) in list_outline_files(&ctx.project_root) {
@@ -258,6 +300,12 @@ impl Tool for CorkboardTool {
         }
         if let Some(fs) = filter_fs {
             cards.retain(|c| c.foreshadowings.iter().any(|x| x == fs));
+        }
+        if let Some(world) = filter_world {
+            cards.retain(|c| c.world.contains(world));
+        }
+        if let Some(prop) = filter_prop {
+            cards.retain(|c| c.summary.contains(prop));
         }
 
         let result = CorkboardResult { cards };

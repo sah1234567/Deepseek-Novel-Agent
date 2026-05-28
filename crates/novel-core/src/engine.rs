@@ -140,7 +140,6 @@ pub fn open_audit_logger(
 pub struct AgentEngine {
     pub shared: EngineShared,
 
-    // Accessors for backward compatibility
     pub messages: Vec<ChatMessage>,
     pub is_forked_child: bool,
     pub is_streaming: bool,
@@ -152,6 +151,8 @@ pub struct AgentEngine {
     pub(crate) last_context_tokens: usize,
     pub(crate) has_interruptible_tool_in_progress: bool,
     pub(crate) active_sub_agent: Option<AgentType>,
+    /// Model actually used for the last API call (may differ from settings due to frontend override).
+    pub(crate) last_api_model: String,
     pub(crate) llm: Option<ChatClient>,
     pub(crate) invoked_skill_ids: Vec<String>,
     pub(crate) read_skill_reference_paths: Vec<String>,
@@ -163,7 +164,7 @@ pub struct AgentEngine {
     /// User message is `0`; assistant/tool messages use `1, 2, 3…` in chat order.
     pub(crate) turn_message_seq: i32,
 
-    /// Legacy channel for debug IPC `ForkSubAgent`; no consumer injects into parent session.
+    /// Channel for receiving subagent results; drained synchronously into parent session.
     pub subagent_result_rx: mpsc::UnboundedReceiver<(AgentType, String)>,
     pub subagent_result_tx: mpsc::UnboundedSender<(AgentType, String)>,
 }
@@ -203,6 +204,7 @@ impl AgentEngine {
         abort_controller: Arc<AbortController>,
     ) -> Result<Self, AgentError> {
         let mut settings = load_project_settings(&config.settings_path).unwrap_or_default();
+        let default_model = settings.model.model.clone();
         if settings.hooks.post_tool_use.is_empty() {
             settings.hooks = default_hook_config();
         }
@@ -268,6 +270,7 @@ impl AgentEngine {
             last_context_tokens: 0,
             has_interruptible_tool_in_progress: false,
             active_sub_agent: None,
+            last_api_model: default_model,
             llm: None,
             invoked_skill_ids: Vec::new(),
             read_skill_reference_paths: Vec::new(),
@@ -290,6 +293,7 @@ impl AgentEngine {
         abort_controller: Arc<AbortController>,
     ) -> Result<Self, AgentError> {
         let mut settings = load_project_settings(&config.settings_path).unwrap_or_default();
+        let default_model = settings.model.model.clone();
         if settings.hooks.post_tool_use.is_empty() {
             settings.hooks = default_hook_config();
         }
@@ -393,6 +397,7 @@ impl AgentEngine {
             last_context_tokens: 0,
             has_interruptible_tool_in_progress: false,
             active_sub_agent: None,
+            last_api_model: default_model,
             llm: None,
             invoked_skill_ids,
             read_skill_reference_paths,
@@ -454,14 +459,6 @@ impl AgentEngine {
         Ok(())
     }
 
-    pub fn is_forked_child(&self) -> bool {
-        self.is_forked_child
-    }
-
-    pub fn system_prompt(&self) -> &str {
-        &self.shared.system_prompt
-    }
-
     /// Snapshot for Tauri / frontend status bar.
     pub fn status_snapshot(&self) -> EngineStatus {
         let mode = self.tool_context().effective_permission_mode();
@@ -483,7 +480,7 @@ impl AgentEngine {
     }
 
     pub async fn handle_message(&mut self, content: &str) -> Result<TerminalReason, AgentError> {
-        self.handle_message_with_events(content, None).await
+        self.handle_message_with_events(content, None, None).await
     }
 
     // ── Fork ──────────────────────────────────────────────────
@@ -658,9 +655,9 @@ impl AgentEngine {
     ) -> Result<TerminalReason, AgentError> {
         while let Some(op) = op_rx.recv().await {
             match op {
-                Op::SendMessage { content } => {
+                Op::SendMessage { content, model } => {
                     let reason = self
-                        .handle_message_with_events(&content, Some(&event_tx))
+                        .handle_message_with_events(&content, model.as_deref(), Some(&event_tx))
                         .await?;
                     if !matches!(reason, TerminalReason::Completed) {
                         return Ok(reason);
@@ -784,7 +781,7 @@ mod tests {
         let (op_tx, op_rx) = mpsc::unbounded_channel();
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         op_tx
-            .send(Op::SendMessage { content: "你好".into() })
+            .send(Op::SendMessage { content: "你好".into(), model: None })
             .unwrap();
         drop(op_tx);
         let handle = tokio::spawn(async move { engine.run(op_rx, event_tx).await });

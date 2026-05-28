@@ -53,18 +53,19 @@ pub fn default_registry(_project_root: std::path::PathBuf) -> ToolRegistry {
     reg.register(Box::new(builtin::BashTool));
     reg.register(Box::new(builtin::TodoWriteTool));
     reg.register(Box::new(builtin::AskUserQuestionTool));
+    reg.register(Box::new(builtin::WebSearchTool));
+    reg.register(Box::new(builtin::InvokeSkillTool));
     reg.register(Box::new(novel::CharacterSearchTool));
     reg.register(Box::new(novel::PlotGraphTool));
-    reg.register(Box::new(novel::ConsistencyCheckTool));
-    reg.register(Box::new(novel::WebSearchTool));
     reg.register(Box::new(novel::PlotGridTool));
     reg.register(Box::new(novel::ForeshadowTrackerTool));
     reg.register(Box::new(novel::StatsTool));
     reg.register(Box::new(novel::CorkboardTool));
     reg.register(Box::new(novel::CharacterRotateTool));
     reg.register(Box::new(novel::ForkSubAgentTool));
-    reg.register(Box::new(novel::InvokeSkillTool));
     reg.register(Box::new(novel::ImpactAnalysisTool));
     reg.register(Box::new(novel::KnowledgeDeriveTool));
+    reg.register(Box::new(novel::TrackingQueryTool));
+    reg.register(Box::new(novel::RelationQueryTool));
     reg
 }

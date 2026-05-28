@@ -45,7 +45,6 @@ fn main() {
             commands::get_app_status,
             commands::set_permission_mode,
             commands::init_novel_project,
-            commands::fork_sub_agent,
             commands::create_session,
             commands::create_work,
             commands::open_work,

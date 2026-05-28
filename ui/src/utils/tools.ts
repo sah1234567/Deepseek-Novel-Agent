@@ -137,8 +137,12 @@ export function formatToolInput(name: string, input: unknown): string {
       const q = typeof obj.query === "string" ? obj.query : "?";
       return "网页搜索: " + q;
     }
-    case "Stats":
-      return "统计信息";
+    case "Stats": {
+      const ch = typeof obj.chapter === "string" ? obj.chapter : "";
+      if (ch === "all") return "全局字数统计";
+      if (ch) return `字数统计: 第${ch}章`;
+      return "字数统计";
+    }
     case "CharacterRotate":
       return "人物出场轮值检查";
     case "Corkboard":

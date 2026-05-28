@@ -1,19 +1,4 @@
-use crate::interrupt::{INTERRUPT_MESSAGE, INTERRUPT_MESSAGE_FOR_TOOL_USE};
 use crate::ChatMessage;
-
-pub fn create_user_interruption_message(tool_use: bool) -> ChatMessage {
-    ChatMessage {
-        role: "user".into(),
-        content: if tool_use {
-            INTERRUPT_MESSAGE_FOR_TOOL_USE.into()
-        } else {
-            INTERRUPT_MESSAGE.into()
-        },
-        tool_call_id: None,
-        tool_calls: None,
-        reasoning_content: None,
-    }
-}
 
 /// Synthetic tool_result messages for tool_use blocks missing results after abort.
 pub fn yield_missing_tool_result_blocks(
@@ -35,24 +20,11 @@ pub fn yield_missing_tool_result_blocks(
         .collect()
 }
 
-pub fn is_synthetic_message(msg: &ChatMessage) -> bool {
-    msg.role == "user"
-        && (msg.content == INTERRUPT_MESSAGE || msg.content == INTERRUPT_MESSAGE_FOR_TOOL_USE)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ToolCallRecord;
     use serde_json::json;
-
-    #[test]
-    fn interruption_message_variants() {
-        let plain = create_user_interruption_message(false);
-        assert_eq!(plain.content, INTERRUPT_MESSAGE);
-        let tool = create_user_interruption_message(true);
-        assert_eq!(tool.content, INTERRUPT_MESSAGE_FOR_TOOL_USE);
-    }
 
     #[test]
     fn missing_tool_results_from_assistant() {
@@ -71,19 +43,5 @@ mod tests {
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].role, "tool");
         assert_eq!(blocks[0].tool_call_id.as_deref(), Some("t1"));
-    }
-
-    #[test]
-    fn is_synthetic_detects_interrupt_messages() {
-        let plain = create_user_interruption_message(false);
-        assert!(is_synthetic_message(&plain));
-        let normal = ChatMessage {
-            role: "user".into(),
-            content: "hello".into(),
-            tool_call_id: None,
-            tool_calls: None,
-            reasoning_content: None,
-        };
-        assert!(!is_synthetic_message(&normal));
     }
 }

@@ -29,14 +29,14 @@
 
 ### 1.2 ToolRegistry
 
-`default_registry(project_root)` 注册 **22** 个工具：
+`default_registry(project_root)` 注册 **23** 个工具：
 
-**7 个通用：** Read, Write, Edit, **Tail**, Grep, Glob, Bash
+**9 个通用：** Read, Write, Edit, **Tail**, Grep, Glob, Bash, WebSearch, InvokeSkill
 
 **2 个交互：** TodoWrite, AskUserQuestion
 
-**14 个 Novel 专属：**
-CharacterSearch, PlotGraph, ConsistencyCheck, WebSearch, PlotGrid, ForeshadowTracker, Stats, Corkboard, CharacterRotate, **ForkSubAgent**, InvokeSkill, ImpactAnalysis, KnowledgeDerive
+**12 个 Novel 专属：**
+CharacterSearch, PlotGraph, PlotGrid, ForeshadowTracker, Stats, Corkboard, CharacterRotate, **ForkSubAgent**, ImpactAnalysis, KnowledgeDerive, TrackingQuery, RelationQuery
 
 （对话/节奏/情感分析由 **Subagent** ChapterCraftAnalyzer 承担，非独立主会话工具。）
 
@@ -114,7 +114,6 @@ Normal 模式下 Write/Edit 要求目标 path 已在 `read_file_cache` 中（本
 | TodoWrite | SQLite `session_todos`，merge 模式；Normal 模式直接 Allow |
 | CharacterSearch | 人物档案 + 演变日志末行 |
 | PlotGraph | 因果图 BFS |
-| ConsistencyCheck | 9 维原始数据采集；分批 aspects；输出 >80 行时 pipeline read_economy 拒绝 |
 | WebSearch | 通用网页搜索（DeepSeek `web_search_20250305`），API Key 与主对话相同：`DEEPSEEK_API_KEY` env 优先，否则 `{agent_root}/.novel-agent/api_config.json`（经 `ToolContext.global_api_config_path` → `novel_config::resolve_agent_api_key`）；失败返回 `ToolError` 而非空成功。原始结果缓存 `{project}/.websearch/`（非 `knowledge/` 正典）。支持 research/similar-works/reader-feedback/trope-reference/fact-check/writing-tips/trending/short-drama 等搜索角度 |
 | PlotGrid / ForeshadowTracker | 剧情网格 / 伏笔追踪（含可视化） |
 | Stats | 字数、完成率、连续天数 |
@@ -123,6 +122,8 @@ Normal 模式下 Write/Edit 要求目标 path 已在 `read_file_cache` 中（本
 | InvokeSkill | 按需加载 `skills/{id}/SKILL.md` body（文件夹格式），body 可能含 references Markdown 链接 |
 | ImpactAnalysis | 删章/改纲影响 JSON |
 | KnowledgeDerive | 知识库派生快照建议；支持 `compressLogs` 操作（调用 L2 压缩演化日志） |
+| TrackingQuery | 追踪表查询（场景/道具/势力/时间线/战力/功法），支持 current/range/search 三种操作 |
+| RelationQuery | 角色关系与称呼查询，支持双向关系、历史演变、目标过滤 |
 | **ForkSubAgent** | 主会话委派子 Agent；入队 `fork_queue`，`drain_pending_forks` 同步 join 后 inject **一条**报告摘要；完整 transcript 在 `fork_messages`（与 PostToolUse KnowledgeAuditor hook 并列，触发路径不同） |
 
 ### 1.8 ForkSubAgent
@@ -141,7 +142,7 @@ Normal 模式下 Write/Edit 要求目标 path 已在 `read_file_cache` 中（本
 
 `KnowledgeAuditor`, `ChapterCraftAnalyzer`, **`GeneralPurpose`**
 
-**GeneralPurpose 权限：** 精选 14 工具白名单（Read/Write/Edit/Glob/Grep/CharacterSearch/PlotGraph/Tail/Stats/InvokeSkill/ImpactAnalysis/TodoWrite/ConsistencyCheck/WebSearch）；无 ForkSubAgent（禁止嵌套 fork），无 Bash。含 Write/Edit 可在 sandbox 内写 chapters；WebSearch 原始缓存 `{project}/.websearch/`。
+**GeneralPurpose 权限：** 精选工具白名单（Read/Write/Edit/Glob/Grep/CharacterSearch/PlotGraph/Tail/Stats/InvokeSkill/ImpactAnalysis/TodoWrite/WebSearch）；无 ForkSubAgent（禁止嵌套 fork），无 Bash。含 Write/Edit 可在 sandbox 内写 chapters；WebSearch 原始缓存 `{project}/.websearch/`。
 
 **与 PostToolUse 的关系：** 用户可在 `settings.json` 启用 PostToolUse matcher，工具执行后自动入队 **KnowledgeAuditor hook**（轻量遗漏扫描，`source=hook`，不 inject 主会话）。写章收尾仍须手动 Fork 完整 KnowledgeAuditor + ChapterCraftAnalyzer。
 

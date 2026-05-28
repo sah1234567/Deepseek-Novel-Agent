@@ -1,4 +1,4 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useCallback, useRef, useState } from "react";
 import type { ForkRunState, PendingQuestion, UIMessage } from "../../hooks/useAgent";
 import { useAgentContext } from "../../context/AgentContext";
 import { APP_DISPLAY_NAME } from "../../constants/app";
@@ -95,6 +95,15 @@ function AskUserQuestionBlock({
   );
 }
 
+function countChineseChars(text: string): number {
+  let count = 0;
+  for (const ch of text) {
+    const c = ch.charCodeAt(0);
+    if ((c >= 0x4E00 && c <= 0x9FFF) || (c >= 0x3400 && c <= 0x4DBF)) count++;
+  }
+  return count;
+}
+
 function messageHeader(msg: UIMessage): string {
   if (msg.role === "user") return "作者";
   if (msg.role === "tool") return `工具 · ${msg.toolName}`;
@@ -106,11 +115,13 @@ function ChatMessageBody({
   msg,
   approveTool,
   denyTool,
+  forkRuns,
   onOpenFork,
 }: {
   msg: UIMessage;
   approveTool: (id: string) => Promise<void>;
   denyTool: (id: string, reason?: string) => Promise<void>;
+  forkRuns: Map<string, import("../../hooks/useAgent").ForkRunState>;
   onOpenFork: (forkRunId: string) => void;
 }) {
   if (msg.role === "tool") {
@@ -140,9 +151,8 @@ function ChatMessageBody({
     return (
       <SubAgentReportCard
         message={msg}
-        onViewDetails={() => {
-          if (msg.forkRunId) onOpenFork(msg.forkRunId);
-        }}
+        forkRun={msg.forkRunId ? forkRuns.get(msg.forkRunId) : undefined}
+        onLoadTranscript={onOpenFork}
       />
     );
   }
@@ -189,9 +199,39 @@ export function ChatPanel({
     openForkOverlay,
     hookForkBanner,
     dismissHookForkBanner,
+    model,
+    setModel,
+    forkRuns,
+    loadForkMessages,
   } = useAgentContext();
 
   const [input, setInput] = useState("");
+  const [stickyPrompt, setStickyPrompt] = useState<string | null>(null);
+  const userMsgRef = useRef<HTMLElement | null>(null);
+
+  // Find the last user message for the current turn
+  const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
+  const lastUserMsgText =
+    lastUserMsg?.contentBlocks?.[0]?.text?.slice(0, 200) ?? "";
+
+  const onScrollPosition = useCallback(
+    (scrollTop: number) => {
+      const el = userMsgRef.current;
+      if (!el) return;
+      // User message scrolled above viewport → show sticky header
+      if (scrollTop > el.offsetTop + el.offsetHeight + 8) {
+        if (!stickyPrompt) setStickyPrompt(lastUserMsgText);
+      } else {
+        if (stickyPrompt) setStickyPrompt(null);
+      }
+    },
+    [lastUserMsgText, stickyPrompt],
+  );
+
+  const scrollToUserMessage = useCallback(() => {
+    userMsgRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setStickyPrompt(null);
+  }, []);
 
   const hasInput = input.trim().length > 0;
   const canSubmitInterrupt = isStreaming && hasInput && hasInterruptibleToolInProgress;
@@ -251,11 +291,22 @@ export function ChatPanel({
   return (
     <section className="chat-panel">
       <div className="dialog-viewport">
+        {stickyPrompt && (
+          <button
+            type="button"
+            className="sticky-prompt-header"
+            onClick={scrollToUserMessage}
+            title="点击回到本轮对话起点"
+          >
+            {stickyPrompt}
+          </button>
+        )}
         <ScrollViewport
           className="message-list"
           autoScrollTo="bottom"
           autoScrollDeps={autoScrollDeps}
           overlayActive={overlayActive}
+          onScrollPositionChange={onScrollPosition}
         >
           {messages.length === 0 && !showStreamingPreview && !pendingQuestion && (
             <p className="placeholder">发送消息开始与 {APP_DISPLAY_NAME} 对话…</p>
@@ -263,6 +314,9 @@ export function ChatPanel({
           {messagesBeforeQuestion.map((msg) => (
             <article
               key={msg.id}
+              ref={
+                msg === lastUserMsg ? (el) => { userMsgRef.current = el; } : undefined
+              }
               className={`message message-${msg.role}${isStreaming ? "" : ""}`}
             >
               <header>{messageHeader(msg)}</header>
@@ -270,7 +324,8 @@ export function ChatPanel({
                 msg={msg}
                 approveTool={approveTool}
                 denyTool={denyTool}
-                onOpenFork={(forkRunId) => void openForkOverlay(forkRunId)}
+                forkRuns={forkRuns}
+                onOpenFork={(forkRunId) => void loadForkMessages(forkRunId)}
               />
             </article>
           ))}
@@ -291,6 +346,9 @@ export function ChatPanel({
           {messagesAfterQuestion.map((msg) => (
             <article
               key={msg.id}
+              ref={
+                msg === lastUserMsg ? (el) => { userMsgRef.current = el; } : undefined
+              }
               className={`message message-${msg.role}${isStreaming ? "" : ""}`}
             >
               <header>{messageHeader(msg)}</header>
@@ -298,7 +356,8 @@ export function ChatPanel({
                 msg={msg}
                 approveTool={approveTool}
                 denyTool={denyTool}
-                onOpenFork={(forkRunId) => void openForkOverlay(forkRunId)}
+                forkRuns={forkRuns}
+                onOpenFork={(forkRunId) => void loadForkMessages(forkRunId)}
               />
             </article>
           ))}
@@ -315,7 +374,14 @@ export function ChatPanel({
 
           {showStreamingPreview && (
             <article className="message message-assistant message-streaming">
-              <header>Agent {isStreaming && <span className="streaming-dot" aria-hidden />}</header>
+              <header>
+                Agent {isStreaming && <span className="streaming-dot" aria-hidden />}
+                {streamingText && (
+                  <span className="streaming-word-count">
+                    {countChineseChars(streamingText).toLocaleString()} 字
+                  </span>
+                )}
+              </header>
               <div className="message-body">
                 {streamingThinking && (
                   <details className="thinking-stream" open>
@@ -398,6 +464,16 @@ export function ChatPanel({
             <option value="plan">策划</option>
             <option value="auto">自动</option>
             <option value="unattended">无人值守</option>
+          </select>
+          <select
+            className="model-select"
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            disabled={isStreaming}
+            title="选择模型（切换模型将导致 KV Cache 失效）"
+          >
+            <option value="deepseek-v4-pro">v4-pro</option>
+            <option value="deepseek-v4-flash">v4-flash</option>
           </select>
           {isStreaming && !hasInput && (
             <button type="button" className="interrupt-btn" onClick={() => void interrupt()}>

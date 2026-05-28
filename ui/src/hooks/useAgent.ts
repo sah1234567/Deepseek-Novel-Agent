@@ -55,16 +55,6 @@ export interface PendingQuestion {
   }>;
 }
 
-export interface TurnStats {
-  turnHit: number;
-  turnMiss: number;
-  turnComp: number;
-  sessionHit: number;
-  sessionMiss: number;
-  sessionComp: number;
-  wasInterrupted: boolean;
-}
-
 /** Live + persisted transcript for one fork instance (tool or PostToolUse hook path). */
 export interface ForkRunState {
   forkRunId: string;
@@ -212,6 +202,9 @@ function isKnowledgeAuditorHook(agentType: string): boolean {
 }
 
 export function useAgent(onTurnComplete?: () => void) {
+  const onTurnCompleteRef = useRef(onTurnComplete);
+  onTurnCompleteRef.current = onTurnComplete;
+
   const [messages, setMessages] = useState<UIMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [hookRunning, setHookRunning] = useState(false);
@@ -228,12 +221,14 @@ export function useAgent(onTurnComplete?: () => void) {
   const [questionCustomText, setQuestionCustomText] = useState<Record<string, string>>({});
   const [questionError, setQuestionError] = useState<string | null>(null);
   const [hasInterruptibleToolInProgress, setHasInterruptibleToolInProgress] = useState(false);
-  const [lastTurnStats, setLastTurnStats] = useState<TurnStats | null>(null);
   /** Fork transcript overlay state — never merged into main `messages` (LLM isolation). */
   const [forkRuns, setForkRuns] = useState<Map<string, ForkRunState>>(new Map());
   const [openForkRunId, setOpenForkRunId] = useState<string | null>(null);
   const [activeForkCount, setActiveForkCount] = useState(0);
   const [hookForkBanner, setHookForkBanner] = useState<HookForkBanner | null>(null);
+  const [model, setModel] = useState<string>("deepseek-v4-pro");
+  const modelRef = useRef(model);
+  modelRef.current = model;
   const activeForkCountRef = useRef(0);
 
   const streamingMessageIdRef = useRef<string | null>(null);
@@ -407,13 +402,9 @@ export function useAgent(onTurnComplete?: () => void) {
         const msgKey = `tool-${id}`;
         const existingIdx = next.findIndex((m) => m.id === msgKey);
         if (existingIdx >= 0) {
-          const tool = toolCallFromRefs(id);
-          if (tool) {
-            const nextArr = [...next];
-            nextArr[existingIdx] = toolToMessage(tool);
-            next = nextArr;
-          }
-          continue;
+          // Tool arrived early (background poller beat segment-complete).
+          // Remove from old position — it will be re-inserted below assistant.
+          next = [...next.slice(0, existingIdx), ...next.slice(existingIdx + 1)];
         }
         const tool = toolCallFromRefs(id);
         if (!tool) continue;
@@ -474,7 +465,7 @@ export function useAgent(onTurnComplete?: () => void) {
   const drainMessageQueue = useCallback(() => {
     const next = messageQueueRef.current.shift();
     if (next) {
-      void invoke<string>("send_message", { content: next }).catch((e) => {
+      void invoke<string>("send_message", { content: next, model: modelRef.current }).catch((e) => {
         setQuestionError(String(e));
         setIsStreaming(false);
         clearStreamingState();
@@ -704,23 +695,6 @@ export function useAgent(onTurnComplete?: () => void) {
           setIsStreaming(false);
           setHookRunning(false);
           setHasInterruptibleToolInProgress(false);
-          setLastTurnStats({
-            turnHit: p.turnHitTokens ?? 0,
-            turnMiss: p.turnMissTokens ?? 0,
-            turnComp: p.turnCompTokens ?? 0,
-            sessionHit: p.cacheHitTokens ?? 0,
-            sessionMiss: p.cacheMissTokens ?? 0,
-            sessionComp: p.completionTokens ?? 0,
-            wasInterrupted: p.wasInterrupted ?? false,
-          });
-          if (p.wasInterrupted) {
-            interruptedSnapshotRef.current = {
-              hit: p.cacheHitTokens ?? 0,
-              miss: p.cacheMissTokens ?? 0,
-              comp: p.completionTokens ?? 0,
-              ts: Date.now(),
-            };
-          }
           void (async () => {
             if (pendingQuestionRef.current) return;
             if (
@@ -736,7 +710,7 @@ export function useAgent(onTurnComplete?: () => void) {
             } catch {
               // Fall through to normal turn end if status is unavailable.
             }
-            onTurnComplete?.();
+            onTurnCompleteRef.current?.();
             void hydrateMessages();
             drainMessageQueue();
           })();
@@ -836,6 +810,10 @@ export function useAgent(onTurnComplete?: () => void) {
 
     unlisteners.push(
       listen("session-resumed", () => {
+        setIsStreaming(false);
+        setHookRunning(false);
+        setHasInterruptibleToolInProgress(false);
+        clearStreamingState();
         void (async () => {
           try {
             const s = await invoke<AppStatusSnapshot>("get_app_status");
@@ -852,15 +830,14 @@ export function useAgent(onTurnComplete?: () => void) {
     };
   }, [
     finalizeSegment,
-    finalizeSegment,
     finalizeStreamingAssistant,
     archiveAllActiveTools,
     archiveCompletedActiveTools,
     upsertToolMessage,
-    onTurnComplete,
     drainMessageQueue,
     refreshInterruptibleStatus,
     hydrateMessages,
+    // onTurnComplete intentionally excluded — stored in onTurnCompleteRef to avoid re-registering listeners every render
   ]);
 
   const submitAnswer = useCallback(
@@ -904,7 +881,7 @@ export function useAgent(onTurnComplete?: () => void) {
       segmentToolsAnchoredRef.current = false;
       clearStreamingState();
       setQuestionError(null);
-      void invoke<string>("send_message", { content: trimmed }).catch((e) => {
+      void invoke<string>("send_message", { content: trimmed, model: modelRef.current }).catch((e) => {
         setQuestionError(String(e));
         setIsStreaming(false);
         clearStreamingState();
@@ -1000,8 +977,22 @@ export function useAgent(onTurnComplete?: () => void) {
 
   const clearQuestionError = useCallback(() => setQuestionError(null), []);
 
-  const openForkOverlay = useCallback(async (forkRunId: string) => {
-    setOpenForkRunId(forkRunId);
+  const loadForkMessages = useCallback(async (forkRunId: string) => {
+    setForkRuns((prev) => {
+      if (prev.has(forkRunId) && prev.get(forkRunId)!.messages.length > 0) return prev;
+      const next = new Map(prev);
+      next.set(forkRunId, {
+        forkRunId,
+        agentType: prev.get(forkRunId)?.agentType ?? "加载中…",
+        taskPreview: prev.get(forkRunId)?.taskPreview ?? "",
+        messages: prev.get(forkRunId)?.messages ?? [],
+        streamingText: null,
+        streamingThinking: null,
+        activeTools: new Map(),
+        status: prev.get(forkRunId)?.status ?? "complete",
+      });
+      return next;
+    });
     try {
       const raw = await invoke<
         Array<{
@@ -1016,16 +1007,15 @@ export function useAgent(onTurnComplete?: () => void) {
       const ui = apiMessagesToUi(raw);
       setForkRuns((prev) => {
         const next = new Map(prev);
-        const existing = next.get(forkRunId);
         next.set(forkRunId, {
           forkRunId,
-          agentType: existing?.agentType ?? "Subagent",
-          taskPreview: existing?.taskPreview ?? "",
-          messages: ui.length > 0 ? ui : (existing?.messages ?? []),
+          agentType: prev.get(forkRunId)?.agentType ?? "Subagent",
+          taskPreview: prev.get(forkRunId)?.taskPreview ?? "",
+          messages: ui.length > 0 ? ui : (prev.get(forkRunId)?.messages ?? []),
           streamingText: null,
           streamingThinking: null,
           activeTools: new Map(),
-          status: existing?.status ?? "complete",
+          status: "complete",
         });
         return next;
       });
@@ -1033,6 +1023,11 @@ export function useAgent(onTurnComplete?: () => void) {
       setQuestionError(String(e));
     }
   }, []);
+
+  const openForkOverlay = useCallback(async (forkRunId: string) => {
+    setOpenForkRunId(forkRunId);
+    await loadForkMessages(forkRunId);
+  }, [loadForkMessages]);
 
   const closeForkOverlay = useCallback(() => {
     setOpenForkRunId(null);
@@ -1047,53 +1042,6 @@ export function useAgent(onTurnComplete?: () => void) {
     const timer = setTimeout(() => setHookForkBanner(null), 12_000);
     return () => clearTimeout(timer);
   }, [hookForkBanner]);
-
-  // ── Interrupted turn token resolution ──
-  // Background drain may write final usage to SQLite after turn-complete fires.
-  // Polling detects the increase and updates turn-level stats from session deltas.
-  const interruptedSnapshotRef = useRef<{
-    hit: number; miss: number; comp: number; ts: number;
-  } | null>(null);
-
-  // Clean up stale snapshot after 300s (background drain timed out at 30s).
-  useEffect(() => {
-    if (!interruptedSnapshotRef.current) return;
-    const timer = setInterval(() => {
-      const snap = interruptedSnapshotRef.current;
-      if (snap && Date.now() - snap.ts > 300_000) {
-        interruptedSnapshotRef.current = null;
-      }
-    }, 60_000); // Check every 60s
-    return () => clearInterval(timer);
-  }, [lastTurnStats?.wasInterrupted]);
-
-  const resolveTurnTokens = useCallback(
-    (sessionHit: number, sessionMiss: number, sessionComp: number) => {
-      const snap = interruptedSnapshotRef.current;
-      if (!snap) return;
-      if (
-        sessionHit <= snap.hit &&
-        sessionMiss <= snap.miss &&
-        sessionComp <= snap.comp
-      ) {
-        return;
-      }
-      if (Date.now() - snap.ts > 300_000) {
-        interruptedSnapshotRef.current = null;
-        return;
-      }
-      const turnHit = Math.max(0, sessionHit - snap.hit);
-      const turnMiss = Math.max(0, sessionMiss - snap.miss);
-      const turnComp = Math.max(0, sessionComp - snap.comp);
-      interruptedSnapshotRef.current = null;
-      setLastTurnStats((prev) =>
-        prev
-          ? { ...prev, turnHit, turnMiss, turnComp, wasInterrupted: false }
-          : prev,
-      );
-    },
-    [],
-  );
 
   return {
     messages,
@@ -1114,8 +1062,6 @@ export function useAgent(onTurnComplete?: () => void) {
     questionCustomText,
     questionError,
     hasInterruptibleToolInProgress,
-    lastTurnStats,
-    resolveTurnTokens,
     sendMessage,
     submitInterrupt,
     interrupt,
@@ -1126,9 +1072,12 @@ export function useAgent(onTurnComplete?: () => void) {
     answerQuestion,
     hydrateMessages,
     clearQuestionError,
+    loadForkMessages,
     openForkOverlay,
     closeForkOverlay,
     dismissHookForkBanner,
+    model,
+    setModel,
     tryParseJson,
   };
 }

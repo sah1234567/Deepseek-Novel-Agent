@@ -49,6 +49,6 @@ mod tests {
         let reg = default_registry(tmp.path().to_path_buf());
         assert!(reg.get("CharacterSearch").is_some());
         assert!(reg.get("PlotGraph").is_some());
-        assert!(reg.get("ConsistencyCheck").is_some());
+        assert!(reg.get("TrackingQuery").is_some());
     }
 }

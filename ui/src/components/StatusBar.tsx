@@ -1,24 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { AppStatus, SessionSummary, SessionTodo, WorkSummary } from "../hooks/useAppStatus";
-import type { TurnStats } from "../hooks/useAgent";
-import { useAgentContext } from "../context/AgentContext";
 import "./StatusBar.css";
 
 interface StatusBarProps {
   status: AppStatus | null;
-  hookRunning: boolean;
-  activeSubAgent: string | null;
-  activeForkCount: number;
-  runningForkRunId: string | null;
-  onOpenForkOverlay: (forkRunId: string) => void;
-  lastTurnStats: TurnStats | null;
   listWorks: () => Promise<WorkSummary[]>;
   listSessions: () => Promise<SessionSummary[]>;
   onOpenWork: (name: string) => Promise<void>;
   onCreateWork: (name: string) => Promise<void>;
   onResumeSession: (sessionId: string) => Promise<void>;
   onOpenSettings: () => void;
-  onNewSession: () => void;
+  onNewSession: () => Promise<void>;
   onCycleTodo: (todoId: string, nextStatus: string) => void;
 }
 
@@ -68,9 +60,9 @@ function TodoDropdown({
         type="button"
         className={`todo-dropdown-btn${activeCount > 0 ? " has-active" : ""}${open ? " is-open" : ""}`}
         onClick={onToggle}
-        title="当前进度"
+        title="当前待办事项"
       >
-        进度{activeCount > 0 ? ` ${activeCount}` : ""}
+        待办事项{activeCount > 0 ? ` ${activeCount}` : ""}
       </button>
       {open && (
         <div className="todo-dropdown">
@@ -104,43 +96,26 @@ function TodoDropdown({
   );
 }
 
-function subAgentStatusLabel(agentType: string): string {
-  const t = agentType.toLowerCase();
-  if (t.includes("knowledgeauditor")) return "知识库审计中…";
-  if (t.includes("chaptercraft")) return "章节工艺分析中…";
-  if (t.includes("general")) return "自定义 Subagent 运行中…";
-  return `${agentType} 运行中…`;
-}
+import { useAgentContext } from "../context/AgentContext";
 
 function sessionOptionLabel(
   s: SessionSummary,
   currentId?: string,
   currentTurn?: number,
 ): string {
-  const shortId = `${s.id.slice(0, 8)}…`;
-  const name = s.title?.trim() || shortId;
+  const name = s.title?.trim() || "新会话";
   const turns =
     s.id === currentId && currentTurn !== undefined ? currentTurn : s.total_turns;
-  return `${name} · Turn ${turns}`;
-}
-
-function TokenStat({
-  label,
-  value,
-  pending,
-  variant,
-}: {
-  label: string;
-  value: number;
-  pending?: boolean;
-  variant: "turn" | "session";
-}) {
-  return (
-    <span className={`token-stat token-stat-${variant}`}>
-      <span className="token-stat-label">{label}</span>
-      <span className="token-stat-value">{pending ? "…" : fmt(value)}</span>
-    </span>
-  );
+  const last = new Date(s.last_active_at);
+  const now = new Date();
+  const diffMin = Math.floor((now.getTime() - last.getTime()) / 60000);
+  const timeStr =
+    diffMin < 1 ? "刚刚" :
+    diffMin < 60 ? `${diffMin}分钟前` :
+    diffMin < 1440 ? `${Math.floor(diffMin / 60)}小时前` :
+    `${Math.floor(diffMin / 1440)}天前`;
+  const modelLabel = s.model?.includes("flash") ? "flash" : s.model?.includes("pro") ? "pro" : s.model;
+  return `${name} · Turn ${turns} · ${timeStr}${modelLabel ? ` · ${modelLabel}` : ""}`;
 }
 
 function TokenGroup({
@@ -162,12 +137,6 @@ function TokenGroup({
 
 export function StatusBar({
   status,
-  hookRunning,
-  activeSubAgent,
-  activeForkCount,
-  runningForkRunId,
-  onOpenForkOverlay,
-  lastTurnStats,
   listWorks,
   listSessions,
   onOpenWork,
@@ -177,7 +146,7 @@ export function StatusBar({
   onNewSession,
   onCycleTodo,
 }: StatusBarProps) {
-  const { resolveTurnTokens } = useAgentContext();
+  const { isStreaming } = useAgentContext();
   const [todoOpen, setTodoOpen] = useState(false);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [works, setWorks] = useState<WorkSummary[]>([]);
@@ -210,22 +179,6 @@ export function StatusBar({
     void loadSessions();
   }, [loadSessions, status?.sessionId]);
 
-  useEffect(() => {
-    if (!status || !lastTurnStats?.wasInterrupted) return;
-    resolveTurnTokens(
-      status.sessionCacheHit,
-      status.sessionCacheMiss,
-      status.sessionCompletion,
-    );
-  }, [
-    status?.sessionCacheHit,
-    status?.sessionCacheMiss,
-    status?.sessionCompletion,
-    lastTurnStats?.wasInterrupted,
-    resolveTurnTokens,
-    status,
-  ]);
-
   const sessionOptions = useMemo(() => {
     if (!status?.sessionId) return sessions;
     if (sessions.some((s) => s.id === status.sessionId)) return sessions;
@@ -234,7 +187,9 @@ export function StatusBar({
         id: status.sessionId,
         title: null,
         status: "active",
+        model: "",
         last_active_at: "",
+        created_at: "",
         total_turns: status.turnNumber,
       },
       ...sessions,
@@ -242,17 +197,9 @@ export function StatusBar({
   }, [sessions, status?.sessionId, status?.turnNumber]);
 
   const turnNumber = status?.turnNumber ?? 0;
-
-  const turnHit = lastTurnStats?.turnHit ?? 0;
-  const turnMiss = lastTurnStats?.turnMiss ?? 0;
-  const turnComp = lastTurnStats?.turnComp ?? 0;
-  const wasInterrupted = lastTurnStats?.wasInterrupted ?? false;
-  const turnPending = wasInterrupted && turnHit === 0 && turnMiss === 0 && turnComp === 0;
-
   const sessionHit = status?.sessionCacheHit ?? 0;
   const sessionMiss = status?.sessionCacheMiss ?? 0;
   const sessionComp = status?.sessionCompletion ?? 0;
-  const sessionTotal = status?.sessionTotalTokens ?? 0;
 
   async function handleWorkChange(nextName: string) {
     if (!nextName || nextName === status?.activeWorkName || workBusy) return;
@@ -329,8 +276,11 @@ export function StatusBar({
           <select
             className="session-select"
             value={status?.sessionId ?? ""}
-            disabled={!status?.sessionId || sessionBusy}
-            onChange={(e) => void handleSessionChange(e.target.value)}
+            disabled={!status?.sessionId || sessionBusy || isStreaming}
+            onChange={(e) => {
+              if (sessionBusy || isStreaming) return;
+              void handleSessionChange(e.target.value);
+            }}
             aria-label="选择会话"
           >
             {sessionOptions.length === 0 && status?.sessionId && (
@@ -340,7 +290,9 @@ export function StatusBar({
                     id: status.sessionId,
                     title: null,
                     status: "active",
+                    model: "",
                     last_active_at: "",
+                    created_at: "",
                     total_turns: turnNumber,
                   },
                   status.sessionId,
@@ -356,42 +308,40 @@ export function StatusBar({
           <button
             type="button"
             className="new-session-btn"
-            onClick={onNewSession}
-            disabled={sessionBusy}
-            title="新建会话"
+            onClick={() => {
+              if (sessionBusy || isStreaming) return;
+              setSessionBusy(true);
+              onNewSession().finally(() => setSessionBusy(false));
+            }}
+            disabled={sessionBusy || isStreaming}
+            title={isStreaming ? "请等待当前任务完成" : sessionBusy ? "切换中…" : "新建会话"}
             aria-label="新建会话"
           >
             +
           </button>
         </label>
 
-        <TokenGroup title={`本轮 Turn ${turnNumber}`} variant="turn">
-          <TokenStat label="缓存复用" value={turnHit} pending={turnPending} variant="turn" />
-          <TokenStat label="新输入" value={turnMiss} pending={turnPending} variant="turn" />
-          <TokenStat label="生成" value={turnComp} pending={turnPending} variant="turn" />
+        <TokenGroup title="当前上下文" variant="session">
+          <span className="token-total">{fmt(status?.contextTokens ?? 0)}</span>
         </TokenGroup>
 
-        <TokenGroup title="会话累计" variant="session">
-          <span className="token-total">{fmt(sessionTotal)}</span>
-          <TokenStat label="缓存复用" value={sessionHit} variant="session" />
-          <TokenStat label="新输入" value={sessionMiss} variant="session" />
-          <TokenStat label="生成" value={sessionComp} variant="session" />
+        <TokenGroup title="会话用量" variant="session">
+          <div className="token-group-stats">
+            <span className="token-stat token-stat-session">
+              <span className="token-stat-label">缓存复用</span>
+              <span className="token-stat-value">{fmt(sessionHit)}</span>
+            </span>
+            <span className="token-stat token-stat-session">
+              <span className="token-stat-label">新输入</span>
+              <span className="token-stat-value">{fmt(sessionMiss)}</span>
+            </span>
+            <span className="token-stat token-stat-session">
+              <span className="token-stat-label">生成</span>
+              <span className="token-stat-value">{fmt(sessionComp)}</span>
+            </span>
+          </div>
         </TokenGroup>
 
-        {(activeSubAgent || hookRunning) && (
-          <button
-            type="button"
-            className="status-chip status-hook status-chip-clickable"
-            disabled={!runningForkRunId}
-            onClick={() => {
-              if (runningForkRunId) onOpenForkOverlay(runningForkRunId);
-            }}
-            title={runningForkRunId ? "查看 Subagent 详情" : "Subagent 运行中"}
-          >
-            {subAgentStatusLabel(activeSubAgent ?? "KnowledgeAuditor")}
-            {activeForkCount > 1 ? ` (${activeForkCount})` : ""}
-          </button>
-        )}
         {status && !status.projectInitialized && (
           <span className="status-chip status-warn">项目未初始化</span>
         )}

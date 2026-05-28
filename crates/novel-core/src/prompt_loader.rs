@@ -76,7 +76,7 @@ mod tests {
         assert!(t.contains("---"));
         assert!(t.contains("审计第1章"));
         assert!(t.contains("禁止嵌套 fork"));
-        assert!(t.contains("ConsistencyCheck"));
+        assert!(t.contains("TrackingQuery"));
     }
 
     #[test]

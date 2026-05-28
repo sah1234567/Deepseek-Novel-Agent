@@ -80,7 +80,7 @@ pub fn enforce_tool_output_limits(
             max_lines_for_path(&fp).unwrap_or(CHAPTER_MAX_LINES)
         }
         "Grep" => GREP_MAX_LINES,
-        "CharacterSearch" | "ConsistencyCheck" => KNOWLEDGE_MAX_LINES,
+        "CharacterSearch" => KNOWLEDGE_MAX_LINES,
         _ => return Ok(output.clone()),
     };
     if lines > max {

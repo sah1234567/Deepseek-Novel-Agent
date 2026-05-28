@@ -99,13 +99,13 @@
 
 | Agent | max_react_loops | 工具概要 |
 |-------|-----------------|----------|
-| KnowledgeAuditor | 40（settings 可覆盖） | Read/Tail/Grep/CharacterSearch/PlotGraph/ConsistencyCheck（只读） |
-| ChapterCraftAnalyzer | 25 | Read/Tail/Grep/CharacterSearch/Stats |
-| **GeneralPurpose** | 20 | 精选 14 工具白名单（Read/Write/Edit/Glob/Grep/CharacterSearch/PlotGraph/Tail/Stats/InvokeSkill/ImpactAnalysis/TodoWrite/ConsistencyCheck/WebSearch）；无 ForkSubAgent，无 Bash |
+| KnowledgeAuditor | 40（settings 可覆盖） | Read/Tail/Grep/CharacterSearch/PlotGraph/TrackingQuery/RelationQuery/ForeshadowTracker（只读） |
+| ChapterCraftAnalyzer | 25 | Read/Tail/Grep/CharacterSearch/Stats/RelationQuery |
+| **GeneralPurpose** | 20 | 精选工具白名单（Read/Write/Edit/Glob/Grep/CharacterSearch/PlotGraph/Tail/Stats/InvokeSkill/ImpactAnalysis/TodoWrite/WebSearch）；无 ForkSubAgent，无 Bash |
 
 **Workflow（策划/写章/改稿/写后）：** 经 **InvokeSkill** 加载 `skills/{novel-planning,chapter-writing,revision,post-chapter-checklist}/SKILL.md`，不再使用写稿 Subagent。
 
-**GeneralPurpose：** `task` = 完整执行指令；14 工具白名单（含 Write/Edit/WebSearch），sandbox 路径校验。
+**GeneralPurpose：** `task` = 完整执行指令；精选工具白名单（含 Write/Edit/WebSearch），sandbox 路径校验。
 
 ### 1.4 System Prompt 与动态上下文
 
@@ -123,7 +123,6 @@
 
 ### 1.5 断路器
 
-**ConsistencyCheck 重试保护：** `consistency_fail_count` 计数器，连续返回 `ok: false` 超过 5 次时中断并报错。
 
 **工具停滞保护：** `get_remaining_results` 连续 10 次迭代无进展 → abort 所有剩余工具 + 注入 `ToolError::Internal("stalled")`。
 

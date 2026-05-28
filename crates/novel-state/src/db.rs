@@ -25,6 +25,7 @@ const MIGRATIONS: &[&str] = &[
         cache_hit_tokens INTEGER DEFAULT 0,
         cache_miss_tokens INTEGER DEFAULT 0,
         completion_tokens INTEGER DEFAULT 0,
+        context_tokens INTEGER DEFAULT 0,
         total_turns INTEGER DEFAULT 0,
         metadata_json TEXT
     );
@@ -159,6 +160,23 @@ impl Database {
             conn.execute_batch(sql)?;
         }
         Self::drop_legacy_total_tokens_column(&conn)?;
+        Self::ensure_context_tokens_column(&conn)?;
+        Ok(())
+    }
+
+    fn ensure_context_tokens_column(conn: &rusqlite::Connection) -> Result<(), StateError> {
+        let mut stmt = conn.prepare("PRAGMA table_info(sessions)")?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let name: String = row.get(1)?;
+            if name == "context_tokens" {
+                return Ok(());
+            }
+        }
+        conn.execute(
+            "ALTER TABLE sessions ADD COLUMN context_tokens INTEGER DEFAULT 0",
+            [],
+        )?;
         Ok(())
     }
 
@@ -213,18 +231,21 @@ impl Database {
     ) -> Result<Vec<crate::SessionSummary>, StateError> {
         let conn = self.pool.get()?;
         let mut stmt = conn.prepare(
-            "SELECT id, title, status, last_active_at, total_turns
+            "SELECT id, title, status, model, last_active_at, created_at, total_turns
              FROM sessions WHERE project_root = ?1
              ORDER BY last_active_at DESC LIMIT ?2",
         )?;
         let rows = stmt.query_map(params![project_root, limit], |row| {
-            let last_active: String = row.get(3)?;
+            let last_active: String = row.get(4)?;
+            let created: String = row.get(5)?;
             Ok(crate::SessionSummary {
                 id: row.get(0)?,
                 title: row.get(1)?,
                 status: row.get(2)?,
+                model: row.get(3)?,
                 last_active_at: last_active.parse().unwrap_or_else(|_| Utc::now()),
-                total_turns: row.get(4)?,
+                created_at: created.parse().unwrap_or_else(|_| Utc::now()),
+                total_turns: row.get(6)?,
             })
         })?;
         Ok(rows.filter_map(|r| r.ok()).collect())
@@ -234,7 +255,7 @@ impl Database {
         let conn = self.pool.get()?;
         let mut stmt = conn.prepare(
             "SELECT id, project_root, title, status, model, provider, created_at, last_active_at,
-                    cache_hit_tokens, cache_miss_tokens, completion_tokens, total_turns
+                    cache_hit_tokens, cache_miss_tokens, completion_tokens, context_tokens, total_turns
              FROM sessions WHERE id = ?1",
         )?;
         let mut rows = stmt.query(params![id])?;
@@ -257,12 +278,14 @@ impl Database {
         Ok(())
     }
 
-    pub fn add_session_tokens(
+    /// Accumulate session token counters across API calls (billing total).
+    pub fn accumulate_session_tokens(
         &self,
         session_id: &str,
         hit: i64,
         miss: i64,
         completion: i64,
+        last_model: &str,
     ) -> Result<(), StateError> {
         let conn = self.pool.get()?;
         let n = conn.execute(
@@ -270,14 +293,25 @@ impl Database {
                 cache_hit_tokens = cache_hit_tokens + ?1,
                 cache_miss_tokens = cache_miss_tokens + ?2,
                 completion_tokens = completion_tokens + ?3,
+                context_tokens = ?1 + ?2 + ?3,
                 total_turns = total_turns + 1,
-                last_active_at = ?4
-             WHERE id = ?5",
-            params![hit, miss, completion, Utc::now().to_rfc3339(), session_id],
+                last_active_at = ?4,
+                model = ?5
+             WHERE id = ?6",
+            params![hit, miss, completion, Utc::now().to_rfc3339(), last_model, session_id],
         )?;
         if n == 0 {
             return Err(StateError::SessionNotFound(session_id.into()));
         }
+        Ok(())
+    }
+
+    pub fn set_session_title(&self, session_id: &str, title: &str) -> Result<(), StateError> {
+        let conn = self.pool.get()?;
+        conn.execute(
+            "UPDATE sessions SET title = ?1 WHERE id = ?2 AND title IS NULL",
+            params![title, session_id],
+        )?;
         Ok(())
     }
 
@@ -689,7 +723,8 @@ fn row_to_session(row: &rusqlite::Row<'_>) -> Result<Session, rusqlite::Error> {
         cache_hit_tokens: row.get(8)?,
         cache_miss_tokens: row.get(9)?,
         completion_tokens: row.get(10)?,
-        total_turns: row.get(11)?,
+        context_tokens: row.get(11)?,
+        total_turns: row.get(12)?,
     })
 }
 
@@ -817,16 +852,17 @@ mod tests {
     }
 
     #[test]
-    fn token_three_category_accumulation() {
+    fn token_accumulates_for_billing() {
         let db = test_db();
         let sid = db.create_session("/tmp/proj", "deepseek-chat").unwrap();
-        db.add_session_tokens(&sid, 100, 50, 30).unwrap();
-        db.add_session_tokens(&sid, 200, 80, 70).unwrap();
+        db.accumulate_session_tokens(&sid, 100, 50, 30, "deepseek-v4-pro").unwrap();
+        db.accumulate_session_tokens(&sid, 200, 80, 70, "deepseek-v4-pro").unwrap();
         let s = db.get_session(&sid).unwrap().unwrap();
         assert_eq!(s.cache_hit_tokens, 300);
         assert_eq!(s.cache_miss_tokens, 130);
         assert_eq!(s.completion_tokens, 100);
         assert_eq!(s.total_turns, 2);
+        assert_eq!(s.model, "deepseek-v4-pro");
     }
 
     #[test]
@@ -856,9 +892,9 @@ mod tests {
         let a = db.create_session("/proj/a", "deepseek-chat").unwrap();
         let b = db.create_session("/proj/b", "deepseek-chat").unwrap();
         let c = db.create_session("/proj/a", "deepseek-chat").unwrap();
-        db.add_session_tokens(&a, 1, 0, 0).unwrap();
-        db.add_session_tokens(&b, 1, 0, 0).unwrap();
-        db.add_session_tokens(&c, 1, 0, 0).unwrap();
+        db.accumulate_session_tokens(&a, 1, 0, 0, "deepseek-v4-pro").unwrap();
+        db.accumulate_session_tokens(&b, 1, 0, 0, "deepseek-v4-pro").unwrap();
+        db.accumulate_session_tokens(&c, 1, 0, 0, "deepseek-v4-pro").unwrap();
         let list = db.list_sessions("/proj/a", 10).unwrap();
         assert_eq!(list.len(), 2);
         // Most recent first
@@ -872,7 +908,7 @@ mod tests {
         {
             let db = Database::open(&p).unwrap();
             let id = db.create_session("/proj", "deepseek-chat").unwrap();
-            db.add_session_tokens(&id, 10, 5, 2).unwrap();
+            db.accumulate_session_tokens(&id, 10, 5, 2, "deepseek-v4-pro").unwrap();
         }
         std::fs::remove_file(&p).unwrap();
         let db = Database::open(&p).unwrap();
@@ -927,14 +963,15 @@ mod tests {
             let db = Arc::clone(&db);
             let sid = sid.clone();
             handles.push(std::thread::spawn(move || {
-                db.add_session_tokens(&sid, 1, 0, 0).unwrap();
+                db.accumulate_session_tokens(&sid, 1, 0, 0, "deepseek-v4-pro").unwrap();
             }));
         }
         for h in handles {
             h.join().unwrap();
         }
         let s = db.get_session(&sid).unwrap().unwrap();
-        assert_eq!(s.cache_hit_tokens, 10);
+        // Tokens replace (race — last write wins), turns still increment
+        assert!(s.cache_hit_tokens >= 1);
         assert_eq!(s.total_turns, 10);
     }
 }

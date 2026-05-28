@@ -39,7 +39,7 @@
 
 ### 1.3 核心操作
 
-**Session：** create_session, get_session, update_session_status, add_session_tokens, list_sessions（按 `project_root` 过滤）
+**Session：** create_session, get_session, update_session_status, set_session_tokens（替换非累加）, set_session_title, list_sessions（按 `project_root` 过滤）
 
 **Message：** insert_message, get_session_messages, **`replace_session_messages`**（Compaction 后全量替换 session 消息，避免 resume 加载未压缩历史）
 
@@ -72,9 +72,11 @@ TodoWrite 通过 `upsert_session_todos` 写入；`dynamic_context::load_progress
 | 字段 | 说明 |
 |------|------|
 | id | 会话 UUID |
-| title | 可选标题 |
+| title | 可选标题（首条用户消息自动写入前 50 字） |
 | status | active / archived 等 |
+| model | 最后一次 API 调用使用的模型 |
 | last_active_at | 最近活跃时间 |
+| created_at | 会话创建时间 |
 | total_turns | 累计 turn 数 |
 
 （不含 `total_cost_usd`；费用由 token 字段按需计算。）

@@ -6,7 +6,9 @@ pub struct SessionSummary {
     pub id: String,
     pub title: Option<String>,
     pub status: String,
+    pub model: String,
     pub last_active_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
     pub total_turns: i64,
 }
 
@@ -23,5 +25,6 @@ pub struct Session {
     pub cache_hit_tokens: i64,
     pub cache_miss_tokens: i64,
     pub completion_tokens: i64,
+    pub context_tokens: i64,
     pub total_turns: i64,
 }

@@ -67,7 +67,8 @@ impl Tool for ForeshadowTrackerTool {
             "type": "object",
             "properties": {
                 "current_chapter": {"type": "string"},
-                "warning_threshold": {"type": "integer", "default": 5}
+                "warning_threshold": {"type": "integer", "default": 5},
+                "character": {"type": "string", "description": "Filter foreshadows by associated character name"}
             },
             "required": ["current_chapter"]
         })
@@ -83,12 +84,23 @@ impl Tool for ForeshadowTrackerTool {
             .get("warning_threshold")
             .and_then(|v| v.as_u64())
             .unwrap_or(5) as i32;
+        let filter_character = input
+            .get("character")
+            .and_then(|v| v.as_str());
 
         let store = KnowledgeStore::new(&ctx.project_root);
         let content = store
             .read_file("knowledge/plot/伏笔追踪.md")
             .unwrap_or_default();
-        let pending = parse_pending_foreshadows(&content);
+        let mut pending = parse_pending_foreshadows(&content);
+
+        if let Some(ch) = filter_character {
+            pending.retain(|(id, _desc, _expected, _num)| {
+                content
+                    .lines()
+                    .any(|line| line.contains(id) && line.contains(ch))
+            });
+        }
 
         let mut urgent = Vec::new();
         let mut overdue = Vec::new();

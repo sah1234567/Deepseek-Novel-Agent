@@ -75,7 +75,6 @@ mod novel_tools_tests {
             "Bash",
             "CharacterSearch",
             "PlotGraph",
-            "ConsistencyCheck",
             "Tail",
             "WebSearch",
             "PlotGrid",
@@ -83,6 +82,10 @@ mod novel_tools_tests {
             "Stats",
             "Corkboard",
             "CharacterRotate",
+            "ImpactAnalysis",
+            "KnowledgeDerive",
+            "TrackingQuery",
+            "RelationQuery",
         ];
         for name in names {
             assert!(reg.get(name).is_some(), "missing tool {name}");

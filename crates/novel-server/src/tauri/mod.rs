@@ -42,7 +42,7 @@ pub fn spawn_event_forwarder(
     event_tx
 }
 
-pub async fn send_message(ctx: &CommandContext, content: String) -> Result<String, String> {
+pub async fn send_message(ctx: &CommandContext, content: String, model: Option<String>) -> Result<String, String> {
     if content.trim().is_empty() {
         return Err("empty message".into());
     }
@@ -55,6 +55,7 @@ pub async fn send_message(ctx: &CommandContext, content: String) -> Result<Strin
     ctx.cmd_tx
         .send(EngineCommand::SendMessage {
             content,
+            model,
             event_tx: Some(event_tx),
             reply: reply_tx,
         })
@@ -107,32 +108,6 @@ pub async fn deny_tool(
     reply_rx
         .await
         .map_err(|_| "engine loop stopped".to_string())?
-}
-
-pub async fn fork_sub_agent(
-    ctx: &CommandContext,
-    agent_type: String,
-    task: String,
-    _fork_strategy: Option<String>,
-) -> Result<String, String> {
-    let agent_type = parse_agent_type(&agent_type)?;
-
-    let event_tx = spawn_event_forwarder(ctx, None);
-
-    let (reply_tx, reply_rx) = oneshot::channel();
-    ctx.cmd_tx
-        .send(EngineCommand::ForkSubAgent {
-            agent_type,
-            task,
-            event_tx: Some(event_tx),
-            reply: reply_tx,
-        })
-        .map_err(|_| "engine loop stopped".to_string())?;
-    let (agent_id, _output) = reply_rx
-        .await
-        .map_err(|_| "engine loop stopped".to_string())??;
-
-    Ok(agent_id)
 }
 
 pub async fn get_fork_messages(
@@ -417,28 +392,17 @@ pub async fn set_api_config(
     .map_err(|e| e.to_string())
 }
 
-fn parse_agent_type(s: &str) -> Result<novel_core::AgentType, String> {
-    novel_core::AgentType::parse(s).ok_or_else(|| format!("Invalid agent type: {s}"))
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_agent_type_rejects_unknown() {
-        assert!(parse_agent_type("invalid-agent").is_err());
-    }
-
     #[test]
     fn parse_agent_type_accepts_general_purpose() {
         assert_eq!(
-            parse_agent_type("GeneralPurpose").unwrap(),
-            novel_core::AgentType::GeneralPurpose
+            novel_core::AgentType::parse("GeneralPurpose"),
+            Some(novel_core::AgentType::GeneralPurpose)
         );
         assert_eq!(
-            parse_agent_type("general-purpose").unwrap(),
-            novel_core::AgentType::GeneralPurpose
+            novel_core::AgentType::parse("general-purpose"),
+            Some(novel_core::AgentType::GeneralPurpose)
         );
     }
 }

@@ -6,9 +6,10 @@ pub async fn send_message(
     state: State<'_, AppState>,
     app: AppHandle,
     content: String,
+    model: Option<String>,
 ) -> Result<String, String> {
     let ctx = state.command_context(app);
-    novel_server::tauri::send_message(&ctx, content).await
+    novel_server::tauri::send_message(&ctx, content, model).await
 }
 
 #[tauri::command]
@@ -40,18 +41,6 @@ pub async fn deny_tool(
 ) -> Result<(), String> {
     let ctx = state.command_context(app);
     novel_server::tauri::deny_tool(&ctx, tool_call_id, reason).await
-}
-
-#[tauri::command]
-pub async fn fork_sub_agent(
-    state: State<'_, AppState>,
-    app: AppHandle,
-    agent_type: String,
-    task: String,
-    fork_strategy: Option<String>,
-) -> Result<String, String> {
-    let ctx = state.command_context(app);
-    novel_server::tauri::fork_sub_agent(&ctx, agent_type, task, fork_strategy).await
 }
 
 #[tauri::command]

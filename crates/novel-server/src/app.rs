@@ -52,7 +52,7 @@ impl AppConfig {
         self.active_project = project;
     }
 
-    /// Backward-compatible alias used by existing IPC/UI fields.
+    /// Canonical accessor for the active project root path.
     pub fn project_root(&self) -> &Path {
         &self.active_project
     }

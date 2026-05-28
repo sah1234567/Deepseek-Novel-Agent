@@ -46,17 +46,23 @@ allowed-tools: Read, Write, Edit, Glob, Grep, Bash, WebSearch, InvokeSkill, AskU
 
 ## 第二层：大纲
 
-**进入本层前：** 完成或更新 WebSearch（大纲向），再 Write 下列文件。
+**进入本层前：** 完成或更新 WebSearch（大纲向）。
 
-9. Write knowledge/plot/大纲.md
-10. Write knowledge/plot/伏笔追踪.md
-11. Write knowledge/plot/因果链.md
+9. Write `knowledge/plot/大纲.md`，格式如下：
+   - `## 第X卷：（本卷主线概括）`——每卷一个二级标题
+   - `### 本卷概要`：自然语言 150–300 字，描述本卷起止状态、主线冲突、核心转折、结局方向。**禁止**逐章展开写具体情节。多世界/无限流/多副本作品：概要用 `####` 子标题切分各世界/副本/任务段落
+   - `### 章节索引`：表格（Ch/标题/核心事件≤30字/POV/所在世界或副本），Ch 列值为裸数字
+10. Write `knowledge/plot/伏笔追踪.md`
+11. Write `knowledge/plot/因果链.md`
 
 ## 第三层：细纲
 
-**进入本层前：** 完成或更新 WebSearch（细纲/节奏向），再分批写细纲。
+**进入本层前：** 完成或更新 WebSearch（细纲/节奏向）。
 
-12. Write knowledge/plot/细纲/chapter-001-细纲.md 起（至少前 5 章）
+12. Write `knowledge/plot/细纲/chapter-001-细纲.md` 起（至少前 5 章）。格式见作品目录内 `knowledge/plot/细纲/_template.md`。核心约束：
+   - 只需简要描述本章剧情——"谁在哪里做什么、冲突是什么、结果如何"
+   - 场景拆分整体 **400 字左右**，**禁止**写成小作文或预写正文片段
+   - 各场景 `~字` 合计接近本章目标字数（2000–4000 字）
 13. 后续细纲分批产出（每 5–10 章一批）
 
 **多世界题材：** 在 knowledge/worlds/ 下为每个持久世界创建 INDEX.md

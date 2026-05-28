@@ -167,12 +167,11 @@ fork → [system_prompt, format_fork_task(agent_type, task)]
 
 Agent prompt 文件：`prompt/agents/*.md`（`include_str!` 编译期嵌入）。类型解析统一经 `AgentType::parse`；可 fork 列表见 `FORKABLE_AGENT_TYPE_NAMES`（KnowledgeAuditor、ChapterCraftAnalyzer、GeneralPurpose）。
 
-**GeneralPurpose 权限：** 精选 13 工具白名单（Read/Write/Edit/Glob/Grep/CharacterSearch/PlotGraph/Tail/Stats/InvokeSkill/ImpactAnalysis/TodoWrite/ConsistencyCheck）；无 ForkSubAgent 工具（禁止嵌套 fork），无 Bash。
+**GeneralPurpose 权限：** 精选工具白名单（Read/Write/Edit/Glob/Grep/CharacterSearch/PlotGraph/Tail/Stats/InvokeSkill/ImpactAnalysis/TodoWrite/WebSearch）；无 ForkSubAgent 工具（禁止嵌套 fork），无 Bash。
 
 **代码审查清单（禁止替 Agent 决策）：**
 
 - 无 `allow_chapter_write` / `validate_chapter_write` / 按路径禁止 Write
-- 无 `main_tool_names` 裁切 ConsistencyCheck
 - 无 Write 后默认自动 KnowledgeAuditor 入队（除非用户 opt-in hooks）
 - 无 `fork_handoff` / `## 引擎交接` 引擎解析驱动 Fork 链
 - Subagent 只读约束仅在 fork 角色 prompt + 工具白名单，不限制主 Agent
