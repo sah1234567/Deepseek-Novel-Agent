@@ -25,10 +25,7 @@ React (ui/) ──invoke/listen──► src-tauri/commands.rs
 
 ### 1.2 AppState
 
-- `config: Arc<RwLock<AppConfig>>` — 切换作品时 `write()` 更新 `active_project`
-- `spawn_engine_loop(AgentEngine, cmd_rx, config)` — engine 与 config 共享 Arc
-- `command_context(app_handle)` → `CommandContext { cmd_tx, config, app_handle, abort_controller, current_message_id }`
-- `spawn_event_forwarder(app, message_id)` → 将 `Event` 经 `emit_core_event` 推送到前端
+`AppConfig` 以 `Arc<RwLock<_>>` 共享于 engine loop 与 Tauri commands 之间，切换作品时更新 `active_project`。`CommandContext` 封装 engine 命令通道、config、abort_controller，供所有 Tauri command 使用。Engine 产生的 `Event` 经 `spawn_event_forwarder` 推送到前端。
 
 ### 1.3 EngineCommand
 
@@ -40,8 +37,8 @@ React (ui/) ──invoke/listen──► src-tauri/commands.rs
 | `ForkSubAgent` | 手动 fork 子 Agent（已移除 strategy 参数） |
 | `GetStatus` | 返回 `AppStatus`（含 `activeWorkName`） |
 | `SetPermissionMode` | 切换权限模式 |
-| `ResumeSession` | 恢复历史会话（替换 engine） |
-| `CreateSession` | 当前作品下新建 session（替换 engine） |
+| `ResumeSession` | 恢复历史会话（替换 engine；`abort_controller.clear()`） |
+| `CreateSession` | 当前作品下新建 session（替换 engine；`abort_controller.clear()`） |
 | `SwitchProjectAndCreateSession` | 切换 `active_project` + 新建 session（`create_work` / `open_work`） |
 
 ### 1.4 AppStatus
@@ -55,16 +52,16 @@ React (ui/) ──invoke/listen──► src-tauri/commands.rs
   "turnNumber": 0,
   "projectInitialized": true,
   "hasInterruptibleToolInProgress": false,
-  "projectRoot": "/path/to/works/my-novel",
   "activeWorkName": "my-novel",
   "sessionCacheHit": 0,
   "sessionCacheMiss": 0,
   "sessionCompletion": 0,
+  "contextTokens": 0,
   "todos": [{ "todoId", "content", "status" }]
 }
 ```
 
-`projectInitialized`：`knowledge/` 或 `AGENTS.md` 存在；`projectRoot` / `activeWorkName` 来自当前 `AppConfig.active_project`。
+`projectInitialized`：`knowledge/` 或 `AGENTS.md` 存在；`activeWorkName` 来自当前 `AppConfig.active_project`。
 
 ### 1.5 WorkSummary
 
@@ -90,9 +87,9 @@ React (ui/) ──invoke/listen──► src-tauri/commands.rs
 | `create_work(name)` | 新建作品 + 切换 + 新 session | StatusBar |
 | `open_work(name)` | 打开作品 + 新 session | StatusBar |
 | `create_session` | 当前作品新建 session | StatusBar `+` |
-| `resume_session` | 恢复会话 | SettingsPanel |
-| `list_sessions` | 当前作品会话列表 | SettingsPanel |
-| `get_session_messages` | 历史 hydrate | `useAgent` |
+| `resume_session` | 恢复/切换会话 | StatusBar 下拉 · SettingsPanel |
+| `list_sessions` | 当前作品会话列表（`last_active_at` 降序） | StatusBar · SettingsPanel |
+| `get_session_messages` | 历史 hydrate | `useAgent`（`session-resumed` / `sessionId` 变化） |
 | `init_novel_project` | 当前作品 scaffold | SettingsPanel |
 | `list_project_files` / `read_project_file` | 文件树 | FileTreePanel |
 | `update_session_todo` | Todo 状态 | TodoPanel |
@@ -101,23 +98,24 @@ React (ui/) ──invoke/listen──► src-tauri/commands.rs
 
 `create_session` **不再**接受 `project_root` 参数；切换作品用 `open_work` / `create_work`。
 
-### 1.7 作品切换流程
+**Tauri invoke 参数命名：** 前端使用 camelCase，Rust 命令参数为 snake_case。示例：
 
-```
-create_work(name):
-  work_path → init_project_scaffold（若目录不存在）
-  → SwitchProjectAndCreateSession
-    → config.write().set_active_project
-    → AgentEngine::new(engine_config_for(work))
-    → emit session-resumed
-
-open_work(name):
-  校验目录存在 → 同上
+```typescript
+invoke("resume_session", { sessionId });
+invoke("get_session_messages", { sessionId: null });
+invoke("update_session_todo", { todoId, status });
+invoke("approve_tool", { toolCallId });
 ```
 
-`ensure_work_under_works` 防止路径逃逸 `works/`。
+### 1.7 SessionSummary（list_sessions 返回值）
 
-### 1.8 前端事件（events.rs）
+与 [novel-state §1.5](novel-state.md#15-sessionsummary) 一致。前端 StatusBar 标签用 `total_turns`（对话轮数）与 `last_active_at`（相对时间）；SettingsPanel 额外展示 `api_call_count`。
+
+### 1.8 作品切换
+
+`create_work` / `open_work` 均触发 `SwitchProjectAndCreateSession`：更新 `active_project`、创建新 AgentEngine、emit `session-resumed`。路径经 `ensure_work_under_works` 校验防止逃逸 `works/`。新建作品时若目录不存在则先 scaffold。
+
+### 1.9 前端事件（events.rs）
 
 所有 tool 相关 UI 事件均经 **`tool-call-request`** 通道，以 `phase` 区分：
 
@@ -143,19 +141,13 @@ open_work(name):
 | `sub-agent-stream` / `sub-agent-tool` | 子 Agent overlay 流式正文与工具 |
 | `assistant-segment-complete` | AssistantSegmentComplete（`segmentIndex`；可选 `forkRunId`） |
 
-`sub-agent-started` 转发 `agentType`；前端 `useAgent` 设置 `activeSubAgent`，StatusBar 显示运行中标签（GeneralPurpose →「自定义 Subagent 运行中…」）。`sub-agent-complete` 清除状态。`forkRunId` 非空时分段 finalize overlay，否则 finalize 主聊天。
+子 Agent 事件驱动 StatusBar chip 与 SubAgentOverlay：`sub-agent-started` 显示运行中标签，`sub-agent-complete` 清除。`forkRunId` 非空时分段 finalize overlay，否则 finalize 主聊天。
 
-前端 `useAgent`：`input_complete` 写入 `parsedInput`；流末 `ToolCallRequest` 不将 running/done 重置为 pending。
+### 1.10 API 配置
 
-### 1.9 API 配置 IPC
+`get_api_config` / `set_api_config` 读写 `{agent_root}/.novel-agent/api_config.json`（Key 脱敏）。Engine `init_llm` 优先级：`DEEPSEEK_API_KEY` 环境变量 > json 文件 > 离线 mock。旧版 per-work `state.db` 内 `api_config` 表已移除。
 
-- `get_api_config` — 读 `{agent_root}/.novel-agent/api_config.json`；Key 脱敏为 `••••••••`；未配置返回错误
-- `set_api_config` — 写入全局 json（`novel_config::save_agent_api_config`）
-- Engine `init_llm` 优先级：`DEEPSEEK_API_KEY` > json > `ChatClient::from_env` > offline mock
-
-旧版 per-work `state.db` 内 `api_config` 表已移除，新写入统一走全局 `api_config.json`。
-
-### 1.10 前端构建衔接
+### 1.11 前端构建衔接
 
 | 阶段 | 命令 | 结果 |
 |------|------|------|

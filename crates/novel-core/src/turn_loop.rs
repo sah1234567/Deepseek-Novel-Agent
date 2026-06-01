@@ -357,6 +357,11 @@ impl AgentEngine {
         self.clear_interrupt();
         self.turn_number += 1;
 
+        let _ = self.shared.session.db.sync_user_turn_count(
+            &self.shared.session.id,
+            self.turn_number as i32,
+        );
+
         // Set session title from first user message
         if self.turn_number == 1 {
             let title: String = content.chars().take(50).collect();
@@ -1035,6 +1040,12 @@ impl AgentEngine {
                         cache_miss_tokens: u.cache_miss_tokens,
                         completion_tokens: u.completion_tokens,
                     });
+                } else {
+                    let _ = self
+                        .shared
+                        .session
+                        .db
+                        .touch_last_active_at(&self.shared.session.id);
                 }
                 let assistant = self.persist_partial_assistant(&completion)?;
                 if !completion.tool_calls.is_empty() {
@@ -2143,6 +2154,11 @@ impl AgentEngine {
             });
         } else {
             self.last_turn_usage = None;
+            let _ = self
+                .shared
+                .session
+                .db
+                .touch_last_active_at(&self.shared.session.id);
         }
     }
 

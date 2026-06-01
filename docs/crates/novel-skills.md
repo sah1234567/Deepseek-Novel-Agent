@@ -28,19 +28,9 @@ skills/<id>/
 | 2 — 主 body | `SKILL.md` 完整正文 | 模型调用 **InvokeSkill** 工具时加载 |
 | 3 — References | `references/*.md` 子文件 | 模型读取 SKILL.md body 中的 Markdown 链接后，用 **Read** 工具按需打开 |
 
-### 1.3 加载 API
+### 1.3 加载与合并
 
-| 函数 | 说明 |
-|------|------|
-| `load_skill(path)` | 解析 SKILL.md 文件路径 |
-| `load_skills_dir(dir)` | 扫描目录：识别包含 `SKILL.md` 的子目录为 skill，跳过 `_` 开头目录 |
-| `load_skills_merged(project_dir, agent_dir)` | **遗留兼容**：作品 `{work}/skills/` 覆盖 agent skill（同 id） |
-
-**运行时策略（`engine.rs::build_initial_prompt`）：**
-
-`build_dynamic_context` 调用 `load_skills_merged(project_skills_dir, config.skills_dir)`，同时加载 agent 级与作品级 skill 并合并（同 id 时作品级覆盖 agent 级）。
-
-**新作品脚手架不再创建 `skills/` 目录**；Skill 统一维护在 agent 根。System prompt 仅注入 name+description 摘要。
+Skill 统一维护在 agent 根 `skills/` 目录（新作品脚手架不再创建 `skills/`）。系统同时加载 agent 级与作品级 `works/{名}/skills/`，同 id 时作品级覆盖 agent 级。System prompt 仅注入 name+description 摘要。
 
 ### 1.4 InvokeSkill 按需加载
 
@@ -71,7 +61,7 @@ frontmatter 可选 `skill_kind: workflow`。body 末尾含 **`## 本阶段完成
 
 含 references 子文件的 skill：apocalypse、infinite、plagiarism、esports、transmigration、sports、supernatural、scifi、palace、romance 等。
 
-### 1.7 多世界目录（Skill 驱动）
+### 1.8 多世界目录（Skill 驱动）
 
 引擎 scaffold 只建单世界骨架；多世界由 Skill 指导 Agent 创建 `knowledge/worlds/<世界名>/`。
 

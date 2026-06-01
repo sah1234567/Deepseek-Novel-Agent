@@ -259,7 +259,7 @@ export function useAgent(onTurnComplete?: () => void) {
     try {
       const raw = await invoke<Array<{ id: string; role: string; contentBlocks: ContentBlock[] }>>(
         "get_session_messages",
-        { session_id: sessionId ?? null },
+        { sessionId: sessionId ?? null },
       );
       setMessages(apiMessagesToUi(raw));
       if (!keepPendingQuestion) {
@@ -810,9 +810,21 @@ export function useAgent(onTurnComplete?: () => void) {
 
     unlisteners.push(
       listen("session-resumed", () => {
+        messageQueueRef.current = [];
         setIsStreaming(false);
         setHookRunning(false);
         setHasInterruptibleToolInProgress(false);
+        setActiveToolCalls(new Map());
+        setPendingQuestion(null);
+        setQuestionAnchorIndex(null);
+        setQuestionSelections({});
+        setQuestionCustomText({});
+        setQuestionError(null);
+        setForkRuns(new Map());
+        setOpenForkRunId(null);
+        activeForkCountRef.current = 0;
+        setActiveForkCount(0);
+        setHookForkBanner(null);
         clearStreamingState();
         void (async () => {
           try {

@@ -161,6 +161,7 @@ impl Database {
         }
         Self::drop_legacy_total_tokens_column(&conn)?;
         Self::ensure_context_tokens_column(&conn)?;
+        Self::ensure_api_call_count_column(&conn)?;
         Ok(())
     }
 
@@ -175,6 +176,32 @@ impl Database {
         }
         conn.execute(
             "ALTER TABLE sessions ADD COLUMN context_tokens INTEGER DEFAULT 0",
+            [],
+        )?;
+        Ok(())
+    }
+
+    /// Split legacy `total_turns` (was LLM call count) into `api_call_count` + user `total_turns`.
+    fn ensure_api_call_count_column(conn: &rusqlite::Connection) -> Result<(), StateError> {
+        let mut stmt = conn.prepare("PRAGMA table_info(sessions)")?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let name: String = row.get(1)?;
+            if name == "api_call_count" {
+                return Ok(());
+            }
+        }
+        conn.execute(
+            "ALTER TABLE sessions ADD COLUMN api_call_count INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+        // Historical DBs stored LLM call count in `total_turns`.
+        conn.execute("UPDATE sessions SET api_call_count = total_turns", [])?;
+        conn.execute(
+            "UPDATE sessions SET total_turns = COALESCE((
+                SELECT MAX(turn_number) FROM messages
+                WHERE messages.session_id = sessions.id AND role = 'user'
+            ), 0)",
             [],
         )?;
         Ok(())
@@ -231,7 +258,7 @@ impl Database {
     ) -> Result<Vec<crate::SessionSummary>, StateError> {
         let conn = self.pool.get()?;
         let mut stmt = conn.prepare(
-            "SELECT id, title, status, model, last_active_at, created_at, total_turns
+            "SELECT id, title, status, model, last_active_at, created_at, total_turns, api_call_count
              FROM sessions WHERE project_root = ?1
              ORDER BY last_active_at DESC LIMIT ?2",
         )?;
@@ -246,6 +273,7 @@ impl Database {
                 last_active_at: last_active.parse().unwrap_or_else(|_| Utc::now()),
                 created_at: created.parse().unwrap_or_else(|_| Utc::now()),
                 total_turns: row.get(6)?,
+                api_call_count: row.get(7)?,
             })
         })?;
         Ok(rows.filter_map(|r| r.ok()).collect())
@@ -255,7 +283,8 @@ impl Database {
         let conn = self.pool.get()?;
         let mut stmt = conn.prepare(
             "SELECT id, project_root, title, status, model, provider, created_at, last_active_at,
-                    cache_hit_tokens, cache_miss_tokens, completion_tokens, context_tokens, total_turns
+                    cache_hit_tokens, cache_miss_tokens, completion_tokens, context_tokens,
+                    total_turns, api_call_count
              FROM sessions WHERE id = ?1",
         )?;
         let mut rows = stmt.query(params![id])?;
@@ -269,8 +298,8 @@ impl Database {
     pub fn update_session_status(&self, id: &str, status: &str) -> Result<(), StateError> {
         let conn = self.pool.get()?;
         let n = conn.execute(
-            "UPDATE sessions SET status = ?1, last_active_at = ?2 WHERE id = ?3",
-            params![status, Utc::now().to_rfc3339(), id],
+            "UPDATE sessions SET status = ?1 WHERE id = ?2",
+            params![status, id],
         )?;
         if n == 0 {
             return Err(StateError::SessionNotFound(id.into()));
@@ -278,7 +307,20 @@ impl Database {
         Ok(())
     }
 
-    /// Accumulate session token counters across API calls (billing total).
+    /// Mark session activity at turn/API boundary (does not change counters).
+    pub fn touch_last_active_at(&self, session_id: &str) -> Result<(), StateError> {
+        let conn = self.pool.get()?;
+        let n = conn.execute(
+            "UPDATE sessions SET last_active_at = ?1 WHERE id = ?2",
+            params![Utc::now().to_rfc3339(), session_id],
+        )?;
+        if n == 0 {
+            return Err(StateError::SessionNotFound(session_id.into()));
+        }
+        Ok(())
+    }
+
+    /// Accumulate session token counters and LLM API call count (billing total).
     pub fn accumulate_session_tokens(
         &self,
         session_id: &str,
@@ -294,11 +336,28 @@ impl Database {
                 cache_miss_tokens = cache_miss_tokens + ?2,
                 completion_tokens = completion_tokens + ?3,
                 context_tokens = ?1 + ?2 + ?3,
-                total_turns = total_turns + 1,
+                api_call_count = api_call_count + 1,
                 last_active_at = ?4,
                 model = ?5
              WHERE id = ?6",
             params![hit, miss, completion, Utc::now().to_rfc3339(), last_model, session_id],
+        )?;
+        if n == 0 {
+            return Err(StateError::SessionNotFound(session_id.into()));
+        }
+        Ok(())
+    }
+
+    /// Persist user dialogue round count (one per user message / `turn_number`).
+    pub fn sync_user_turn_count(
+        &self,
+        session_id: &str,
+        user_turns: i32,
+    ) -> Result<(), StateError> {
+        let conn = self.pool.get()?;
+        let n = conn.execute(
+            "UPDATE sessions SET total_turns = ?1 WHERE id = ?2",
+            params![user_turns, session_id],
         )?;
         if n == 0 {
             return Err(StateError::SessionNotFound(session_id.into()));
@@ -725,6 +784,7 @@ fn row_to_session(row: &rusqlite::Row<'_>) -> Result<Session, rusqlite::Error> {
         completion_tokens: row.get(10)?,
         context_tokens: row.get(11)?,
         total_turns: row.get(12)?,
+        api_call_count: row.get(13)?,
     })
 }
 
@@ -861,8 +921,44 @@ mod tests {
         assert_eq!(s.cache_hit_tokens, 300);
         assert_eq!(s.cache_miss_tokens, 130);
         assert_eq!(s.completion_tokens, 100);
-        assert_eq!(s.total_turns, 2);
+        assert_eq!(s.api_call_count, 2);
+        assert_eq!(s.total_turns, 0);
         assert_eq!(s.model, "deepseek-v4-pro");
+    }
+
+    #[test]
+    fn sync_user_turn_count_does_not_touch_last_active_at() {
+        let db = test_db();
+        let sid = db.create_session("/tmp/proj", "deepseek-chat").unwrap();
+        let before = db.get_session(&sid).unwrap().unwrap().last_active_at;
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        db.sync_user_turn_count(&sid, 3).unwrap();
+        let after = db.get_session(&sid).unwrap().unwrap().last_active_at;
+        assert_eq!(after, before);
+    }
+
+    #[test]
+    fn accumulate_session_tokens_updates_last_active_at() {
+        let db = test_db();
+        let sid = db.create_session("/tmp/proj", "deepseek-chat").unwrap();
+        let before = db.get_session(&sid).unwrap().unwrap().last_active_at;
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        db.accumulate_session_tokens(&sid, 1, 0, 0, "deepseek-v4-pro").unwrap();
+        let after = db.get_session(&sid).unwrap().unwrap().last_active_at;
+        assert!(after > before);
+    }
+
+    #[test]
+    fn user_turn_count_independent_of_api_calls() {
+        let db = test_db();
+        let sid = db.create_session("/tmp/proj", "deepseek-chat").unwrap();
+        db.sync_user_turn_count(&sid, 1).unwrap();
+        db.accumulate_session_tokens(&sid, 10, 5, 2, "deepseek-v4-pro").unwrap();
+        db.accumulate_session_tokens(&sid, 10, 5, 2, "deepseek-v4-pro").unwrap();
+        db.accumulate_session_tokens(&sid, 10, 5, 2, "deepseek-v4-pro").unwrap();
+        let s = db.get_session(&sid).unwrap().unwrap();
+        assert_eq!(s.total_turns, 1);
+        assert_eq!(s.api_call_count, 3);
     }
 
     #[test]
@@ -970,8 +1066,9 @@ mod tests {
             h.join().unwrap();
         }
         let s = db.get_session(&sid).unwrap().unwrap();
-        // Tokens replace (race — last write wins), turns still increment
+        // Tokens replace (race — last write wins), API calls still increment
         assert!(s.cache_hit_tokens >= 1);
-        assert_eq!(s.total_turns, 10);
+        assert_eq!(s.api_call_count, 10);
+        assert_eq!(s.total_turns, 0);
     }
 }

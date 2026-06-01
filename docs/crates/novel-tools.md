@@ -8,11 +8,7 @@
 
 ### 1.1 Tool Trait
 
-- `name()` / `description()` / `usage_hint()` / `input_schema()`
-- `is_read_only()` / `is_concurrency_safe()`
-- **`interrupt_behavior()`** — 默认：只读 → `Cancel`，写操作 → `Block`（Write/Edit/Bash 等不可 submit-interrupt）
-- `validate_input` → `check_permissions` → `call`
-- **参数命名**：`input_schema()` 的 `properties` 键名和 `required` 数组中的字段名**必须使用 snake_case**（DeepSeek API 要求）；`call()` 中 `require_str` 的 key 须与 schema 一致
+每个工具实现统一的 `Tool` trait（name、description、input_schema、validate_input → check_permissions → call）。只读工具的 `interrupt_behavior` 为 Cancel（可被 submit-interrupt 中断），写操作（Write/Edit/Bash）为 Block。**参数命名**：schema 的 properties 键须使用 snake_case（DeepSeek API 要求）。
 
 ### 1.1.1 路径 API（`paths.rs`，跨平台）
 
@@ -53,21 +49,7 @@ CharacterSearch, PlotGraph, PlotGrid, ForeshadowTracker, Stats, Corkboard, Chara
 
 **PermissionResult：** Allow / Deny / Ask
 
-**ToolContext 字段：**
-- `permission_mode`, `deny_rules`, `always_allow`
-- `project_root`, `session_id`
-- `db` — TodoWrite 读写 `session_todos`
-- `permission_mode_override` — UI 权限模式下拉（`set_permission_mode`）
-- `read_file_cache` — `Option<Arc<DashMap<PathBuf, ReadCacheEntry>>>`（mtime + raw slice + offset/limit + `ReadCacheSource`；Read/Tail dedup、Edit stale/partial 校验）
-- **压缩后清空：** 主会话 `compact_and_sync` 成功写回 DB 后调用 `EngineShared::clear_read_file_cache()`，避免 dedup stub 指向已摘要掉的 tool_result（对齐 `system.md`「压缩后须 Read 落盘」）
-
-**ReadCacheSource 与 dedup：**
-- `Read` / `Tail` — 工具成功写入；**参与** Read/Tail 去重（相同 path + range + mtime → stub，非 Error）
-- `WriteRefresh` — Edit/Write 后 `refresh_cache_after_write`；**不参与** dedup（对齐 Claude Code；避免 stub 指向 Edit 前的 tool_result）
-- Tool result 中间件见 **§1.9 Tool Result Pipeline**（`[read-dedup]`、`[fact]` 等由 pipeline 追加，非 turn_loop 硬编码）
-- `skills_dir: Option<PathBuf>` — Agent skills 目录，用于 InvokeSkill 解析 skill 路径
-- `allow_fork` — 主会话为 true；子 Agent 执行中为 false（禁止嵌套 fork）
-- `fork_queue` — 主会话 `ForkSubAgent` 入队 `(agentType, task)`
+**ToolContext** 为每个工具调用提供：权限配置（mode/deny_rules/always_allow）、项目路径、会话 DB（TodoWrite 读写）、权限模式覆盖（前端下拉切换）、Read 文件缓存（用于同文件同 range 去重与 Edit 一致性校验）、Skills 目录、fork 控制（`allow_fork` / `fork_queue`）。压缩后缓存清空，避免 dedup 指向已摘要的历史 tool_result。
 
 **写路径约束：** 仅 `validate_write_root`（作品 sandbox 内 + 非受保护路径）。无 `allow_chapter_write` / 章节专禁。
 
@@ -81,25 +63,9 @@ Normal 模式下 Write/Edit 要求目标 path 已在 `read_file_cache` 中（本
 
 ### 1.6 StreamingToolExecutor
 
-由 `novel-core::StreamingToolDispatch` 在 **SSE 流开始前**创建；Allow 权限的 tool 在 arguments JSON 完整时即可 `add_tool`（不必等流结束）。
+SSE 流开始前创建，Allow 权限的工具在 arguments JSON 完整时即可入队执行（不必等流结束）。并发工具经 Semaphore 限流（默认 10），串行工具经 Mutex 独占。`peek_completed_results` 供 UI 流中增量 poll，`get_remaining_results` 在流结束后排空并应用断路器（连续 10 次无进展则 abort）。`discard` 用于中断时丢弃未执行工具。
 
-**调度特性：**
-1. 并发工具：`Semaphore`（默认 max 10，`settings.agent.max_tool_concurrency`）
-2. 串行工具：`Mutex` 独占
-3. `peek_completed_results()` — 流中快照已完成结果（供 UI poll，**不 drain**）
-4. `get_completed_results()` — 取出并清空已完成缓冲（turn 结束时）
-5. `get_remaining_results().await` — 流结束后排空队列；连续 10 次迭代无进展 → abort 剩余（断路器）
-6. `discard()` — 用户中断 / streaming fallback 时丢弃未执行 tool
-
-**Abort 集成（`abort.rs`）：**
-- `AbortSignal` / `AbortWatch` — 与 `novel-core::InterruptReason` 对应
-- `InterruptBehavior::Cancel | Block` — 决定 SubmitInterrupt 时是否 synthetic abort
-- `get_abort_reason` — UserCancel 立即 abort；SubmitInterrupt 仅 Cancel 工具
-- `synthetic_error` — 生成 `REJECT_MESSAGE` 或 sibling 错误文本
-- `has_interruptible_tool_in_progress()` — 全部 Executing 工具均为 Cancel 时返回 true
-- Bash 并行 sibling 失败 → `SiblingError` 级联 abort
-
-`execute_one_user_approved` 用于 `approve_tool`：跳过二次 `check_permissions`，直接执行用户已批准的工具。
+中断信号经 `AbortSignal` 传入：UserCancel 立即 abort 所有工具；SubmitInterrupt 仅 Cancel 类工具。`execute_one_user_approved` 用于 approve_tool 路径（跳过二次权限检查）。
 
 ### 1.7 工具摘要
 
@@ -148,41 +114,4 @@ Normal 模式下 Write/Edit 要求目标 path 已在 `read_file_cache` 中（本
 
 ### 1.9 Tool Result Pipeline
 
-统一入口：`format_tool_result_for_llm`（`tool_result_format.rs`）。`novel-core::turn_loop` 经薄包装 `format_tool` 调用；所有实时 tool result 路径（流式执行、UI poll、`approve_tool`、fork 子 Agent）均走同一 pipeline。
-
-**固定顺序（单测锁定）：**
-
-```mermaid
-flowchart LR
-  R[Result] --> E{Err or is_error?}
-  E -->|yes| H[enhance_tool_error_for_llm]
-  E -->|no| G[enforce_tool_output_limits]
-  G -->|fail| H
-  G -->|ok| M[middleware append]
-  M --> OUT[FormattedToolResult]
-  H --> OUT
-```
-
-| 步骤 | 模块 | 说明 |
-|------|------|------|
-| Error / soft error | `tool_error_hints` | `Err(e)` 或 `Ok` 且 `is_error` → 统一 hints + `Error:` 前缀 |
-| Economy gate | `read_economy` | 超行数 → 转 Execution error 再走 error 路径 |
-| Middleware append | `tool_result_middleware` | 只追加、不替换正文 |
-
-**内置 success 链（注册顺序）：**
-
-| Middleware | 条件 | 追加 |
-|------------|------|------|
-| `WriteEditFactMiddleware` | Write / Edit 成功 | `[fact] touched` + `[fact] context` |
-| `ReadDedupHintMiddleware` | Read / Tail + dedup stub | `[read-dedup]` hint |
-
-**输出：**
-
-- `content` — 写入 SQLite、下一 turn LLM、UI `ToolCallResult`
-- `hook_preview` — economy 校验后、middleware 追加前的正文；`novel-core::hooks` PostToolUse 预览用（hook **不**迁入 novel-tools，避免 `novel-config` 依赖）
-
-**常量：** `NEEDS_USER_INPUT_STUB` — AskUserQuestion 暂停时的 tool_result 占位文案。
-
-**Out of scope（保持原位）：** executor `synthetic_error` / 工具内 stub、`message_bridge` orphan 修复、compaction 历史改写、`subagent_react` 预算 user 消息。
-
-阻塞 I/O 经 `blocking` 模块在 `spawn_blocking` 执行。
+所有 tool result 路径（流式执行、UI poll、approve_tool、fork 子 Agent）经统一入口 `format_tool_result_for_llm` 处理。Pipeline 顺序：error/soft error 增强 → 读盘行数限制 gate → middleware 追加（如 Write/Edit 成功后 `[fact]` 标签、Read 去重后 `[read-dedup]` 提示）。输出包含 `content`（写 SQLite / 送 LLM / 推 UI）和 `hook_preview`（PostToolUse 预览用，在 middleware 追加前截取）。阻塞 I/O 经 `spawn_blocking` 执行。

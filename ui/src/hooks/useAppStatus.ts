@@ -15,7 +15,10 @@ export interface SessionSummary {
   model: string;
   last_active_at: string;
   created_at: string;
+  /** User dialogue rounds (one per user message). */
   total_turns: number;
+  /** LLM API call count. */
+  api_call_count: number;
 }
 
 export interface WorkSummary {
@@ -97,8 +100,14 @@ export function useAppStatus() {
 
   const resumeSession = useCallback(
     async (sessionId: string) => {
-      await invoke("resume_session", { session_id: sessionId });
-      await refresh();
+      try {
+        await invoke("resume_session", { sessionId });
+        await refresh();
+        setError(null);
+      } catch (e) {
+        setError(String(e));
+        throw e;
+      }
     },
     [refresh],
   );
@@ -143,7 +152,7 @@ export function useAppStatus() {
 
   const updateSessionTodo = useCallback(
     async (todoId: string, status: string) => {
-      await invoke("update_session_todo", { todo_id: todoId, status });
+      await invoke("update_session_todo", { todoId, status });
       await refresh();
     },
     [refresh],

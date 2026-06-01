@@ -198,7 +198,7 @@ export function SettingsPanel({
                         {s.title?.trim() || s.id.slice(0, 8) + "…"}
                       </span>
                       <span className="session-meta">
-                        Turn {s.total_turns} · {s.status}
+                        对话 {s.total_turns} 轮 · API {s.api_call_count} 次 · {s.status}
                       </span>
                     </button>
                   </li>

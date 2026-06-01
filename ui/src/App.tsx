@@ -106,9 +106,12 @@ function AppShell({
           setErrorDismissed(false);
         }}
         onResumeSession={async (sessionId) => {
-          await resumeSession(sessionId);
-          await refresh();
-          setErrorDismissed(false);
+          try {
+            await resumeSession(sessionId);
+            setErrorDismissed(false);
+          } catch {
+            setErrorDismissed(false);
+          }
         }}
         onOpenSettings={() => setSettingsOpen(true)}
         onNewSession={async () => {
@@ -123,6 +126,7 @@ function AppShell({
         onCycleTodo={(todoId, nextStatus) =>
           void updateSessionTodo(todoId, nextStatus)
         }
+        onSessionError={() => setErrorDismissed(false)}
       />
       <main className="app-main">
         <FileTreePanel

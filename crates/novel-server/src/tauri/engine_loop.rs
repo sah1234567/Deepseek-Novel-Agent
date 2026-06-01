@@ -217,6 +217,7 @@ pub fn spawn_engine_loop(
                     reply,
                 } => {
                     tracing::debug!(%session_id, "engine_command ResumeSession");
+                    abort_controller.clear();
                     let ecfg = config.read().await.engine_config();
                     let result = match AgentEngine::resume_with_abort(
                         ecfg,
@@ -237,6 +238,7 @@ pub fn spawn_engine_loop(
                 }
                 EngineCommand::CreateSession { reply } => {
                     tracing::debug!("engine_command CreateSession");
+                    abort_controller.clear();
                     let ecfg = config.read().await.engine_config();
                     let result = match AgentEngine::new_with_abort(ecfg, Arc::clone(&abort_controller)) {
                         Ok(e) => {

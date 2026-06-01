@@ -8,219 +8,118 @@
 
 ### 1.1 AgentEngine — 主引擎
 
-`AgentEngine` 管理完整的小说创作会话。
+`AgentEngine` 管理完整的小说创作会话。创建时加载作品配置与 Skill、构建 23 个工具的 ToolRegistry、拼装 system prompt（静态层 + 5 个动态段），消息列表首条为 system message。`resume` 从 SQLite 恢复历史会话，`turn_number` 从已有消息推导。
 
-**创建流程：**
-1. 加载 `settings.json`（`novel-config`）
-2. 创建 SQLite Session
-3. 构建 `ToolRegistry`（**22** 个工具，`default_registry`）
-4. 创建 `ContextManager`（上下文窗口 + 压缩阈值）
-5. `SystemPromptBuilder::build()` 拼装 system prompt（静态层 + 5 个动态段）
-6. 消息列表首条为 system message（session 内冻结）
-
-**会话恢复：**
-- `AgentEngine::resume(config, session_id)` 从 SQLite 恢复历史
-- turn_number 从历史消息推导
-
-**主循环：**
-- `handle_message_with_events(content, event_tx)` → `run_inner_turn_loop`
-- 每轮：`call_llm_and_execute`（LLM 流式 + **流中 Tool 调度**）→ `drain_pending_hooks` → 下一轮或结束
+每条用户消息 `turn_number += 1`；每次 LLM API 返回累计 token 与 `api_call_count`。主循环为 `handle_message → run_inner_turn_loop`，每轮 LLM 流式调用 + 流中 Tool 调度 → drain hooks → 下一轮或结束。
 
 **公共 API：**
 
 | 方法 | 说明 |
 |------|------|
 | `new` / `resume` | 新建或恢复会话 |
-| `handle_message` / `handle_message_with_events` | 用户消息 |
+| `handle_message` | 用户消息，驱动完整的 inner turn loop |
 | `fork(agent_type, task)` | Fork 子 Agent |
-| `approve_tool` / `deny_tool` | 批准/拒绝待确认工具（可带 `event_tx` 续跑） |
-| `answer_question(tool_call_id, answers, event_tx)` | AskUserQuestion 回答后续跑 |
-| `status_snapshot()` | 返回 `EngineStatus` 供 Tauri `get_app_status` |
-
-**EngineStatus 字段：** session_id, permission_mode, hook_running, pending_user_question, turn_number, project_initialized, has_interruptible_tool_in_progress
+| `approve_tool` / `deny_tool` | 批准/拒绝待确认工具，批准后可续跑 turn |
+| `answer_question` | AskUserQuestion 回答后继续 turn |
+| `status_snapshot()` | 返回 `EngineStatus` 供前端轮询 |
 
 ### 1.2 Fork 子 Agent
 
-**硬约束：** 子 Agent 只能从 `messages[0]`（system prompt）fork，禁止嵌套 fork。
-
-**运行时守卫：** `sub_agent_count` / `sub_agent_running` 在子 Agent 执行期间 > 0，此时 `fork()` 与 `ForkSubAgent` 返回 `NestedForkProhibited`。
+**硬约束：** 子 Agent 从 `messages[0]`（system prompt）fork，禁止嵌套 fork。`sub_agent_count > 0` 时 `fork()` 与 `ForkSubAgent` 工具均返回 `NestedForkProhibited`。
 
 **触发路径：**
 
-| 路径 | 执行函数 | 同步/异步 | 主会话 inject | Transcript |
-|------|----------|-----------|---------------|------------|
-| `ForkSubAgent` 工具 | `drain_pending_forks` → 并行 `run_subagent_async` → join → `inject_sub_agent_report` | **同步（foreground）** | 一条摘要 | `fork_messages` + UI overlay |
-| PostToolUse 自动触发 | `drain_pending_hooks` → `run_knowledge_auditor_hook`（KnowledgeAuditor subagent，`source=hook`） | 同步 | **无** | `fork_messages` + UI overlay |
-| `Op::ForkSubAgent` / Tauri IPC | `tokio::spawn(run_subagent_async)` | 异步（debug） | 无 | `fork_messages` |
+| 路径 | 主会话 inject | Transcript |
+|------|---------------|------------|
+| `ForkSubAgent` 工具 | 一条摘要（`[子 Agent 完成: {type}]`） | `fork_messages` + UI overlay |
+| PostToolUse 自动触发 | **不 inject** | `fork_messages` + UI overlay |
+| Tauri IPC 手动 fork | 无 | `fork_messages` |
 
-`ForkSubAgent` 工具路径：`drain_pending_forks` 在本轮 tool 执行结束后 **await 本批全部 subagent**，按 fork_queue FIFO 注入 `[子 Agent 完成: …]` 报告（`persist_message_alloc_ex` + `fork_run_id` 元数据，不占 seq 0）。`subagent_result_rx/tx` 为 legacy channel，**无 consumer inject** 主会话。
+工具路径：本批 subagent 并行执行 → join → 按 fork_queue FIFO 逐条注入摘要报告。父 system prompt 不变，DeepSeek prefix cache 可命中 `[m0]`。子 Agent 的消息数组仅 `[system_prompt, task_message]` 2 条。
 
-**双轨 task_message（`prompt_loader::format_fork_task`）：**
+子 Agent 报告末尾须含 `## 接下来（主 Agent 必读）` 自然语言建议，主 Agent 据此自行决定后续操作。
 
-预定义类型：
-```
-{prompt/agents/*.md 全文}
+**子 Agent 类型（3 种）：** KnowledgeAuditor、ChapterCraftAnalyzer、GeneralPurpose。`AgentType::parse()` 支持 PascalCase / kebab-case 统一解析。
 
-## 子 Agent 运行时约束
-…
-
----
-
-{user_task}
-```
-
-**GeneralPurpose（自定义，对齐 Cursor generalPurpose）：**
-```
-{prompt/agents/general_purpose.md 短壳}
-
-## 子 Agent 运行时约束
-…
-
----
-
-## 自定义任务
-
-{user_task}   ← 主 Agent 编写的完整 prompt
-```
-
-父 system prompt 不变 → DeepSeek prefix cache 命中 `[m0]`。
-
-**子 Agent 消息数组：** `[system_prompt, task_message]`（仅 2 条）
-
-**类型注册：**
-
-- `AgentType` 枚举 + `AgentType::definition()` 工具白名单 / `max_react_loops`
-- `FORKABLE_AGENT_TYPE_NAMES` / `all_forkable_names()` — ForkSubAgent 可用类型（KnowledgeAuditor、ChapterCraftAnalyzer、GeneralPurpose）
-- `AgentType::parse(name)` — PascalCase / kebab-case 统一解析（Tauri `parse_agent_type` 亦调用此函数）
+GeneralPurpose 的 `task` 即主 Agent 编写的完整自定义 prompt；预定义类型则嵌入 `prompt/agents/*.md` 全文 + 运行时约束。
 
 ### 1.3 Agent 类型与工具
 
-详细 prompt 来自 `prompt/agents/*.md`（`include_str!`）；fork 路径以 `prompt_loader` 为准。**主 Agent 读不到这些文件**——Checker/Analyzer 须在返回报告末尾输出 **`## 接下来（主 Agent 必读）`**；prompt 内 `## 「接下来」写作参考` 仅为子 Agent 写作模板。
+详细 prompt 来自 `prompt/agents/*.md`（`include_str!` 编译期嵌入）。主 Agent 读不到这些 prompt 文件——子 Agent 须在报告末尾输出 `## 接下来（主 Agent 必读）`。
 
 | Agent | max_react_loops | 工具概要 |
 |-------|-----------------|----------|
 | KnowledgeAuditor | 40（settings 可覆盖） | Read/Tail/Grep/CharacterSearch/PlotGraph/TrackingQuery/RelationQuery/ForeshadowTracker（只读） |
-| ChapterCraftAnalyzer | 25 | Read/Tail/Grep/CharacterSearch/Stats/RelationQuery |
-| **GeneralPurpose** | 20 | 精选工具白名单（Read/Write/Edit/Glob/Grep/CharacterSearch/PlotGraph/Tail/Stats/InvokeSkill/ImpactAnalysis/TodoWrite/WebSearch）；无 ForkSubAgent，无 Bash |
+| ChapterCraftAnalyzer | 25 | Read/Tail/Grep/CharacterSearch/Stats |
+| **GeneralPurpose** | 20 | Read/Write/Edit/Glob/Grep/CharacterSearch/PlotGraph/Tail/Stats/InvokeSkill/ImpactAnalysis/TodoWrite/WebSearch；无 ForkSubAgent，无 Bash |
 
-**Workflow（策划/写章/改稿/写后）：** 经 **InvokeSkill** 加载 `skills/{novel-planning,chapter-writing,revision,post-chapter-checklist}/SKILL.md`，不再使用写稿 Subagent。
-
-**GeneralPurpose：** `task` = 完整执行指令；精选工具白名单（含 Write/Edit/WebSearch），sandbox 路径校验。
+Workflow（策划/写章/改稿/写后）经 **InvokeSkill** 加载对应 SKILL.md，不再使用写稿 Subagent。GeneralPurpose 含 Write/Edit/WebSearch，sandbox 路径校验。
 
 ### 1.4 System Prompt 与动态上下文
 
-**静态层：** `prompt/system.md` 经 `include_str!()` 编译期嵌入。`SystemPromptBuilder::build()` 将静态层与动态上下文拼接。
+**静态层：** `prompt/system.md` 经 `include_str!()` 编译期嵌入。
 
-**动态层 `DynamicContext`：** agents_md、knowledge_index（≤2000 字符）、memory（≤4KB，截断时追加 WARNING）、progress（章节进度 + TodoWrite）、skill_summaries（仅 name+description 摘要，不含 body）。
+**动态上下文：** agents_md、knowledge_index（≤2000 字符）、memory（≤4KB，截断时追加 WARNING）、progress（章节进度 + TodoWrite）、skill_summaries（仅 name+description 摘要，不含 body）。
 
-**skill 加载：** Agent 级 `skills/` + 可选作品级 `works/{名}/skills/`（同 id 覆盖）；system prompt 只含摘要；body 经 InvokeSkill；references 经 Read 渐进加载。
+**Skill 加载：** Agent 级 `skills/` + 可选作品级 `works/{名}/skills/`（同 id 覆盖）；system prompt 只含摘要，body 经 InvokeSkill 按需加载，references 经 Read 渐进打开。
 
-**读盘经济：** `system.md` §2.3 + `novel-tools::format_tool_result_for_llm` pipeline 内 `read_economy` 硬限（knowledge/** >80 行拒绝注入）；Grep 使用 ripgrep 生态；Read 256KB 硬限。
+**读盘经济：** `system.md` §2.3 + `novel-tools` pipeline 硬限（knowledge/** >80 行拒绝注入）；Grep 使用 ripgrep 后端；Read 256KB 硬限。
 
-**术语：** **Session Turn** = 用户一条消息跑完 inner loop；**ReAct loop** = Turn 内单次 LLM→工具循环（`max_react_loops` 为 Subagent 预算，非 Session Turn）。达 Subagent ReAct 上限时注入提醒 + report-only 收尾轮（禁 tool），非硬截断。
+**术语：** **Session Turn**（`turn_number`）= 用户一条消息及其完整 inner loop；**ReAct loop** = Turn 内单次 LLM→工具循环；**API 调用**（`api_call_count`）= 一次 LLM 请求，一次 Session Turn 可含多次。达 Subagent ReAct 上限时注入提醒 + report-only 收尾轮（禁 tool），非硬截断。
 
-**压缩后序列：** 刷新 system → `[激活 Skill]`（去重 id，有则必选）→ `[会话历史摘要]` → 最近 5 轮 ReAct。
+**压缩后序列：** 刷新 system → `[激活 Skill]`（已 Invoke 的全文重注入）→ `[会话历史摘要]` → 最近 5 轮 ReAct。
 
 ### 1.5 断路器
 
-
-**工具停滞保护：** `get_remaining_results` 连续 10 次迭代无进展 → abort 所有剩余工具 + 注入 `ToolError::Internal("stalled")`。
+工具停滞保护：`get_remaining_results` 连续 10 次迭代无进展 → abort 所有剩余工具。
 
 ### 1.6 KnowledgeAuditor Hook（opt-in）
 
-`default_hook_config()` 返回**空** `post_tool_use`。用户可在 `settings.json` 启用 PostToolUse matcher 后，`drain_pending_hooks` 同步 fork 轻量 KnowledgeAuditor（Unattended 模式，仅扫描本次 Write/Edit 遗漏）。
+`default_hook_config()` 返回**空** `post_tool_use`。用户可在 `settings.json` 启用 PostToolUse matcher 后，自动 fork 轻量 KnowledgeAuditor（仅扫描本次 Write/Edit 遗漏）。
 
-**写后流程（prompt 强制，非引擎硬编码）：** `system.md` 要求每章 Write + 知识库 append 后**同批 Fork 2 项** Subagent（KnowledgeAuditor + ChapterCraftAnalyzer），按报告 Edit 后再向作者宣告完成。PostToolUse Hook 不能替代完整写章收尾 Fork。
+**写后流程（prompt 强制，非引擎硬编码）：** `system.md` 要求每章 Write + 知识库 append 后**同批 Fork 2 项** Subagent（KnowledgeAuditor + ChapterCraftAnalyzer），按报告 Edit 后再宣告完成。PostToolUse Hook 仅做轻量扫描，不能替代完整写章收尾 Fork。
 
 ### 1.7 AskUserQuestion 暂停/恢复
 
-1. `AskUserQuestionTool` 返回 `ToolError::NeedsUserInput`
-2. `Event::AskUserQuestion` → 前端展示选项
-3. `answer_question` 写入 tool result → `continue_turn_loop`（`inner_turn_at_start` 重置 turn 内预算）
-4. `pending_user_question` 时 **不** emit `TurnComplete`；前端 turn-complete 亦跳过 hydrate
+`AskUserQuestionTool` 返回 `NeedsUserInput` 时，前端展示问答面板，turn 暂停。用户回答后 `answer_question` 写入 tool result，`continue_turn_loop` 续跑（inner turn 预算按当前 turn 内已消耗量计算）。`pending_user_question` 非空时不 emit `TurnComplete`。
 
 ### 1.8 用户中断（AbortController）
 
-**核心类型（`interrupt.rs` / `messages.rs`）：**
+`AbortController` 提供 `AtomicBool` 快路径 + `watch::channel` 广播。中断原因：`UserCancel`（Esc 键）、`SubmitInterrupt`（发送新消息中断当前流）。
 
-| 类型 | 说明 |
-|------|------|
-| `AbortController` | `watch::channel` + `AtomicBool` 快路径；Tauri `interrupt` 与 turn 共享 |
-| `InterruptReason` | `UserCancel` · `SubmitInterrupt` · `SiblingError` · `StreamingFallback` |
-| `INTERRUPT_MESSAGE` | `[Request interrupted by user]`（user 消息，写入 SQLite） |
-
-**Turn 循环中断处理：**
-1. `call_llm_and_execute`：`create_stream` 传入 `cancel_flag`；`run_abort_bridge` 同步到 `StreamingToolExecutor`
-2. 流取消：持久化 partial assistant → 补 tool_result → `append_interrupt_message`（SubmitInterrupt 跳过）
-3. 工具阶段 abort：`TerminalReason::AbortedTools`
-4. Compaction：`interrupt_requested()` 时跳过 LLM 摘要，降级为规则截断；成功写回 DB 后 **`clear_read_file_cache()`**（避免 Read dedup 指向已压缩掉的 tool_result）
-
-**TerminalReason：** `AbortedStreaming` · `AbortedTools` · `Completed`
+中断时：取消 SSE 流 → 持久化 partial assistant → 补充缺失 tool_result → drain 请求保持 token 计数准确。Compaction 期间中断则跳过 LLM 摘要，降级为规则截断。
 
 ### 1.9 Turn 状态机
 
-`TurnContext`：turn_number、inner_turn、**inner_turn_at_start**、max_inner_turns、pending_approvals
-
-续跑（`approve_tool` / `deny_tool` / `answer_question` → `continue_turn_loop`）时 `inner_turn` 设为已有 assistant 条数（segment 索引），`inner_turn_at_start` 同步，**预算**按 `inner_turn - inner_turn_at_start` 计。
-
-`approve_tool` 经 `execute_one_user_approved` 执行，不再二次 `check_permissions`。
-
-`TurnState`：Ready → Streaming → ExecutingTools → WaitingApproval → Done / Error
-
-内层循环：tool_calls → 执行（可在 SSE 流未结束前完成）→ 追加 tool 消息 → 直至无 tool call 或达 max_inner_turns
+续跑（approve/deny/answer → `continue_turn_loop`）时 `inner_turn` 设为已有 assistant 条数，预算按 `inner_turn - inner_turn_at_start` 计，避免长会话耗尽 80 次上限。`approve_tool` 不再二次 `check_permissions`。
 
 ### 1.10 流式 Tool 调度（StreamingToolDispatch）
 
-`turn_loop::call_llm_and_execute` 在 `create_stream` **之前**创建 `StreamingToolExecutor`，并传入 `on_tool_call` 回调：
+LLM 流式输出期间，arguments JSON 完整即开始权限检查与调度：
 
 | 权限结果 | 行为 |
 |----------|------|
-| Allow | 立即 `add_tool`；emit `ToolCallRequest`（running）；流中 poll `ToolCallResult` |
-| Ask | 写入 `pending_specs` / `pending_tools`；**不** early `add_tool`；UI 显示 pending |
-| Deny | 记录 `denied_specs`；流末注入 `PermissionDenied` tool_result |
+| Allow | 立即入队执行；流中 poll 结果推 UI |
+| Ask | 写入 pending，等待用户 approve/deny |
+| Deny | 流末注入 `PermissionDenied` tool_result |
 
-**事件顺序（每个 tool）：**
-1. `ToolUseStarted` → `ToolInputDelta`（raw JSON 片段）
-2. arguments 完整 → `ToolInputComplete`（parsed `input` + `needs_approval`）
-3. Allow 时 → `ToolCallRequest` + 流中 `ToolCallResult`
-4. 流结束 → 按 `handled_ids` 去重；流末 `ToolCallRequest` 对已在 running/done 的 tool **幂等**
-
-**参数解析：** 统一经 `message_bridge::parse_tool_call_input` → `novel_deepseek::parse_tool_arguments`；失败 fallback `{}`。
-
-**中断：** `AbortController` 触发时 `executor.discard()`（`StreamingFallback`）；partial assistant 持久化但不执行未完成 tool。
-
-Fork 子 Agent：`run_subagent_async` 发出 `SubAgentStarted` / `SubAgentComplete`（含 task_preview）；KnowledgeAuditor Hook 同步路径经 `run_forked_agent_inner` 亦发事件。分析类 / GeneralPurpose 子 Agent 工具流 `event_tx = None`（无逐 tool UI）。
-
-### 1.11 模块索引
-
-| 模块 | 职责 |
-|------|------|
-| `interrupt` | `AbortController`、`InterruptReason`、abort 常量 |
-| `messages` | 中断 user 消息、synthetic tool_result、`is_synthetic_message` |
-| `prompt_loader` | 加载 `prompt/agents/*.md`，`format_fork_task` |
-| `dynamic_context` | `build_dynamic_context`、`format_activated_skill_block`、skill reference 解析/加载、memory/progress 加载 |
-| `subagent_overflow` | 子 Agent 400/length 极简部分报告 |
-| `hooks` | PostToolUse 匹配、KnowledgeAuditor hook task 生成 |
-| `message_bridge` | ChatMessage ↔ LlmChatMessage；`parse_tool_call_input` |
-| `turn_loop` | inner loop、compaction、**StreamingToolDispatch**、hook drain、approve/deny/answer；tool result 格式化委托 `novel_tools::format_tool_result_for_llm` |
+参数解析统一经 `parse_tool_call_input`；失败 fallback `{}`。流结束时按 handled_ids 去重，流末 ToolCallRequest 对已在 running/done 的 tool 幂等。
 
 ---
 
 ## 2. 事件流
 
-`Event` 枚举（engine → novel-server → Tauri）：
+`Event` 枚举（engine → Tauri 前端）：
 
 | 事件 | 用途 |
 |------|------|
 | ContentBlockDelta | 流式文本/思考增量 |
-| ToolUseStarted | Tool 块出现（名称 + id） |
-| ToolInputDelta | arguments JSON 片段（raw） |
-| ToolInputComplete | arguments 完整；parsed input + needs_approval |
-| ToolCallRequest | 工具调用（含 needs_approval；流末幂等） |
-| ToolCallProgress | 工具执行进度 |
-| ToolCallResult | 工具执行结果 |
+| ToolUseStarted / ToolInputDelta / ToolInputComplete | Tool 参数流式到达（完整后含 parsed input + needs_approval） |
+| ToolCallRequest / ToolCallProgress / ToolCallResult | 工具执行全生命周期 |
 | AskUserQuestion | 创作分歧问答 |
-| TurnStart / TurnComplete | Turn 生命周期 + token；暂停态（pending 工具/问答）不 TurnComplete |
+| TurnStart / TurnComplete | Turn 生命周期 + token 统计；pending 工具/问答时不 TurnComplete |
 | AssistantSegmentComplete | 单段 LLM 结束；可选 `fork_run_id` 供 overlay 分段 |
-| SubAgentStarted / SubAgentComplete | 子 Agent（SubAgentComplete 含 agent_id 供前端识别） |
+| SubAgentStarted / SubAgentComplete | 子 Agent 生命周期（含 agent_type、task_preview） |
+| SubAgentStreamDelta / SubAgentToolUpdate | 子 Agent 流式正文与工具，实时推送前端 overlay |
+| CompactionProgress | 压缩进度（含 attempt 计数，供前端断路器 UI） |
 | Error | 错误（含 recoverable 标志） |

@@ -12,6 +12,7 @@ interface StatusBarProps {
   onOpenSettings: () => void;
   onNewSession: () => Promise<void>;
   onCycleTodo: (todoId: string, nextStatus: string) => void;
+  onSessionError?: (message: string) => void;
 }
 
 function fmt(n: number): string {
@@ -98,14 +99,8 @@ function TodoDropdown({
 
 import { useAgentContext } from "../context/AgentContext";
 
-function sessionOptionLabel(
-  s: SessionSummary,
-  currentId?: string,
-  currentTurn?: number,
-): string {
+function sessionOptionLabel(s: SessionSummary): string {
   const name = s.title?.trim() || "新会话";
-  const turns =
-    s.id === currentId && currentTurn !== undefined ? currentTurn : s.total_turns;
   const last = new Date(s.last_active_at);
   const now = new Date();
   const diffMin = Math.floor((now.getTime() - last.getTime()) / 60000);
@@ -115,7 +110,7 @@ function sessionOptionLabel(
     diffMin < 1440 ? `${Math.floor(diffMin / 60)}小时前` :
     `${Math.floor(diffMin / 1440)}天前`;
   const modelLabel = s.model?.includes("flash") ? "flash" : s.model?.includes("pro") ? "pro" : s.model;
-  return `${name} · Turn ${turns} · ${timeStr}${modelLabel ? ` · ${modelLabel}` : ""}`;
+  return `${name} · 对话 ${s.total_turns} 轮 · ${timeStr}${modelLabel ? ` · ${modelLabel}` : ""}`;
 }
 
 function TokenGroup({
@@ -145,6 +140,7 @@ export function StatusBar({
   onOpenSettings,
   onNewSession,
   onCycleTodo,
+  onSessionError,
 }: StatusBarProps) {
   const { isStreaming } = useAgentContext();
   const [todoOpen, setTodoOpen] = useState(false);
@@ -191,6 +187,7 @@ export function StatusBar({
         last_active_at: "",
         created_at: "",
         total_turns: status.turnNumber,
+        api_call_count: 0,
       },
       ...sessions,
     ];
@@ -232,6 +229,8 @@ export function StatusBar({
     try {
       await onResumeSession(nextId);
       await loadSessions();
+    } catch (e) {
+      onSessionError?.(String(e));
     } finally {
       setSessionBusy(false);
     }
@@ -285,23 +284,21 @@ export function StatusBar({
           >
             {sessionOptions.length === 0 && status?.sessionId && (
               <option value={status.sessionId}>
-                {sessionOptionLabel(
-                  {
-                    id: status.sessionId,
-                    title: null,
-                    status: "active",
-                    model: "",
-                    last_active_at: "",
-                    created_at: "",
-                    total_turns: turnNumber,
-                  },
-                  status.sessionId,
-                )}
+                {sessionOptionLabel({
+                  id: status.sessionId,
+                  title: null,
+                  status: "active",
+                  model: "",
+                  last_active_at: "",
+                  created_at: "",
+                  total_turns: turnNumber,
+                  api_call_count: 0,
+                })}
               </option>
             )}
             {sessionOptions.map((s) => (
               <option key={s.id} value={s.id}>
-                {sessionOptionLabel(s, status?.sessionId, turnNumber)}
+                {sessionOptionLabel(s)}
               </option>
             ))}
           </select>

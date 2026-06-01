@@ -19,7 +19,7 @@
 
 **sessions：** UUID 主键，project_root, title, status, model, provider
 - Token 三类：cache_hit_tokens, cache_miss_tokens, completion_tokens
-- `total_turns`、`metadata_json`（JSON，存 session 级元数据）
+- `total_turns`、`api_call_count`、`metadata_json`（JSON，存 session 级元数据）
 
 **messages：** session_id FK，turn_number, sequence, role, content_json
 - 消息级 token 三类 + estimated_tokens
@@ -39,22 +39,15 @@
 
 ### 1.3 核心操作
 
-**Session：** create_session, get_session, update_session_status, set_session_tokens（替换非累加）, set_session_title, list_sessions（按 `project_root` 过滤）
+**Session：** 创建、查询、状态更新、token 累加（`accumulate_session_tokens` 同时递增 `api_call_count` 并刷新 `last_active_at`）。用户对话轮数由 `sync_user_turn_count` 独立写入（不刷新时间戳）。列表按 `project_root` 过滤、`last_active_at` 降序。
 
-**Message：** insert_message, get_session_messages, **`replace_session_messages`**（Compaction 后全量替换 session 消息，避免 resume 加载未压缩历史）
+**Message：** 插入、按 turn range 查询、Compaction 后 `replace_session_messages` 全量替换。
 
-**Metadata：**
-- `get_session_metadata` / `set_session_metadata`
-- `get_invoked_skill_ids` / `set_invoked_skill_ids` — 存于 `metadata_json.invoked_skill_ids`，resume 时恢复 InvokeSkill 状态
-- `get_read_skill_reference_paths` / `set_read_skill_reference_paths` — 存于 `metadata_json.read_skill_reference_paths`，Read 成功读取 `skills/{id}/references/*.md` 时去重记录，压缩重建时注入 `[激活 Skill]`
+**Metadata：** `invoked_skill_ids` 与 `read_skill_reference_paths` 存于 session `metadata_json`，resume / compaction rebuild 时恢复。
 
-**Todos：** upsert_session_todos, list_session_todos
+**Todos / Fork transcript：** TodoWrite 经 upsert 持久化；子 Agent 经 `fork_runs` + `fork_messages`（与 parent messages 分离）。
 
-**Checkpoint：** create_checkpoint, get_checkpoint
-
-**Fork transcript：** `create_fork_run`, `insert_fork_message`, `finish_fork_run`, `get_fork_run`, `get_fork_messages`
-
-**API（legacy）：** `get_api_config` / `set_api_config` — 已从 DB 迁移至 agent 级 `api_config.json`；DB 内 `api_config` 表已移除。
+**API 配置：** 已从 DB 迁移至 agent 级 `api_config.json`。
 
 ### 1.4 成本定价
 
@@ -75,11 +68,27 @@ TodoWrite 通过 `upsert_session_todos` 写入；`dynamic_context::load_progress
 | title | 可选标题（首条用户消息自动写入前 50 字） |
 | status | active / archived 等 |
 | model | 最后一次 API 调用使用的模型 |
-| last_active_at | 最近活跃时间 |
+| last_active_at | 最后一次 LLM API 调用结束或中断的时间（`accumulate_session_tokens` / `touch_last_active_at`）；切换会话 resume **不**更新 |
 | created_at | 会话创建时间 |
-| total_turns | 累计 turn 数 |
+| total_turns | 用户对话轮数（每条用户消息 +1） |
+| api_call_count | LLM API 调用次数（inner loop / 子 Agent 计费统计） |
 
 （不含 `total_cost_usd`；费用由 token 字段按需计算。）
+
+**Token 累加：** `accumulate_session_tokens` 更新 token 三类计数、递增 `api_call_count` 并刷新 `last_active_at`；**不**修改 `total_turns`。用户轮数由 `sync_user_turn_count` 写入（**不**刷新 `last_active_at`）。`update_session_status` 仅改 status。
+
+**`last_active_at` 更新规则：**
+
+| 场景 | 是否更新 |
+|------|----------|
+| LLM 正常返回（有/无 usage 元数据） | ✅ `accumulate_session_tokens` 或 `touch_last_active_at` |
+| 流式输出被用户中断 | ✅ 中断处理分支（有 usage 则 accumulate，否则 touch） |
+| LLM 已返回、工具执行阶段按 Esc | ❌ 不额外更新（时间戳停在 LLM 结束时刻） |
+| 本轮尚未发起任何 API 即中断 | ❌ |
+| `resume_session` / 仅切换查看会话 | ❌ |
+| `sync_user_turn_count` | ❌ |
+
+**迁移：** 旧库首次打开时 `ensure_api_call_count_column` 将原 `total_turns`（实为 API 计数）迁入 `api_call_count`，并按 messages 中 user 消息重算 `total_turns`。
 
 ### 1.6 Compaction 持久化协作
 

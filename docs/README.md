@@ -28,7 +28,7 @@
 | 改 Agent 循环 / 流式 Tool / Subagent | [novel-core](crates/novel-core.md) §1.2 · [novel-tools](crates/novel-tools.md) · [FRAMEWORK §2.3](../FRAMEWORK.md#23-fork-子-agent) |
 | 改知识库 / 脚手架 | [novel-knowledge](crates/novel-knowledge.md) · `templates/` 目录 |
 | 改 Skill / Prompt | [novel-skills](crates/novel-skills.md) · [prompt/system.md](../prompt/system.md) |
-| 改持久化 | [novel-state](crates/novel-state.md) |
+| 改持久化 / 会话列表 | [novel-state](crates/novel-state.md)（`total_turns` / `api_call_count` / `last_active_at`） |
 
 ## 运行时资产（非 crate 代码）
 
@@ -56,7 +56,7 @@ Claude Code 文件夹格式：`skills/<id>/SKILL.md` + 可选 `references/`。
 |------|------|
 | 创作顺序（大纲→细纲→正文） | `prompt/system.md` §1 |
 | **读盘经济**（Grep 优先、分段 Read） | `prompt/system.md` §2.3、§5.1 |
-| 写后 **5 项 Subagent** 并行 Fork | `prompt/system.md` §1.2、§3.2 |
+| 写后 **2 项 Subagent** 并行 Fork | `prompt/system.md` §1.2、§3.2 |
 | 权限四模式 | `prompt/system.md` §2.1 |
 
 引擎仅 enforce sandbox、Plan 路径、嵌套 fork 等；写后审计顺序由 prompt 约束，非 Rust 硬编码。
@@ -65,21 +65,24 @@ Claude Code 文件夹格式：`skills/<id>/SKILL.md` + 可选 `references/`。
 
 | 功能 | 说明 |
 |------|------|
-| StatusBar 作品 | `list_works` 下拉 + 新建作品 |
-| StatusBar 会话 | 当前作品内 `create_session` / `resume_session` |
+| StatusBar 作品 | `list_works` 下拉 + 新建作品；切换作品会 **新建 session**（不自动恢复上次会话） |
+| StatusBar 会话 | `list_sessions` 下拉 + `resume_session` 切换；`+` → `create_session`；标签显示 **对话轮数** + **最后 LLM 活跃时间** |
 | StatusBar Token | 本轮三分类 + 会话累计；中断后 drain 估算 |
+| 设置 · 会话列表 | 同 `list_sessions`；元数据含 **对话 N 轮 · API M 次** |
 | 权限模式 | normal / plan / auto / unattended |
 | 流式 Tool | `ToolUseCard`：pending 批准、running、结构化 input |
 | AskUserQuestion | 问答面板；turn 暂停至 `answer_question` |
 | Subagent | StatusBar chip + `SubAgentOverlay`（分段气泡，无 task 顶栏） |
 | 压缩进度 | CompactionBanner |
 
+**会话术语：** 见 [novel-state §1.5](crates/novel-state.md#15-sessionsummary)（`total_turns` vs `api_call_count` vs `last_active_at`）。
+
 ## Subagent 双轨模型
 
 | 模式 | 触发 | 典型场景 |
 |------|------|----------|
 | Workflow Skill | InvokeSkill | 策划、写章、改稿、写后收尾 |
-| 检查 Subagent | ForkSubAgent（同批 5 项写后必做） | 一致性、日志遗漏、三 Analyzer |
+| 检查 Subagent | ForkSubAgent（同批 2 项写后必做） | 知识库审计（KnowledgeAuditor）、章节技艺分析（ChapterCraftAnalyzer） |
 | GeneralPurpose | ForkSubAgent，task = 完整 prompt | 一次性自定义任务 |
 
 主 LLM 仅见工具路径的一条 `[子 Agent 完成: …]` 摘要；完整 transcript 在 `fork_messages` + overlay。Hook 路径（KnowledgeAuditor）**不 inject** 主会话。

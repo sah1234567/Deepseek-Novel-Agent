@@ -9,7 +9,10 @@ pub struct SessionSummary {
     pub model: String,
     pub last_active_at: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
+    /// User dialogue rounds (one increment per user message).
     pub total_turns: i64,
+    /// LLM API call count (inner loop + sub-agents on this session).
+    pub api_call_count: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,5 +29,8 @@ pub struct Session {
     pub cache_miss_tokens: i64,
     pub completion_tokens: i64,
     pub context_tokens: i64,
+    /// User dialogue rounds (one increment per user message).
     pub total_turns: i64,
+    /// LLM API call count (inner loop + sub-agents on this session).
+    pub api_call_count: i64,
 }

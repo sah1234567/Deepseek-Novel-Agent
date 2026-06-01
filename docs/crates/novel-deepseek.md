@@ -25,21 +25,13 @@
 | 3 | `ChatClient::from_env(model)` |
 | 4 | 无 Key → `llm = None`，走 `offline_complete` mock |
 
-**核心方法（均为 `&mut self`，因内置 `CacheTracker`）：**
-- `create_stream(messages, tools, max_tokens, on_event, on_tool_call, cancel, enable_web_search?)`
-  - 返回 `StreamOutcome::Complete` 或 `StreamOutcome::Cancelled`
-- `complete_via_stream(...)` — 无工具场景（如 compaction 摘要）
-- `offline_complete(messages)` — 离线 mock
-- **`web_search(api_key, query, max_results)`** — 静态方法；通过 DeepSeek `web_search_20250305` 服务器端搜索（Anthropic Messages API），供 WebSearch 工具调用
-- `cache_tracker()` / `cache_tracker_mut()` — 会话级 cache 统计
+**核心方法：**
+- `create_stream` — 流式 LLM 调用，返回 `StreamOutcome::Complete` 或 `Cancelled`；支持 on_event/on_tool_call 回调
+- `complete_via_stream` — 无工具场景（compaction 摘要）
+- `offline_complete` — 离线 mock
+- `web_search` — 静态方法，DeepSeek 服务器端搜索
 
-**流式 tool call 处理：**
-1. 每个 SSE chunk 的 `tool_calls` delta 写入内联 `PendingTool`（按 index 累积 raw arguments 字符串）
-2. 名称/id 就绪后 emit `StreamEvent::ToolUseStarted` / `ToolInputDelta`
-3. 每次 arguments 追加后，若 `parse_tool_arguments` 成功**且解析后对象非空** → 调用 `on_tool_call`
-   - `parse_tool_arguments("")` 返回 `Ok({})`，但空对象表示参数尚未到达（DeepSeek 首 chunk 的 `function.arguments` 为 `""`），此时**不发射**
-4. 流结束再对未 callback 的 index 补一次 `try_emit_ready_tool`
-5. `drain_pending` 原样输出 raw arguments 字符串（不在协议层 repair JSON）
+流式 tool call 在 arguments JSON 完整时立即回调 `on_tool_call`（空对象表示参数尚未到达，不发射）。流结束补发未就绪的 tool。`drain_pending` 原样输出 raw arguments（不在协议层 repair JSON）。
 
 ### 1.2 Tool Schema 与参数解析
 
@@ -75,27 +67,3 @@
 
 `ContentBlockKind`：Text · Thinking · ToolCall（engine 侧 mostly Text/Thinking）。
 
-### 1.5 模块索引
-
-| 模块 | 职责 |
-|------|------|
-| `client.rs` | `ChatClient`、SSE 解析、`PendingTool`、per-tool callback |
-| `cache.rs` | `CacheTracker`、`CacheStats` |
-| `tool_args.rs` | `parse_tool_arguments`、`ToolParseError` |
-| `types.rs` | `LlmChatMessage`、`LlmToolCall`、`StreamOutcome`、`TokenUsage` |
-| `config.rs` | 嵌入 `config.toml`、默认 API base |
-| `connectivity.rs` | 端点连通性测试（`#[ignore]` live tests） |
-
----
-
-## 2. 与 novel-core 的接线
-
-```
-turn_loop::call_llm_and_execute
-  → ChatClient::create_stream(..., on_tool_call = Some(...))
-  → StreamingToolDispatch::handle_ready   // parse + 权限 + ToolInputComplete
-  → StreamingToolExecutor::add_tool       // Allow 时流中提前执行
-  → poll get_completed_results            // 流中增量 ToolCallResult
-```
-
-Fork 子 Agent 同样传入 `on_tool_call`，但不 emit UI 事件（`event_tx = None`）。

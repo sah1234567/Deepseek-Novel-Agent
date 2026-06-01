@@ -344,6 +344,13 @@ impl AgentEngine {
         };
 
         let turn_number = stored.iter().map(|m| m.turn_number).max().unwrap_or(0) as u32;
+        let user_turn_count = stored
+            .iter()
+            .filter(|m| m.role == "user")
+            .map(|m| m.turn_number)
+            .max()
+            .unwrap_or(0);
+        let _ = session.db.sync_user_turn_count(session_id, user_turn_count);
 
         let invoked_skill_ids = session
             .db
