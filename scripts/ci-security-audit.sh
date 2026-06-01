@@ -7,6 +7,25 @@ cd "$ROOT"
 
 AUDIT_VERSION="${CARGO_AUDIT_VERSION:-0.22.1}"
 
+if [ "${SKIP_SECURITY_AUDIT:-}" = "1" ]; then
+  echo "=== cargo audit: skipped (SKIP_SECURITY_AUDIT=1) ==="
+  exit 0
+fi
+
+audit_db_dir() {
+  if [ -n "${CARGO_AUDIT_DB:-}" ]; then
+    echo "$CARGO_AUDIT_DB"
+  else
+    echo "${CARGO_HOME:-$HOME/.cargo}/advisory-db"
+  fi
+}
+
+audit_db_cached() {
+  local db
+  db="$(audit_db_dir)"
+  [ -d "$db/.git" ] || [ -d "$db" ] && [ -n "$(ls -A "$db" 2>/dev/null || true)" ]
+}
+
 # Avoid dead local git/http proxies during install and advisory-db fetch.
 run_without_proxy() {
   local empty_git_config
@@ -56,7 +75,6 @@ install_audit_windows_binary() {
   if command -v unzip >/dev/null 2>&1; then
     unzip -q -o "$zip" -d "$tmp"
   elif command -v tar >/dev/null 2>&1; then
-    # Git for Windows unzip fallback
     run_without_proxy tar -xf "$zip" -C "$tmp"
   else
     echo "unzip or tar required to extract cargo-audit archive"
@@ -72,6 +90,31 @@ install_audit_windows_binary() {
   mkdir -p "${CARGO_HOME:-$HOME/.cargo}/bin"
   cp "$exe" "${CARGO_HOME:-$HOME/.cargo}/bin/cargo-audit.exe"
   rm -rf "$tmp"
+}
+
+run_cargo_audit() {
+  if [ "${1:-}" = "--no-fetch" ]; then
+    cargo audit --no-fetch
+  else
+    cargo audit
+  fi
+}
+
+print_audit_network_hint() {
+  cat >&2 <<'EOF'
+cargo audit failed to reach GitHub (RustSec advisory-db).
+
+Common causes:
+  - No VPN / proxy to github.com (e.g. mainland network)
+  - Broken system HTTP proxy (try unsetting HTTP_PROXY / HTTPS_PROXY)
+  - Corporate firewall blocking git HTTPS
+
+Options:
+  1. Fix network, then re-run: bash scripts/ci-security-audit.sh
+  2. If you already have ~/.cargo/advisory-db, script will retry with --no-fetch
+  3. Local only — skip this step: SKIP_SECURITY_AUDIT=1 .\scripts\ci-windows.ps1
+  4. Pre-fetch once when online: cargo audit   (then CI can use cached DB)
+EOF
 }
 
 if ! audit_version_ok; then
@@ -94,4 +137,25 @@ if ! audit_version_ok; then
 fi
 
 echo "=== cargo audit ==="
-run_without_proxy cargo audit
+
+# 1) Respect user proxy / default git (needed in some regions).
+if run_cargo_audit; then
+  exit 0
+fi
+
+echo "=== cargo audit: retry without proxy (stale proxy workaround) ==="
+if run_without_proxy run_cargo_audit; then
+  exit 0
+fi
+
+# 2) Offline-ish: use cached advisory DB if present.
+if audit_db_cached; then
+  echo "=== cargo audit: using cached advisory-db (--no-fetch) ==="
+  if run_cargo_audit --no-fetch; then
+    echo "warning: advisory-db was not updated (network); audit used local cache" >&2
+    exit 0
+  fi
+fi
+
+print_audit_network_hint
+exit 1

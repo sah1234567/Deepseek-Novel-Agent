@@ -4,7 +4,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-bash "$ROOT/scripts/ci-ui-dist.sh"
+bash "$ROOT/scripts/ci-tauri-check.sh"
 
 # GitHub ubuntu-latest only; skip on local Windows/macOS and non-CI Linux.
 if [ "${GITHUB_ACTIONS:-}" = "true" ] && [ "$(uname -s)" = "Linux" ]; then

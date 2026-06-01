@@ -150,7 +150,30 @@ jobs:
         shell: bash
         run: bash scripts/ci-rust-test.sh
 
-  # ── Tauri 壳编译冒烟（不打包；无需图标）────────────────────
+  # ── Tauri 壳：macOS 编译冒烟（PR/push；novel-agent 无 test，nextest 不会编壳）──
+  tauri-macos:
+    name: Tauri shell (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+          cache-all-crates: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Tauri shell compile check
+        run: bash scripts/ci-tauri-check.sh
+
+  # ── Tauri 壳编译冒烟（Linux cargo build；需 ui/dist + icons）────
   tauri-compile:
     name: Tauri compile smoke
     needs: [rust, frontend]
