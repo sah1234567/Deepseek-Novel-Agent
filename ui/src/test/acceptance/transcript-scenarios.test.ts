@@ -240,6 +240,20 @@ describe("conversation scenarios — extended", () => {
     assertPlanHealthy(m);
   });
 
+  it("late tool result does not attach to new openSegment after next stream chunk", () => {
+    let m = scenario([
+      beginTurn(userMsg("u1")),
+      toolStart("t1", "Read"),
+      streamText("a1", "assistant"),
+      segmentComplete(0),
+      streamText("a2", "next api"),
+    ]);
+    m = dispatchTranscriptEvent(m, toolResult("t1", "tool output"));
+    expect(m.context.turns[0].segments[0].tools[0].result).toBe("tool output");
+    expect(m.context.openSegment?.tools.length ?? 0).toBe(0);
+    assertPlanHealthy(m);
+  });
+
   it("two consecutive user turns each get own segments", () => {
     let m = scenario([
       beginTurn(userMsg("u1")),

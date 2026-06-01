@@ -136,6 +136,10 @@ function findToolSegment(ctx: TranscriptContext, toolCallId: string): LlmSegment
   return null;
 }
 
+function resolveToolSegment(ctx: TranscriptContext, toolCallId: string): LlmSegment | null {
+  return findToolSegment(ctx, toolCallId) ?? ctx.openSegment;
+}
+
 function handleToolEvent(machine: TranscriptMachine, event: Extract<TranscriptEvent, { type: "TOOL" }>): TranscriptMachine {
   const { phase, toolCallId } = event;
 
@@ -162,6 +166,9 @@ function handleToolEvent(machine: TranscriptMachine, event: Extract<TranscriptEv
   };
 
   if (phase === "start") {
+    if (findToolSegment(ctx, toolCallId)) {
+      return machine;
+    }
     ensureStreaming();
     if (!ctx.openSegment || !event.toolName) return machine;
     upsertToolInSegment(ctx.openSegment, toolCallId, {
@@ -175,8 +182,10 @@ function handleToolEvent(machine: TranscriptMachine, event: Extract<TranscriptEv
   }
 
   if (phase === "input_delta") {
-    ensureStreaming();
-    const seg = ctx.openSegment ?? findToolSegment(ctx, toolCallId);
+    if (!findToolSegment(ctx, toolCallId)) {
+      ensureStreaming();
+    }
+    const seg = resolveToolSegment(ctx, toolCallId);
     if (!seg) return machine;
     const existing = seg.tools.find((t) => t.id === toolCallId);
     if (!existing) return machine;
@@ -187,19 +196,11 @@ function handleToolEvent(machine: TranscriptMachine, event: Extract<TranscriptEv
   }
 
   if (phase === "input_complete" || (!phase && event.toolName)) {
-    ensureStreaming();
-    const seg = ctx.openSegment ?? findToolSegment(ctx, toolCallId);
+    if (!findToolSegment(ctx, toolCallId)) {
+      ensureStreaming();
+    }
+    const seg = resolveToolSegment(ctx, toolCallId);
     if (!seg || !event.toolName) {
-      if (ctx.openSegment && event.toolName) {
-        upsertToolInSegment(ctx.openSegment, toolCallId, {
-          name: event.toolName,
-          input: event.input ?? {},
-          status: event.needsApproval ? "pending" : "running",
-          needsApproval: !!event.needsApproval,
-          parsedInput: event.input,
-        });
-        return { phase: phaseNext, context: ctx };
-      }
       return machine;
     }
     upsertToolInSegment(seg, toolCallId, {
@@ -213,7 +214,7 @@ function handleToolEvent(machine: TranscriptMachine, event: Extract<TranscriptEv
   }
 
   if (phase === "progress") {
-    const seg = findToolSegment(ctx, toolCallId) ?? ctx.openSegment;
+    const seg = resolveToolSegment(ctx, toolCallId);
     if (!seg) return machine;
     upsertToolInSegment(seg, toolCallId, {
       progressDescription: event.description ?? event.status,
@@ -225,8 +226,9 @@ function handleToolEvent(machine: TranscriptMachine, event: Extract<TranscriptEv
     if (machine.phase !== "segmentStreaming" && machine.phase !== "segmentCommitted") {
       return machine;
     }
-    let seg = ctx.openSegment;
-    if (!seg) {
+    let seg = findToolSegment(ctx, toolCallId);
+    // Orphan result (no prior start): attach to last committed segment only when no live openSegment.
+    if (!seg && !ctx.openSegment) {
       const turn = currentTurn(ctx);
       if (turn && turn.segments.length > 0) {
         seg = turn.segments[turn.segments.length - 1];
@@ -463,8 +465,7 @@ export function flatMessagesToMachine(flatMessages: UIMessage[]): {
         segmentIndex++;
       }
       const toolId = msg.id.replace(/^tool-/, "");
-      currentSegment.tools.push({
-        id: toolId,
+      upsertToolInSegment(currentSegment, toolId, {
         name: msg.toolName ?? "Tool",
         input: msg.toolInput ?? {},
         status: (msg.toolStatus as ToolCall["status"]) ?? "done",

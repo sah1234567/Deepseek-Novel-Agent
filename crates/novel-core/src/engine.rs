@@ -574,7 +574,9 @@ impl AgentEngine {
         ToolContext {
             permission_mode: permission_mode_from_str(&self.shared.settings.permissions.mode),
             deny_rules: self.shared.settings.permissions.deny_rules.clone(),
-            always_allow: self.shared.settings.permissions.always_allow.clone(),
+            always_allow: crate::agent::merge_tool_always_allow(
+                &self.shared.settings.permissions.always_allow,
+            ),
             project_root: self.shared.session.project_root.clone(),
             session_id: self.shared.session.id.clone(),
             db: Some(Arc::new(self.shared.session.db.clone())),
@@ -582,6 +584,7 @@ impl AgentEngine {
             read_file_cache: Some(Arc::clone(&self.shared.read_file_cache)),
             allow_fork: self.shared.sub_agent_count.load(Ordering::SeqCst) == 0,
             fork_queue: Some(Arc::clone(&self.shared.fork_queue)),
+            current_tool_call_id: None,
             skills_dir: Some(self.shared.agent_skills_dir.clone()),
             global_api_config_path: Some(self.shared.global_config_path.clone()),
         }

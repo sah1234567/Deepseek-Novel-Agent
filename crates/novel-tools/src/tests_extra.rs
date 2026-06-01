@@ -155,6 +155,55 @@ mod permission_tests {
     }
 
     #[test]
+    fn fork_union_tools_skip_plan_path_and_read_before_write_policies() {
+        use crate::PermissionResult;
+        let tmp = TempDir::new().unwrap();
+        let reg = default_registry();
+        let write = reg.get("Write").expect("Write registered");
+        let ctx = ToolContext {
+            permission_mode: PermissionMode::Plan,
+            always_allow: vec!["Write".into()],
+            project_root: tmp.path().to_path_buf(),
+            ..ToolContext::new(tmp.path().to_path_buf())
+        };
+        let perm = write.check_permissions(
+            &json!({"file_path": "knowledge/plot/大纲.md", "content": "x"}),
+            &ctx,
+        );
+        assert!(matches!(perm, PermissionResult::Allow));
+        assert!(ctx
+            .validate_plan_mode_write_path("Write", "knowledge/plot/大纲.md")
+            .is_ok());
+
+        let normal = ToolContext {
+            permission_mode: PermissionMode::Normal,
+            always_allow: vec!["Write".into()],
+            project_root: tmp.path().to_path_buf(),
+            ..ToolContext::new(tmp.path().to_path_buf())
+        };
+        let full = normal.resolve_path("knowledge/new.md");
+        assert!(normal
+            .require_read_before_write("Write", &full, "knowledge/new.md", "overwriting", true)
+            .is_ok());
+    }
+
+    #[test]
+    fn websearch_allowed_in_normal_mode_when_always_allowed() {
+        use crate::PermissionResult;
+        let tmp = TempDir::new().unwrap();
+        let reg = default_registry();
+        let tool = reg.get("WebSearch").expect("WebSearch registered");
+        let ctx = ToolContext {
+            permission_mode: PermissionMode::Normal,
+            always_allow: vec!["WebSearch".into()],
+            project_root: tmp.path().to_path_buf(),
+            ..ToolContext::new(tmp.path().to_path_buf())
+        };
+        let perm = tool.check_permissions(&json!({"query": "test"}), &ctx);
+        assert!(matches!(perm, PermissionResult::Allow));
+    }
+
+    #[test]
     fn todo_write_allowed_in_normal_mode() {
         use crate::PermissionResult;
         let tmp = TempDir::new().unwrap();

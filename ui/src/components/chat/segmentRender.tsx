@@ -1,10 +1,7 @@
 import ReactMarkdown from "react-markdown";
 import type { ForkRunState, ToolCall, UIMessage } from "../../hooks/useAgent";
 import type { LlmSegment, SegmentAssistant } from "../../transcript/types";
-import {
-  resolveForkRunIdForTool,
-  type ForkLink,
-} from "../../utils/forkLinks";
+import { reportContentByForkRunId, resolveForkRunIdForToolCard } from "../../fork";
 import { formatToolInput } from "../../utils/tools";
 import { isContextRefreshUser } from "../../transcript/types";
 import { MessageBody } from "./MessageBody";
@@ -101,7 +98,6 @@ export function ToolBubble({
   tool,
   flatMessages,
   forkRuns,
-  forkLinks,
   onApprove,
   onDeny,
   onOpenForkOverlay,
@@ -109,21 +105,16 @@ export function ToolBubble({
   tool: ToolCall;
   flatMessages: UIMessage[];
   forkRuns?: Map<string, ForkRunState>;
-  forkLinks?: Map<string, ForkLink>;
   onApprove?: (id: string) => void;
   onDeny?: (id: string, reason?: string) => void;
   onOpenForkOverlay?: (forkRunId: string) => void;
 }) {
   if (tool.name === "ForkSubAgent") {
     const toolMsgId = `tool-${tool.id}`;
-    const forkRunId = resolveForkRunIdForTool(
-      toolMsgId,
-      flatMessages,
-      forkLinks ?? new Map(),
-      forkRuns ?? new Map(),
-    );
-    const run = forkRunId ? forkRuns?.get(forkRunId) : undefined;
-    const link = forkLinks?.get(toolMsgId);
+    const runs = forkRuns ?? new Map();
+    const reports = reportContentByForkRunId(flatMessages);
+    const forkRunId = resolveForkRunIdForToolCard(toolMsgId, runs, flatMessages);
+    const run = forkRunId ? runs.get(forkRunId) : undefined;
     const agentType =
       (typeof tool.input === "object" &&
         tool.input &&
@@ -133,7 +124,9 @@ export function ToolBubble({
       run?.agentType ||
       "Subagent";
     const summary = formatToolInput("ForkSubAgent", tool.input ?? {});
-    const reportContent = link?.reportContent || run?.reportOutput;
+    const reportContent =
+      (forkRunId ? reports.get(forkRunId) : undefined) || run?.reportOutput;
+    const canEnter = !!forkRunId;
     return (
       <article className="message message-tool">
         <header>工具 · ForkSubAgent</header>
@@ -142,8 +135,10 @@ export function ToolBubble({
           summary={summary}
           status={forkStatusFromRun(run)}
           reportContent={reportContent}
+          enterDisabled={!canEnter}
+          enterHint={canEnter ? undefined : "子 Agent 尚未启动，请稍候"}
           onEnter={() => {
-            if (forkRunId && onOpenForkOverlay) onOpenForkOverlay(forkRunId);
+            if (forkRunId) onOpenForkOverlay?.(forkRunId);
           }}
         />
       </article>
@@ -176,7 +171,6 @@ export function SegmentGroup({
   isStreaming = false,
   flatMessages,
   forkRuns,
-  forkLinks,
   onApproveTool,
   onDenyTool,
   onOpenForkOverlay,
@@ -186,7 +180,6 @@ export function SegmentGroup({
   isStreaming?: boolean;
   flatMessages: UIMessage[];
   forkRuns?: Map<string, ForkRunState>;
-  forkLinks?: Map<string, ForkLink>;
   onApproveTool?: (id: string) => void;
   onDenyTool?: (id: string, reason?: string) => void;
   onOpenForkOverlay?: (forkRunId: string) => void;
@@ -208,7 +201,6 @@ export function SegmentGroup({
           tool={tool}
           flatMessages={flatMessages}
           forkRuns={forkRuns}
-          forkLinks={forkLinks}
           onApprove={onApproveTool}
           onDeny={onDenyTool}
           onOpenForkOverlay={onOpenForkOverlay}

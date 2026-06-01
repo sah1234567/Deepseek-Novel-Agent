@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { UIMessage } from "../hooks/useAgent";
 import { flatMessagesToTranscript, transcriptToFlatMessages } from "./convert";
-import { createInitialMachine, dispatchTranscriptEvent } from "./machine";
+import {
+  createInitialMachine,
+  dispatchTranscriptEvent,
+  flatMessagesToMachine,
+} from "./machine";
 import { SYNTHETIC_USER_ID } from "./types";
 import { userMsg } from "../test/fixtures/transcript";
 
@@ -240,6 +244,53 @@ describe("dispatchTranscriptEvent", () => {
     expect(m.context.openSegment?.segmentIndex).toBe(1);
   });
 
+  it("input_complete after segment-complete updates committed segment not new openSegment", () => {
+    let m = createInitialMachine();
+    m = dispatchTranscriptEvent(m, { type: "BEGIN_TURN", user: userMsg("u1") });
+    m = dispatchTranscriptEvent(m, {
+      type: "TOOL",
+      phase: "start",
+      toolCallId: "t1",
+      toolName: "Read",
+    });
+    m = dispatchTranscriptEvent(m, { type: "SEGMENT_COMPLETE", segmentIndex: 0 });
+    m = dispatchTranscriptEvent(m, {
+      type: "TOOL",
+      phase: "input_complete",
+      toolCallId: "t1",
+      toolName: "Read",
+      input: { path: "a.md" },
+    });
+    expect(m.context.turns[0].segments[0].tools[0].status).toBe("running");
+    expect(m.context.openSegment?.tools.length ?? 0).toBe(0);
+  });
+
+  it("tool result with openSegment for next API updates prior segment tool", () => {
+    let m = createInitialMachine();
+    m = dispatchTranscriptEvent(m, { type: "BEGIN_TURN", user: userMsg("u1") });
+    m = dispatchTranscriptEvent(m, {
+      type: "TOOL",
+      phase: "start",
+      toolCallId: "t1",
+      toolName: "Read",
+    });
+    m = dispatchTranscriptEvent(m, { type: "SEGMENT_COMPLETE", segmentIndex: 0 });
+    m = dispatchTranscriptEvent(m, {
+      type: "STREAM_CHUNK",
+      messageId: "a2",
+      delta: "next",
+      kind: "text",
+    });
+    m = dispatchTranscriptEvent(m, {
+      type: "TOOL",
+      phase: "result",
+      toolCallId: "t1",
+      content: "done",
+    });
+    expect(m.context.turns[0].segments[0].tools[0].result).toBe("done");
+    expect(m.context.openSegment?.tools.length ?? 0).toBe(0);
+  });
+
   it("STREAM_CHUNK in idle is no-op", () => {
     const m = createInitialMachine();
     const before = JSON.stringify(m);
@@ -294,6 +345,32 @@ describe("dispatchTranscriptEvent", () => {
 });
 
 describe("flatMessagesToTranscript", () => {
+  it("HYDRATE deduplicates tool rows by toolCallId in one segment", () => {
+    const flat: UIMessage[] = [
+      userMsg("u1"),
+      { id: "a1", role: "assistant", contentBlocks: [{ blockIndex: 0, kind: "text", text: "hi" }] },
+      {
+        id: "tool-t1",
+        role: "tool",
+        toolName: "Read",
+        toolStatus: "done",
+        contentBlocks: [{ blockIndex: 0, kind: "text", text: "first" }],
+        toolInput: {},
+      },
+      {
+        id: "tool-t1",
+        role: "tool",
+        toolName: "Read",
+        toolStatus: "done",
+        contentBlocks: [{ blockIndex: 0, kind: "text", text: "second" }],
+        toolInput: {},
+      },
+    ];
+    const { machine } = flatMessagesToMachine(flat);
+    expect(machine.context.turns[0].segments[0].tools).toHaveLength(1);
+    expect(machine.context.turns[0].segments[0].tools[0].result).toBe("second");
+  });
+
   it("T8: HYDRATE round-trip preserves order", () => {
     const flat: UIMessage[] = [
       userMsg("u1"),

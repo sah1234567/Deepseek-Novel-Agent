@@ -19,8 +19,16 @@ pub enum PermissionResult {
     Ask { tool_name: String, summary: String },
 }
 
+/// One `ForkSubAgent` tool invocation queued for `drain_pending_forks`.
+#[derive(Debug, Clone)]
+pub struct ForkQueueEntry {
+    pub agent_type: String,
+    pub task: String,
+    pub parent_tool_call_id: String,
+}
+
 /// Queued fork requests from main-session `ForkSubAgent` tool calls.
-pub type ForkQueue = Arc<Mutex<Vec<(String, String)>>>;
+pub type ForkQueue = Arc<Mutex<Vec<ForkQueueEntry>>>;
 
 #[derive(Clone)]
 pub struct ToolContext {
@@ -38,6 +46,8 @@ pub struct ToolContext {
     pub allow_fork: bool,
     /// Engine fork queue; present only on main-session tool context.
     pub fork_queue: Option<ForkQueue>,
+    /// Set by the executor for the in-flight tool call (ForkSubAgent enqueue).
+    pub current_tool_call_id: Option<String>,
     /// Agent skills directory for resolving skill paths (e.g. `skills/plagiarism/`).
     pub skills_dir: Option<PathBuf>,
     /// `{agent_root}/.novel-agent/api_config.json` — WebSearch loads API key when env is unset.
@@ -62,6 +72,7 @@ impl ToolContext {
             read_file_cache: None,
             allow_fork: false,
             fork_queue: None,
+            current_tool_call_id: None,
             skills_dir: None,
             global_api_config_path: None,
         }
@@ -110,8 +121,25 @@ impl ToolContext {
         norm == "plan" || norm.starts_with("plan/")
     }
 
-    /// In Plan mode, Write/Edit may only touch `plan/`.
-    pub fn validate_plan_mode_write_path(&self, path: &str) -> Result<(), ToolError> {
+    pub fn is_tool_always_allowed(&self, tool_name: &str) -> bool {
+        self.always_allow.iter().any(|n| n == tool_name)
+    }
+
+    /// Fork sub-agent tool union (+ settings `always_allow`): skip mode-specific policies
+    /// (Plan `plan/` write restriction, Normal read-before-write, etc.).
+    pub fn tool_skips_mode_policy(&self, tool_name: &str) -> bool {
+        self.is_tool_always_allowed(tool_name)
+    }
+
+    /// In Plan mode, Write/Edit may only touch `plan/` (unless `tool_skips_mode_policy`).
+    pub fn validate_plan_mode_write_path(
+        &self,
+        tool_name: &str,
+        path: &str,
+    ) -> Result<(), ToolError> {
+        if self.tool_skips_mode_policy(tool_name) {
+            return Ok(());
+        }
         if !matches!(self.effective_permission_mode(), PermissionMode::Plan) {
             return Ok(());
         }
@@ -126,10 +154,6 @@ impl ToolContext {
 
     pub fn resolve_path(&self, rel: &str) -> PathBuf {
         resolve_under_project(&self.project_root, rel)
-    }
-
-    pub fn is_tool_always_allowed(&self, tool_name: &str) -> bool {
-        self.always_allow.iter().any(|n| n == tool_name)
     }
 
     pub fn store_read_cache(&self, path: &Path, entry: ReadCacheEntry) {
@@ -153,11 +177,15 @@ impl ToolContext {
     /// Normal mode read-before-write. Set `only_if_exists` for Write (skip new files).
     pub fn require_read_before_write(
         &self,
+        tool_name: &str,
         full: &PathBuf,
         path: &str,
         action: &str,
         only_if_exists: bool,
     ) -> Result<(), ToolError> {
+        if self.tool_skips_mode_policy(tool_name) {
+            return Ok(());
+        }
         if matches!(
             self.effective_permission_mode(),
             PermissionMode::Auto | PermissionMode::Plan | PermissionMode::Unattended

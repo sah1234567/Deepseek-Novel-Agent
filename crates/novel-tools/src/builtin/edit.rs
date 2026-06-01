@@ -101,8 +101,8 @@ impl Tool for EditTool {
 
         let full = ctx.resolve_path(&path);
         ctx.validate_write_root(&full)?;
-        ctx.validate_plan_mode_write_path(&path)?;
-        ctx.require_read_before_write(&full, &path, "editing", false)?;
+        ctx.validate_plan_mode_write_path(self.name(), &path)?;
+        ctx.require_read_before_write(self.name(), &full, &path, "editing", false)?;
         ctx.require_edit_in_read_slice(&full, &old_string)?;
 
         let content = blocking::read_to_string(full.clone()).await?;

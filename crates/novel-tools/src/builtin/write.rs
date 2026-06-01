@@ -53,8 +53,8 @@ impl Tool for WriteTool {
         let content = require_str(&input, "content")?.to_string();
         let full = ctx.resolve_path(&path);
         ctx.validate_write_root(&full)?;
-        ctx.validate_plan_mode_write_path(&path)?;
-        ctx.require_read_before_write(&full, &path, "overwriting", true)?;
+        ctx.validate_plan_mode_write_path(self.name(), &path)?;
+        ctx.require_read_before_write(self.name(), &full, &path, "overwriting", true)?;
 
         if full.exists() {
             let existing = blocking::read_to_string(full.clone()).await?;

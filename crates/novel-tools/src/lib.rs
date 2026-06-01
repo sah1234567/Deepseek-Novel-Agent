@@ -23,7 +23,7 @@ mod tests_extra;
 pub use abort::{abort_channel, AbortSignal, AbortWatch, InterruptBehavior, REJECT_MESSAGE};
 pub use blocking::{create_dir_all, read_to_string, run_blocking, write};
 pub use builtin::AskUserQuestionPayload;
-pub use context::{ForkQueue, PermissionMode, PermissionResult, ToolContext};
+pub use context::{ForkQueue, ForkQueueEntry, PermissionMode, PermissionResult, ToolContext};
 pub use error::{optional_str_any, require_str, require_str_any, ToolError, ValidationError};
 pub use executor::{StreamingToolExecutor, ToolCallSpec, ToolExecutor};
 pub use paths::{

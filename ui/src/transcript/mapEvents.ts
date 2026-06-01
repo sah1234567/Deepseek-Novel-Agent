@@ -38,6 +38,9 @@ export function mapToolCallRequest(payload: ToolCallRequestPayload): TranscriptE
   } else if (!phase && payload.toolName) {
     phase = "input_complete";
   }
+  const delta =
+    payload.delta ??
+    (phase === "input_delta" ? payload.content : undefined);
   return {
     type: "TOOL",
     phase,
@@ -45,7 +48,7 @@ export function mapToolCallRequest(payload: ToolCallRequestPayload): TranscriptE
     toolName: payload.toolName,
     input: payload.input,
     needsApproval: payload.needsApproval,
-    delta: payload.delta,
+    delta,
     content: payload.content,
     status: payload.status,
     description: payload.description,

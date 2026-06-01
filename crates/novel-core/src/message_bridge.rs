@@ -66,14 +66,79 @@ pub fn compaction_slice_to_chat(messages: &[CompactionMessage]) -> Vec<ChatMessa
     messages.iter().map(compaction_to_chat).collect()
 }
 
+/// Caller context for tool-chain repair diagnostics (`RUST_LOG=novel_core=debug`).
+#[derive(Debug, Clone, Copy)]
+pub struct RepairTraceContext<'a> {
+    pub label: &'a str,
+    pub fork_run_id: Option<&'a str>,
+    pub inner_turn: Option<u32>,
+    pub session_id: Option<&'a str>,
+}
+
+#[derive(Debug, Clone)]
+struct ToolChainGap {
+    assistant_index: usize,
+    tool_call_ids: Vec<String>,
+    tool_names: Vec<String>,
+}
+
+fn scan_tool_chain_gaps(messages: &[ChatMessage]) -> Vec<ToolChainGap> {
+    let mut gaps = Vec::new();
+    let mut i = 0;
+    while i < messages.len() {
+        if messages[i].role != "assistant" {
+            i += 1;
+            continue;
+        }
+        let tool_calls = match &messages[i].tool_calls {
+            Some(tcs) if !tcs.is_empty() => tcs,
+            _ => {
+                i += 1;
+                continue;
+            }
+        };
+        let mut j = i + 1;
+        let mut seen = HashSet::new();
+        while j < messages.len() && messages[j].role == "tool" {
+            if let Some(id) = &messages[j].tool_call_id {
+                seen.insert(id.clone());
+            }
+            j += 1;
+        }
+        let missing: Vec<_> = tool_calls
+            .iter()
+            .filter(|tc| !seen.contains(&tc.id))
+            .collect();
+        if !missing.is_empty() {
+            gaps.push(ToolChainGap {
+                assistant_index: i,
+                tool_call_ids: missing.iter().map(|tc| tc.id.clone()).collect(),
+                tool_names: missing.iter().map(|tc| tc.name.clone()).collect(),
+            });
+        }
+        i = j;
+    }
+    gaps
+}
+
 /// Ensure tool messages match a preceding assistant `tool_calls` block (API requirement).
 pub fn repair_tool_use_chain(messages: &mut Vec<ChatMessage>) {
+    repair_tool_use_chain_traced(messages, None);
+}
+
+pub fn repair_tool_use_chain_traced(
+    messages: &mut Vec<ChatMessage>,
+    trace: Option<RepairTraceContext<'_>>,
+) {
     let removed = remove_orphan_tool_messages(messages);
-    let inserted = fill_missing_tool_results(messages);
+    let inserted = fill_missing_tool_results(messages, trace);
     if removed > 0 || inserted > 0 {
         tracing::debug!(
             removed_orphans = removed,
             inserted_stubs = inserted,
+            label = trace.map(|t| t.label),
+            fork_run_id = trace.and_then(|t| t.fork_run_id),
+            inner_turn = trace.and_then(|t| t.inner_turn),
             "repaired tool_use chain"
         );
     }
@@ -123,7 +188,10 @@ fn is_tool_call_valid_at(messages: &[ChatMessage], tool_idx: usize, tool_id: Opt
         .is_some_and(|tcs| tcs.iter().any(|tc| tc.id == tid))
 }
 
-fn fill_missing_tool_results(messages: &mut Vec<ChatMessage>) -> usize {
+fn fill_missing_tool_results(
+    messages: &mut Vec<ChatMessage>,
+    trace: Option<RepairTraceContext<'_>>,
+) -> usize {
     let mut inserted = 0usize;
     let mut i = 0;
     while i < messages.len() {
@@ -146,15 +214,24 @@ fn fill_missing_tool_results(messages: &mut Vec<ChatMessage>) -> usize {
             }
             j += 1;
         }
-        let missing: Vec<_> = tool_calls
+        let missing_records: Vec<_> = tool_calls
             .iter()
             .filter(|tc| !seen.contains(&tc.id))
-            .map(|tc| tc.id.as_str())
             .collect();
-        if !missing.is_empty() {
+        if !missing_records.is_empty() {
+            let missing: Vec<&str> = missing_records.iter().map(|tc| tc.id.as_str()).collect();
+            let missing_tool_names: Vec<&str> =
+                missing_records.iter().map(|tc| tc.name.as_str()).collect();
             tracing::warn!(
                 ?missing,
-                "inserting synthetic tool results for missing tool_call ids"
+                ?missing_tool_names,
+                assistant_index = i,
+                message_count = messages.len(),
+                label = trace.map(|t| t.label),
+                fork_run_id = trace.and_then(|t| t.fork_run_id),
+                inner_turn = trace.and_then(|t| t.inner_turn),
+                session_id = trace.and_then(|t| t.session_id),
+                "tool_chain_missing_results_repaired"
             );
             let assistant = messages[i].clone();
             let stubs = yield_missing_tool_result_blocks(
@@ -179,8 +256,37 @@ fn fill_missing_tool_results(messages: &mut Vec<ChatMessage>) -> usize {
 }
 
 pub fn to_llm_messages(messages: &[ChatMessage]) -> Vec<LlmChatMessage> {
+    to_llm_messages_traced(messages, None)
+}
+
+pub fn to_llm_messages_traced(
+    messages: &[ChatMessage],
+    trace: Option<RepairTraceContext<'_>>,
+) -> Vec<LlmChatMessage> {
+    let gaps = scan_tool_chain_gaps(messages);
+    if !gaps.is_empty() {
+        tracing::debug!(
+            gap_count = gaps.len(),
+            gaps = ?gaps
+                .iter()
+                .map(|g| {
+                    (
+                        g.assistant_index,
+                        g.tool_call_ids.as_slice(),
+                        g.tool_names.as_slice(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            message_count = messages.len(),
+            label = trace.map(|t| t.label),
+            fork_run_id = trace.and_then(|t| t.fork_run_id),
+            inner_turn = trace.and_then(|t| t.inner_turn),
+            session_id = trace.and_then(|t| t.session_id),
+            "tool_chain_gaps_before_repair"
+        );
+    }
     let mut repaired = messages.to_vec();
-    repair_tool_use_chain(&mut repaired);
+    repair_tool_use_chain_traced(&mut repaired, trace);
     repaired
         .iter()
         .map(|m| LlmChatMessage {

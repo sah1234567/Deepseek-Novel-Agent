@@ -1,17 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { ForkRunState, UIMessage } from "../../hooks/useAgent";
 import { createInitialMachine } from "../../transcript";
-import {
-  buildForkSubAgentLinks,
-  resolveForkRunIdForTool,
-  toolPathForkRunIds,
-} from "../../utils/forkLinks";
+import { reportContentByForkRunId, resolveForkRunIdForToolCard } from "../../fork";
 
-describe("forkLinks — ForkSubAgent acceptance", () => {
-  it("#9 pairs ForkSubAgent tool rows with subAgentReport by order", () => {
+describe("fork binding — ForkSubAgent acceptance", () => {
+  it("report map and resolve by parentToolCallId", () => {
     const messages: UIMessage[] = [
       { id: "u1", role: "user", contentBlocks: [{ blockIndex: 0, kind: "text", text: "go" }] },
-      { id: "a1", role: "assistant", contentBlocks: [{ blockIndex: 0, kind: "text", text: "forking" }] },
       {
         id: "tool-f1",
         role: "tool",
@@ -26,12 +21,27 @@ describe("forkLinks — ForkSubAgent acceptance", () => {
         contentBlocks: [{ blockIndex: 0, kind: "text", text: "[子 Agent 完成: GeneralPurpose]\nfull report" }],
       },
     ];
-    const links = buildForkSubAgentLinks(messages);
-    expect(links.get("tool-f1")?.forkRunId).toBe("run-abc");
-    expect(links.get("tool-f1")?.reportContent).toContain("full report");
+    const reports = reportContentByForkRunId(messages);
+    expect(reports.get("run-abc")).toContain("full report");
+
+    const forkRuns = new Map<string, ForkRunState>([
+      [
+        "run-abc",
+        {
+          forkRunId: "run-abc",
+          agentType: "GeneralPurpose",
+          taskPreview: "task",
+          source: "tool",
+          parentToolCallId: "f1",
+          machine: createInitialMachine(),
+          status: "complete",
+        },
+      ],
+    ]);
+    expect(resolveForkRunIdForToolCard("tool-f1", forkRuns, messages)).toBe("run-abc");
   });
 
-  it("#9 resolveForkRunIdForTool falls back to live forkRuns order", () => {
+  it("hydrate order fallback when forkRuns empty", () => {
     const messages: UIMessage[] = [
       {
         id: "tool-f1",
@@ -40,22 +50,13 @@ describe("forkLinks — ForkSubAgent acceptance", () => {
         contentBlocks: [],
         toolInput: {},
       },
+      {
+        id: "report-1",
+        role: "subAgentReport",
+        forkRunId: "run-hydrate",
+        contentBlocks: [{ blockIndex: 0, kind: "text", text: "done" }],
+      },
     ];
-    const forkRuns = new Map<string, ForkRunState>([
-      [
-        "live-run-1",
-        {
-          forkRunId: "live-run-1",
-          agentType: "GeneralPurpose",
-          taskPreview: "task",
-          source: "tool",
-          machine: createInitialMachine(),
-          status: "running",
-        },
-      ],
-    ]);
-    const id = resolveForkRunIdForTool("tool-f1", messages, new Map(), forkRuns);
-    expect(id).toBe("live-run-1");
-    expect(toolPathForkRunIds(forkRuns)).toEqual(["live-run-1"]);
+    expect(resolveForkRunIdForToolCard("tool-f1", new Map(), messages)).toBe("run-hydrate");
   });
 });

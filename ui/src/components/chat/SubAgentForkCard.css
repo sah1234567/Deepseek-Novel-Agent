@@ -66,9 +66,15 @@
   font-size: 0.75rem;
 }
 
-.sub-agent-fork-enter:hover {
+.sub-agent-fork-enter:hover:not(:disabled) {
   background: #30363d;
   border-color: #58a6ff;
+}
+
+.sub-agent-fork-enter:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  color: #8b949e;
 }
 
 .sub-agent-fork-expand {

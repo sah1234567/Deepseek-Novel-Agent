@@ -12,7 +12,12 @@ import {
   mapStreamChunk,
   mapToolCallRequest,
 } from "../transcript";
-import { SYNTHETIC_USER_ID } from "../transcript/types";
+import {
+  applyForkDbToMap,
+  dispatchForkEvent,
+  emptyForkMachine,
+  mergeForkRunOnOpen,
+} from "../fork";
 import type { TranscriptMachine } from "../transcript/types";
 
 export interface ArchivedEpoch {
@@ -77,6 +82,8 @@ export interface ForkRunState {
   agentType: string;
   taskPreview: string;
   source: "tool" | "hook";
+  /** Main-session ForkSubAgent `tool_call_id` (tool path only). */
+  parentToolCallId?: string;
   machine: TranscriptMachine;
   status: "running" | "complete";
   reportOutput?: string;
@@ -115,17 +122,6 @@ interface TurnComplete {
 interface AppStatusSnapshot {
   hasInterruptibleToolInProgress?: boolean;
   pendingUserQuestion?: boolean;
-}
-
-function syntheticUser(): UIMessage {
-  return { id: SYNTHETIC_USER_ID, role: "user", contentBlocks: [] };
-}
-
-function forkInitialMachine(): TranscriptMachine {
-  return dispatchTranscriptEvent(createInitialMachine(), {
-    type: "BEGIN_TURN",
-    user: syntheticUser(),
-  });
 }
 
 export function useAgent(onTurnComplete?: () => void) {
@@ -256,7 +252,7 @@ export function useAgent(onTurnComplete?: () => void) {
             const next = new Map(prev);
             next.set(forkRunId, {
               ...run,
-              machine: dispatchTranscriptEvent(run.machine, mapSegmentComplete(segmentIndex ?? 0)),
+              machine: dispatchForkEvent(run.machine, mapSegmentComplete(segmentIndex ?? 0)),
             });
             return next;
           });
@@ -331,24 +327,28 @@ export function useAgent(onTurnComplete?: () => void) {
     );
 
     unlisteners.push(
-      listen<{ forkRunId: string; agentType: string; taskPreview?: string; source: string }>(
-        "sub-agent-started",
-        (event) => {
-          const { forkRunId, agentType, taskPreview, source } = event.payload;
-          setForkRuns((prev) => {
-            const next = new Map(prev);
-            next.set(forkRunId, {
-              forkRunId,
-              agentType: agentType ?? "",
-              taskPreview: taskPreview ?? "",
-              source: source === "hook" ? "hook" : "tool",
-              machine: forkInitialMachine(),
-              status: "running",
-            });
-            return next;
+      listen<{
+        forkRunId: string;
+        agentType: string;
+        taskPreview?: string;
+        source?: string;
+        parentToolCallId?: string | null;
+      }>("sub-agent-started", (event) => {
+        const { forkRunId, agentType, taskPreview, source, parentToolCallId } = event.payload;
+        setForkRuns((prev) => {
+          const next = new Map(prev);
+          next.set(forkRunId, {
+            forkRunId,
+            agentType: agentType ?? "",
+            taskPreview: taskPreview ?? "",
+            source: source === "hook" ? "hook" : "tool",
+            parentToolCallId: parentToolCallId ?? undefined,
+            machine: emptyForkMachine(),
+            status: "running",
           });
-        },
-      ),
+          return next;
+        });
+      }),
     );
 
     unlisteners.push(
@@ -367,7 +367,7 @@ export function useAgent(onTurnComplete?: () => void) {
             const next = new Map(prev);
             next.set(forkRunId, {
               ...run,
-              machine: dispatchTranscriptEvent(run.machine, chunk),
+              machine: dispatchForkEvent(run.machine, chunk),
             });
             return next;
           });
@@ -386,7 +386,7 @@ export function useAgent(onTurnComplete?: () => void) {
           const next = new Map(prev);
           next.set(forkRunId, {
             ...run,
-            machine: dispatchTranscriptEvent(run.machine, mapped),
+            machine: dispatchForkEvent(run.machine, mapped),
           });
           return next;
         });
@@ -404,7 +404,7 @@ export function useAgent(onTurnComplete?: () => void) {
             const next = new Map(prev);
             next.set(forkRunId, {
               ...run,
-              machine: dispatchTranscriptEvent(run.machine, { type: "TURN_COMPLETE" }),
+              machine: dispatchForkEvent(run.machine, { type: "TURN_COMPLETE" }),
               status: "complete",
               reportOutput: output ?? run.reportOutput,
             });
@@ -572,20 +572,7 @@ export function useAgent(onTurnComplete?: () => void) {
 
   const openForkOverlay = useCallback(async (forkRunId: string) => {
     setOpenForkRunId(forkRunId);
-    setForkRuns((prev) => {
-      const existing = prev.get(forkRunId);
-      const next = new Map(prev);
-      next.set(forkRunId, {
-        forkRunId,
-        agentType: existing?.agentType ?? "加载中…",
-        taskPreview: existing?.taskPreview ?? "",
-        source: existing?.source ?? "tool",
-        machine: existing?.machine ?? forkInitialMachine(),
-        status: existing?.status ?? "complete",
-        reportOutput: existing?.reportOutput,
-      });
-      return next;
-    });
+    setForkRuns((prev) => mergeForkRunOnOpen(prev, forkRunId));
     try {
       const raw = await invoke<
         Array<{
@@ -597,20 +584,7 @@ export function useAgent(onTurnComplete?: () => void) {
         }>
       >("get_fork_messages", { runId: forkRunId });
       const ui = apiMessagesToUi(raw);
-      if (ui.length === 0) return;
-      setForkRuns((prev) => {
-        const existing = prev.get(forkRunId);
-        if (!existing) return prev;
-        const next = new Map(prev);
-        next.set(forkRunId, {
-          ...existing,
-          machine: dispatchTranscriptEvent(createInitialMachine(), {
-            type: "HYDRATE",
-            flatMessages: ui,
-          }),
-        });
-        return next;
-      });
+      setForkRuns((prev) => applyForkDbToMap(prev, forkRunId, ui));
     } catch (e) {
       setQuestionError(String(e));
     }

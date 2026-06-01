@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { MessageBody } from "./MessageBody";
-import { agentLabelFromType } from "../../utils/forkLinks";
+import { agentLabelFromType } from "../../fork";
 import "./SubAgentForkCard.css";
 
 export type SubAgentForkStatus = "running" | "complete";
@@ -11,6 +11,8 @@ export interface SubAgentForkCardProps {
   status: SubAgentForkStatus;
   reportContent?: string;
   onEnter: () => void;
+  enterDisabled?: boolean;
+  enterHint?: string;
   /** `tool` = ForkSubAgent tool row; `hook` = PostToolUse standalone card. */
   mode?: "tool" | "hook";
 }
@@ -21,6 +23,8 @@ export function SubAgentForkCard({
   status,
   reportContent,
   onEnter,
+  enterDisabled = false,
+  enterHint,
   mode = "tool",
 }: SubAgentForkCardProps) {
   const [reportOpen, setReportOpen] = useState(false);
@@ -42,7 +46,13 @@ export function SubAgentForkCard({
           {summary ? `${mode === "tool" ? " · " : ""}${summary}` : ""}
         </span>
         {status === "running" && <span className="sub-agent-fork-badge">运行中</span>}
-        <button type="button" className="sub-agent-fork-enter" onClick={onEnter}>
+        <button
+          type="button"
+          className="sub-agent-fork-enter"
+          disabled={enterDisabled}
+          title={enterHint}
+          onClick={onEnter}
+        >
           进入
         </button>
       </header>

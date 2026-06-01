@@ -1,6 +1,6 @@
 import type { ForkRunState } from "../../hooks/useAgent";
 import { flatMessagesFromMachine } from "../../transcript";
-import { agentLabelFromType } from "../../utils/forkLinks";
+import { agentLabelFromType } from "../../fork";
 import { ScrollViewport } from "../layout/ScrollViewport";
 import { TranscriptView } from "./TranscriptView";
 import "./DialogOverlays.css";

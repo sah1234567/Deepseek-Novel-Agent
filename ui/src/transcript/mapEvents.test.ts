@@ -23,6 +23,16 @@ describe("mapToolCallRequest", () => {
     if (e?.type === "TOOL") expect(e.phase).toBe("result");
   });
 
+  it("maps input_delta content to delta when phase is input_delta", () => {
+    const e = mapToolCallRequest({
+      toolCallId: "t1",
+      phase: "input_delta",
+      content: '{"a":',
+    });
+    expect(e?.type).toBe("TOOL");
+    if (e?.type === "TOOL") expect(e.delta).toBe('{"a":');
+  });
+
   it("infers input_delta from delta without phase", () => {
     const e = mapToolCallRequest({ toolCallId: "t1", delta: "{" });
     expect(e?.type).toBe("TOOL");

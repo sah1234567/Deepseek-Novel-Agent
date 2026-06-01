@@ -6,7 +6,6 @@ import { isSyntheticUser } from "../../transcript";
 import { pauseSegmentId } from "../../transcript/selectors";
 import { CompactionDivider } from "./CompactionDivider";
 import { SegmentGroup, UserBubble } from "./segmentRender";
-import type { ForkLink } from "../../utils/forkLinks";
 import "./ChatPanel.css";
 
 export interface ArchivedEpochView {
@@ -18,12 +17,10 @@ function ArchivedEpochTranscript({
   epoch,
   flatMessages,
   forkRuns,
-  forkLinks,
 }: {
   epoch: number;
   flatMessages: UIMessage[];
   forkRuns?: Map<string, ForkRunState>;
-  forkLinks?: Map<string, ForkLink>;
 }) {
   const machine = useMemo(
     () => flatMessagesToMachine(flatMessages).machine,
@@ -41,7 +38,6 @@ function ArchivedEpochTranscript({
               variant="committed"
               flatMessages={flatMessages}
               forkRuns={forkRuns}
-              forkLinks={forkLinks}
             />
           ))}
         </div>
@@ -57,7 +53,6 @@ export function TranscriptView({
   pendingQuestion,
   questionSlot,
   forkRuns,
-  forkLinks,
   flatMessages,
   onApproveTool,
   onDenyTool,
@@ -71,7 +66,6 @@ export function TranscriptView({
   pendingQuestion?: PendingQuestion | null;
   questionSlot?: React.ReactNode;
   forkRuns?: Map<string, ForkRunState>;
-  forkLinks?: Map<string, ForkLink>;
   flatMessages: UIMessage[];
   onApproveTool?: (id: string) => void;
   onDenyTool?: (id: string, reason?: string) => void;
@@ -99,7 +93,6 @@ export function TranscriptView({
             epoch={arch.epoch}
             flatMessages={arch.flatMessages}
             forkRuns={forkRuns}
-            forkLinks={forkLinks}
           />
           <CompactionDivider epoch={arch.epoch} />
         </div>
@@ -120,7 +113,6 @@ export function TranscriptView({
                 variant="committed"
                 flatMessages={flatMessages}
                 forkRuns={forkRuns}
-                forkLinks={forkLinks}
                 onApproveTool={onApproveTool}
                 onDenyTool={onDenyTool}
                 onOpenForkOverlay={onOpenForkOverlay}
@@ -138,7 +130,6 @@ export function TranscriptView({
           isStreaming={isStreaming}
           flatMessages={flatMessages}
           forkRuns={forkRuns}
-          forkLinks={forkLinks}
           onApproveTool={onApproveTool}
           onDenyTool={onDenyTool}
           onOpenForkOverlay={onOpenForkOverlay}

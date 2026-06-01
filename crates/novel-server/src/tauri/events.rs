@@ -22,6 +22,15 @@ pub struct ToolCallRequestPayload {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SessionTokensUpdatedPayload {
+    pub cache_hit_tokens: i64,
+    pub cache_miss_tokens: i64,
+    pub completion_tokens: i64,
+    pub context_tokens: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TurnCompletePayload {
     pub cache_hit_tokens: i64,
     pub cache_miss_tokens: i64,
@@ -124,6 +133,22 @@ pub fn emit_core_event(app: &AppHandle, event: Event, message_id: &str) {
                 }),
             );
         }
+        Event::SessionTokensUpdated {
+            cache_hit_tokens,
+            cache_miss_tokens,
+            completion_tokens,
+            context_tokens,
+        } => {
+            let _ = app.emit(
+                "session-tokens-updated",
+                SessionTokensUpdatedPayload {
+                    cache_hit_tokens,
+                    cache_miss_tokens,
+                    completion_tokens,
+                    context_tokens,
+                },
+            );
+        }
         Event::TurnComplete {
             cache_hit_tokens,
             cache_miss_tokens,
@@ -166,6 +191,7 @@ pub fn emit_core_event(app: &AppHandle, event: Event, message_id: &str) {
             fork_run_id,
             agent_type,
             task_preview,
+            parent_tool_call_id,
             ..
         } => {
             let _ = app.emit(
@@ -174,6 +200,7 @@ pub fn emit_core_event(app: &AppHandle, event: Event, message_id: &str) {
                     "forkRunId": fork_run_id,
                     "agentType": agent_type,
                     "taskPreview": task_preview,
+                    "parentToolCallId": parent_tool_call_id,
                 }),
             );
         }

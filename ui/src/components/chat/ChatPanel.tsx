@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useMemo, useRef, useState } from "react";
+import { FormEvent, useCallback, useRef, useState } from "react";
 import type { ForkRunState, PendingQuestion } from "../../hooks/useAgent";
 import { useAgentContext } from "../../context/AgentContext";
 import { APP_DISPLAY_NAME } from "../../constants/app";
@@ -10,11 +10,7 @@ import { CompactionBanner } from "./CompactionBanner";
 import { useCompactionProgress } from "../../hooks/useCompactionProgress";
 import { SubAgentOverlay } from "./SubAgentOverlay";
 import { SubAgentForkCard } from "./SubAgentForkCard";
-import {
-  agentLabelFromType,
-  buildForkSubAgentLinks,
-  listHookForkRuns,
-} from "../../utils/forkLinks";
+import { agentLabelFromType, listHookForkRuns } from "../../fork";
 import "./ChatPanel.css";
 import "./DialogOverlays.css";
 import "./SubAgentForkCard.css";
@@ -174,7 +170,6 @@ export function ChatPanel({
   const [stickyPrompt, setStickyPrompt] = useState<string | null>(null);
   const userMsgRef = useRef<HTMLElement | null>(null);
 
-  const forkLinks = useMemo(() => buildForkSubAgentLinks(flatMessages), [flatMessages]);
 
   const lastUserMsg = [...transcriptMachine.context.turns]
     .reverse()
@@ -281,7 +276,6 @@ export function ChatPanel({
             pendingQuestion={pendingQuestion}
             questionSlot={questionSlot}
             forkRuns={forkRuns}
-            forkLinks={forkLinks}
             flatMessages={flatMessages}
             onApproveTool={(id) => void approveTool(id)}
             onDenyTool={(id, reason) => void denyTool(id, reason)}

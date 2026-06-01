@@ -59,12 +59,33 @@ export function useAppStatus() {
 
   useEffect(() => {
     void refresh();
-    const interval = setInterval(() => void refresh(), 5000);
+    const interval = setInterval(() => void refresh(), 30000);
     return () => clearInterval(interval);
   }, [refresh]);
 
   useEffect(() => {
     const unlisteners: Promise<UnlistenFn>[] = [];
+    unlisteners.push(
+      listen<{
+        cacheHitTokens: number;
+        cacheMissTokens: number;
+        completionTokens: number;
+        contextTokens: number;
+      }>("session-tokens-updated", (event) => {
+        const p = event.payload;
+        setStatus((prev) =>
+          prev
+            ? {
+                ...prev,
+                sessionCacheHit: p.cacheHitTokens,
+                sessionCacheMiss: p.cacheMissTokens,
+                sessionCompletion: p.completionTokens,
+                contextTokens: p.contextTokens,
+              }
+            : prev,
+        );
+      }),
+    );
     unlisteners.push(
       listen("turn-complete", () => {
         void refresh();

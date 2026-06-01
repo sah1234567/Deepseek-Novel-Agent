@@ -118,6 +118,36 @@ impl AgentType {
             _ => None,
         }
     }
+
+    /// Union of tool names on any forkable sub-agent allowlist.
+    pub fn union_fork_tool_names() -> Vec<String> {
+        use std::collections::HashSet;
+        let mut names = HashSet::new();
+        for agent in [
+            AgentType::KnowledgeAuditor,
+            AgentType::ChapterCraftAnalyzer,
+            AgentType::GeneralPurpose,
+        ] {
+            for t in agent.definition().tools {
+                names.insert(t);
+            }
+        }
+        let mut v: Vec<_> = names.into_iter().collect();
+        v.sort();
+        v
+    }
+}
+
+/// Merge settings `always_allow` with every fork sub-agent tool (no Normal-mode Ask for either).
+pub fn merge_tool_always_allow(settings: &[String]) -> Vec<String> {
+    use std::collections::HashSet;
+    let mut names: HashSet<String> = settings.iter().cloned().collect();
+    for t in AgentType::union_fork_tool_names() {
+        names.insert(t);
+    }
+    let mut v: Vec<_> = names.into_iter().collect();
+    v.sort();
+    v
 }
 
 #[cfg(test)]
@@ -172,5 +202,20 @@ mod tests {
         assert!(AgentType::parse("ConsistencyChecker").is_none());
         assert!(AgentType::parse("DialogueAnalyzer").is_none());
         assert!(AgentType::parse("ChapterWriter").is_none());
+    }
+
+    #[test]
+    fn union_fork_tool_names_includes_all_fork_agents() {
+        let names = AgentType::union_fork_tool_names();
+        assert!(names.contains(&"WebSearch".into()));
+        assert!(names.contains(&"TrackingQuery".into()));
+        assert!(names.contains(&"Write".into()));
+    }
+
+    #[test]
+    fn merge_tool_always_allow_adds_fork_tools() {
+        let merged = super::merge_tool_always_allow(&["Custom".into()]);
+        assert!(merged.contains(&"Custom".into()));
+        assert!(merged.contains(&"WebSearch".into()));
     }
 }

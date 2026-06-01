@@ -69,6 +69,10 @@ impl Tool for ForkSubAgentTool {
                 "task".into(),
             )));
         }
+        let parent_tool_call_id = ctx
+            .current_tool_call_id
+            .clone()
+            .ok_or_else(|| ToolError::Internal("fork queue missing tool_call_id".into()))?;
         let queue = ctx
             .fork_queue
             .as_ref()
@@ -77,7 +81,11 @@ impl Tool for ForkSubAgentTool {
             .lock()
             .map_err(|_| ToolError::Internal("fork queue lock poisoned".into()))?;
         let agent_label = agent_type.clone();
-        guard.push((agent_type, task.to_string()));
+        guard.push(crate::ForkQueueEntry {
+            agent_type,
+            task: task.to_string(),
+            parent_tool_call_id,
+        });
         let label = input
             .get("description")
             .and_then(|v| v.as_str())
@@ -125,6 +133,7 @@ mod tests {
             permission_mode: PermissionMode::Auto,
             allow_fork: true,
             fork_queue: Some(Arc::clone(&queue)),
+            current_tool_call_id: Some("tc-1".into()),
             ..ToolContext::new(std::path::PathBuf::from("."))
         };
         tool.call(
@@ -135,7 +144,8 @@ mod tests {
         .unwrap();
         let guard = queue.lock().unwrap();
         assert_eq!(guard.len(), 1);
-        assert_eq!(guard[0].0, "KnowledgeAuditor");
+        assert_eq!(guard[0].agent_type, "KnowledgeAuditor");
+        assert_eq!(guard[0].parent_tool_call_id, "tc-1");
     }
 
     #[tokio::test(flavor = "current_thread")]

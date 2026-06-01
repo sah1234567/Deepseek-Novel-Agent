@@ -102,12 +102,21 @@ pub enum Event {
         turn_comp_tokens: i64,
         was_interrupted: bool,
     },
+    /// Session token counters updated after each LLM API call (for StatusBar live refresh).
+    SessionTokensUpdated {
+        cache_hit_tokens: i64,
+        cache_miss_tokens: i64,
+        completion_tokens: i64,
+        context_tokens: i64,
+    },
     /// Sub-agent lifecycle + scoped stream/tool events. `fork_run_id` keys overlay state; never merged into parent LLM messages.
     SubAgentStarted {
         fork_run_id: String,
         agent_id: String,
         agent_type: String,
         task_preview: String,
+        /// Main-session `ForkSubAgent` tool_call id; `None` for PostToolUse hook path.
+        parent_tool_call_id: Option<String>,
     },
     SubAgentComplete {
         fork_run_id: String,

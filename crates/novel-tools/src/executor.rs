@@ -48,7 +48,9 @@ impl ToolExecutor {
     ) -> Result<crate::ToolOutput, ToolError> {
         let tool = self.registry.resolve(&call.name)?;
         tool.validate_input(&call.input)?;
-        match tool.check_permissions(&call.input, ctx) {
+        let mut ctx = ctx.clone();
+        ctx.current_tool_call_id = Some(call.id.clone());
+        match tool.check_permissions(&call.input, &ctx) {
             crate::PermissionResult::Allow => {}
             crate::PermissionResult::Deny { reason } => {
                 return Err(ToolError::PermissionDenied(reason));
@@ -58,7 +60,7 @@ impl ToolExecutor {
                 return Err(ToolError::PermissionDenied("requires user approval".into()));
             }
         }
-        tool.call(call.input.clone(), ctx).await
+        tool.call(call.input.clone(), &ctx).await
     }
 }
 

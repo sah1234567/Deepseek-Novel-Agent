@@ -3,6 +3,7 @@ import { createInitialMachine } from "../../transcript/machine";
 import { transcriptToFlatMessages } from "../../transcript/convert";
 import { dispatchTranscriptEvent } from "../../transcript/machine";
 import { mapStreamChunk } from "../../transcript/mapEvents";
+import { hydrateForkMachine } from "../../fork/transcript";
 import {
   dispatchForkEvent,
   forkInitialMachine,
@@ -41,10 +42,10 @@ describe("fork machine lifecycle (useAgent parity)", () => {
     assertPlanHealthy(machine, { mode: "fork" });
   });
 
-  it("get_fork_messages hydrate replaces fork machine", () => {
+  it("get_fork_messages hydrate replaces fork machine when complete", () => {
     let live = runForkLifecycle("run-1");
     const flat = transcriptToFlatMessages(live);
-    live = dispatchTranscriptEvent(live, { type: "HYDRATE", flatMessages: flat });
+    live = hydrateForkMachine(flat);
     expect(live.context.turns[0].segments[0].assistant.contentBlocks[0]?.text).toContain("分析");
     expect(transcriptToFlatMessages(live).map((m) => m.id)).toEqual(flat.map((m) => m.id));
   });
