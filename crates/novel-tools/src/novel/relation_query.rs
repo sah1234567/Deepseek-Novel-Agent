@@ -188,10 +188,7 @@ mod tests {
             project_root: tmp.path().to_path_buf(),
             ..ToolContext::new(tmp.path().to_path_buf())
         };
-        let out = tool
-            .call(json!({"character": "陈默"}), &ctx)
-            .await
-            .unwrap();
+        let out = tool.call(json!({"character": "陈默"}), &ctx).await.unwrap();
         assert!(out.content.contains("陈默"));
         assert!(out.content.contains("林若烟"));
         assert!(out.content.contains("亲近"));

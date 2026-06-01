@@ -66,7 +66,8 @@ mod tests {
     #[test]
     fn scaffold_errors_when_templates_dir_missing() {
         let tmp = TempDir::new().unwrap();
-        let err = init_project_scaffold(tmp.path(), Path::new("/nonexistent/templates")).unwrap_err();
+        let err =
+            init_project_scaffold(tmp.path(), Path::new("/nonexistent/templates")).unwrap_err();
         assert!(matches!(err, KnowledgeError::TemplatesNotFound(_)));
     }
 }

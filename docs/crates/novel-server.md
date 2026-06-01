@@ -29,17 +29,18 @@ React (ui/) ──invoke/listen──► src-tauri/commands.rs
 
 ### 1.3 EngineCommand
 
-| 命令 | 说明 |
+| EngineCommand | 说明 |
 |------|------|
 | `SendMessage` | 用户消息 + 可选 `event_tx` |
 | `ApproveTool` / `DenyTool` | 工具批准/拒绝 + `event_tx` 续跑 turn |
 | `AnswerQuestion` | AskUserQuestion 回答 + `event_tx` 续跑 |
-| `ForkSubAgent` | 手动 fork 子 Agent（已移除 strategy 参数） |
 | `GetStatus` | 返回 `AppStatus`（含 `activeWorkName`） |
 | `SetPermissionMode` | 切换权限模式 |
 | `ResumeSession` | 恢复历史会话（替换 engine；`abort_controller.clear()`） |
 | `CreateSession` | 当前作品下新建 session（替换 engine；`abort_controller.clear()`） |
 | `SwitchProjectAndCreateSession` | 切换 `active_project` + 新建 session（`create_work` / `open_work`） |
+
+（子 Agent 仅经主会话 **ForkSubAgent 工具** 或 PostToolUse Hook 触发；无独立 Tauri fork 命令。）
 
 ### 1.4 AppStatus
 
@@ -89,27 +90,28 @@ React (ui/) ──invoke/listen──► src-tauri/commands.rs
 | `create_session` | 当前作品新建 session | StatusBar `+` |
 | `resume_session` | 恢复/切换会话 | StatusBar 下拉 · SettingsPanel |
 | `list_sessions` | 当前作品会话列表（`last_active_at` 降序） | StatusBar · SettingsPanel |
-| `get_session_messages` | 历史 hydrate | `useAgent`（`session-resumed` / `sessionId` 变化） |
+| `get_session_transcript` | 历史 hydrate（`{ archives, active }`） | `useAgent.hydrateMessages` |
+| `get_session_messages` | 仅 active 工作集（兼容 IPC） | 内部 / 调试 |
+| `get_fork_messages` | 子 Agent transcript 回放 | `SubAgentOverlay` |
 | `init_novel_project` | 当前作品 scaffold | SettingsPanel |
 | `list_project_files` / `read_project_file` | 文件树 | FileTreePanel |
-| `update_session_todo` | Todo 状态 | TodoPanel |
+| `update_session_todo` | Todo 状态 | StatusBar Todo 下拉 |
 | `get_api_config` / `set_api_config` | 全局 API（json） | SettingsPanel |
-| `fork_sub_agent` | 手动子 Agent | 调试 |
 
-`create_session` **不再**接受 `project_root` 参数；切换作品用 `open_work` / `create_work`。
+共 **20** 个 Tauri command（见 `src-tauri/src/main.rs` `generate_handler!`）。
 
 **Tauri invoke 参数命名：** 前端使用 camelCase，Rust 命令参数为 snake_case。示例：
 
 ```typescript
 invoke("resume_session", { sessionId });
-invoke("get_session_messages", { sessionId: null });
+invoke("get_session_transcript", { sessionId: null });
 invoke("update_session_todo", { todoId, status });
 invoke("approve_tool", { toolCallId });
 ```
 
 ### 1.7 SessionSummary（list_sessions 返回值）
 
-与 [novel-state §1.5](novel-state.md#15-sessionsummary) 一致。前端 StatusBar 标签用 `total_turns`（对话轮数）与 `last_active_at`（相对时间）；SettingsPanel 额外展示 `api_call_count`。
+与 [novel-state §1.4](novel-state.md#14-sessionsummary) 一致。前端 StatusBar 标签用 `total_turns`（对话轮数）与 `last_active_at`（相对时间）；SettingsPanel 额外展示 `api_call_count`。
 
 ### 1.8 作品切换
 
@@ -134,14 +136,15 @@ invoke("approve_tool", { toolCallId });
 |------------|------|
 | `stream-chunk` | ContentBlockDelta |
 | `ask-user-question` | AskUserQuestion |
-| `turn-complete` | TurnComplete / TurnStart / Error |
+| `turn-complete` | TurnComplete（含 `wasInterrupted`）/ TurnStart / Error（`phase: "error"`，不含用户主动中断）；**含 turn 级 token 字段，触发 StatusBar refresh** |
 | `session-resumed` | create/open work、create/resume session |
 | `permission-mode-changed` | SetPermissionMode |
 | `sub-agent-started` / `sub-agent-complete` | 子 Agent（含 GeneralPurpose；payload 含 `agentType`） |
 | `sub-agent-stream` / `sub-agent-tool` | 子 Agent overlay 流式正文与工具 |
 | `assistant-segment-complete` | AssistantSegmentComplete（`segmentIndex`；可选 `forkRunId`） |
+| `compaction-progress` | CompactionProgress → **CompactionBanner**（ChatPanel viewport 顶部；`action` + `attempt` / `tokensBefore`/`tokensAfter` / `reason`） |
 
-子 Agent 事件驱动 StatusBar chip 与 SubAgentOverlay：`sub-agent-started` 显示运行中标签，`sub-agent-complete` 清除。`forkRunId` 非空时分段 finalize overlay，否则 finalize 主聊天。
+子 Agent 事件驱动 StatusBar chip 与 SubAgentOverlay：`sub-agent-started` 显示运行中标签，`sub-agent-complete` 清除。`forkRunId` 非空时分段 finalize overlay，否则 finalize 主聊天。前端按 **SegmentGroup**（Agent 在上、Tool 在下）渲染 transcript；事件顺序与 DB `ORDER BY sequence` 一致，异步 tool result 写入 `openSegment.tools` 而非顶层 messages。
 
 ### 1.10 API 配置
 

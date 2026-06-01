@@ -1,4 +1,5 @@
 use crate::message_types::CompactionMessage;
+#[cfg(test)]
 use crate::RoleContent;
 use regex::Regex;
 use std::path::Path;
@@ -12,7 +13,8 @@ fn chapter_num_re() -> &'static Regex {
 }
 
 /// Level 1: replace old chapter full text in messages with outline summaries.
-pub fn apply_level1_messages(
+#[cfg(test)]
+pub(crate) fn apply_level1_messages(
     messages: &mut [RoleContent],
     project_root: &Path,
     recent_chapters_full: usize,

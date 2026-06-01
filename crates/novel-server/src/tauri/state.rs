@@ -32,7 +32,12 @@ impl AppState {
                 .map_err(|e| e.to_string())?
         };
         let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
-        spawn_engine_loop(engine, cmd_rx, Arc::clone(&config), Arc::clone(&abort_controller));
+        spawn_engine_loop(
+            engine,
+            cmd_rx,
+            Arc::clone(&config),
+            Arc::clone(&abort_controller),
+        );
         Ok(Self {
             config,
             cmd_tx,

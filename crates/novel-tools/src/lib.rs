@@ -1,4 +1,4 @@
-#![warn(clippy::unwrap_used)]
+#![deny(clippy::unwrap_used)]
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
 mod abort;
@@ -25,9 +25,7 @@ pub use blocking::{create_dir_all, read_to_string, run_blocking, write};
 pub use builtin::AskUserQuestionPayload;
 pub use context::{ForkQueue, PermissionMode, PermissionResult, ToolContext};
 pub use error::{optional_str_any, require_str, require_str_any, ToolError, ValidationError};
-pub use executor::{
-    StreamingToolExecutor, ToolCallSpec, ToolExecutor, DEFAULT_MAX_CONCURRENT_TOOLS,
-};
+pub use executor::{StreamingToolExecutor, ToolCallSpec, ToolExecutor};
 pub use paths::{
     extract_file_path, normalize_chapter_progress_path, normalize_rel_path, optional_file_path,
     optional_search_root, resolve_under_project,
@@ -36,13 +34,14 @@ pub use read_cache::{
     add_line_numbers, file_mtime_secs, read_range_key, ReadCacheEntry, ReadCacheSource,
     FILE_UNCHANGED_STUB,
 };
+pub use registry::ToolRegistry;
 pub use tool_result_format::{
     format_tool_result_for_llm, FormattedToolResult, ToolResultSpec, NEEDS_USER_INPUT_STUB,
 };
-pub use registry::ToolRegistry;
 pub use trait_def::{Tool, ToolOutput};
 
-pub fn default_registry(_project_root: std::path::PathBuf) -> ToolRegistry {
+/// Built-in + novel tool registry (project path lives on `ToolContext`, not here).
+pub fn default_registry() -> ToolRegistry {
     let mut reg = ToolRegistry::new();
     reg.register(Box::new(builtin::ReadTool));
     reg.register(Box::new(builtin::TailTool));

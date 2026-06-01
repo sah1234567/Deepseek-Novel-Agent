@@ -84,9 +84,7 @@ impl Tool for ForeshadowTrackerTool {
             .get("warning_threshold")
             .and_then(|v| v.as_u64())
             .unwrap_or(5) as i32;
-        let filter_character = input
-            .get("character")
-            .and_then(|v| v.as_str());
+        let filter_character = input.get("character").and_then(|v| v.as_str());
 
         let store = KnowledgeStore::new(&ctx.project_root);
         let content = store
@@ -160,7 +158,8 @@ impl Tool for ForeshadowTrackerTool {
             density_warning: None,
         };
         Ok(ToolOutput {
-            content: serde_json::to_string_pretty(&result).map_err(|e| ToolError::Execution(format!("json serialize: {e}")))?,
+            content: serde_json::to_string_pretty(&result)
+                .map_err(|e| ToolError::Execution(format!("json serialize: {e}")))?,
             is_error: false,
         })
     }

@@ -1,7 +1,6 @@
 use crate::message_types::CompactionMessage;
 
-pub const SUMMARY_USER_PREFIX: &str = "[会话历史摘要]";
-pub const SKILL_USER_PREFIX: &str = "[激活 Skill]";
+pub const CONTEXT_REFRESH_USER_PREFIX: &str = "[上下文刷新]";
 
 /// System-injected user messages that must not start a user turn boundary.
 pub fn is_user_turn_start(msg: &CompactionMessage) -> bool {
@@ -9,10 +8,8 @@ pub fn is_user_turn_start(msg: &CompactionMessage) -> bool {
         return false;
     }
     let c = msg.content.as_str();
-    if c.starts_with(SUMMARY_USER_PREFIX)
-        || c.starts_with(SKILL_USER_PREFIX)
+    if c.starts_with(CONTEXT_REFRESH_USER_PREFIX)
         || c.starts_with("[压缩]")
-        || c.starts_with("[上下文刷新]")
         || c.starts_with("[Request interrupted")
         || c.starts_with("[子 Agent")
     {
@@ -34,10 +31,7 @@ pub fn user_turn_ranges(messages: &[CompactionMessage]) -> Vec<(usize, usize)> {
     }
     let mut ranges = Vec::with_capacity(starts.len());
     for (idx, &start) in starts.iter().enumerate() {
-        let end = starts
-            .get(idx + 1)
-            .copied()
-            .unwrap_or(messages.len());
+        let end = starts.get(idx + 1).copied().unwrap_or(messages.len());
         ranges.push((start, end));
     }
     ranges
@@ -53,10 +47,7 @@ pub struct PartitionResult {
 }
 
 /// Split messages for compaction: system stays separate; middle → summary; last N user turns retained.
-pub fn partition_messages(
-    messages: &[CompactionMessage],
-    keep_turns: usize,
-) -> PartitionResult {
+pub fn partition_messages(messages: &[CompactionMessage], keep_turns: usize) -> PartitionResult {
     if messages.is_empty() {
         return PartitionResult {
             summarize_from: 0,
@@ -68,6 +59,15 @@ pub fn partition_messages(
         1
     } else {
         0
+    };
+    // Skip merged [上下文刷新] user at index 1 when present.
+    let body_start = if messages
+        .get(body_start)
+        .is_some_and(|m| m.role == "user" && m.content.starts_with(CONTEXT_REFRESH_USER_PREFIX))
+    {
+        body_start + 1
+    } else {
+        body_start
     };
     let ranges = user_turn_ranges(messages);
     if ranges.len() <= keep_turns {
@@ -139,13 +139,13 @@ mod tests {
         ];
         let p = partition_messages(&messages, 3);
         assert_eq!(p.summarize_from, 1);
-        assert_eq!(p.summarize_to, 6); // turn4 index
+        assert_eq!(p.summarize_to, 6);
         assert_eq!(p.retain_from, 6);
         assert_eq!(messages[p.retain_from..].len(), 3);
     }
 
     #[test]
-    fn system_injected_user_not_turn_boundary() {
+    fn partition_skips_context_refresh_user() {
         let messages = vec![
             CompactionMessage {
                 role: "system".into(),
@@ -154,7 +154,31 @@ mod tests {
             },
             CompactionMessage {
                 role: "user".into(),
-                content: format!("{SUMMARY_USER_PREFIX}\nold summary"),
+                content: format!(
+                    "{CONTEXT_REFRESH_USER_PREFIX}\n## 激活 Skill\nx\n\n## 会话历史摘要\nold"
+                ),
+                ..Default::default()
+            },
+            user("turn1"),
+            user("turn2"),
+            user("turn3"),
+        ];
+        let p = partition_messages(&messages, 1);
+        assert_eq!(p.summarize_from, 2);
+        assert_eq!(p.retain_from, 4);
+    }
+
+    #[test]
+    fn context_refresh_not_turn_boundary() {
+        let messages = vec![
+            CompactionMessage {
+                role: "system".into(),
+                content: "sys".into(),
+                ..Default::default()
+            },
+            CompactionMessage {
+                role: "user".into(),
+                content: format!("{CONTEXT_REFRESH_USER_PREFIX}\nold summary"),
                 ..Default::default()
             },
             user("real turn"),

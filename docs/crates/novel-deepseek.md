@@ -2,7 +2,7 @@
 
 > 所属项目: [Novel Agent](../../README.md)
 >
-> **说明：** 原 `novel-llm` 薄 wrapper 已合并入本 crate（2026-05）。`novel-core` 仅依赖 `novel_deepseek::`。
+> **说明：** `novel-core` 仅依赖 `novel_deepseek::`（LLM 客户端与 SSE 解析均在本 crate）。
 
 ---
 

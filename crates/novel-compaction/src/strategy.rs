@@ -55,8 +55,8 @@ mod tests {
     #[test]
     fn no_compact_below_threshold() {
         let s = CompactionStrategy::from_model(&ModelConfig::default());
-        let msgs = vec!["hello"; 10];
-        let refs: Vec<&str> = msgs.iter().map(|s| *s).collect();
+        let msgs = ["hello"; 10];
+        let refs: Vec<&str> = msgs.to_vec();
         assert!(matches!(
             s.evaluate(&refs),
             CompactionDecision::NoAction { .. }
@@ -66,9 +66,11 @@ mod tests {
     #[rstest]
     #[test]
     fn compact_when_over_threshold() {
-        let mut model = ModelConfig::default();
-        model.context_window_size = 10;
-        model.compaction_threshold = 0.5;
+        let model = ModelConfig {
+            context_window_size: 10,
+            compaction_threshold: 0.5,
+            ..Default::default()
+        };
         let s = CompactionStrategy::from_model(&model);
         let big = "x".repeat(100);
         let refs = vec![big.as_str()];

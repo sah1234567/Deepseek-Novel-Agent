@@ -1,15 +1,10 @@
-# Novel Agent 测试脚本
-# 使用 cargo-nextest 替代 cargo test（更快、自带超时检测）
+# Novel Agent test script — matches GitHub CI (ci-rust-test.sh / --profile ci).
 
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot\..
 
-Write-Host "=== Novel Agent: cargo nextest run (workspace) ===" -ForegroundColor Cyan
-cargo nextest run --workspace
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-Write-Host "=== Novel Agent: cargo nextest run (integration) ===" -ForegroundColor Cyan
-cargo nextest run -p novel-integration-tests
+Write-Host "=== cargo nextest run --workspace --profile ci ===" -ForegroundColor Cyan
+cargo nextest run --workspace --profile ci
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 # Optional live DeepSeek API test (requires network + API key in env)

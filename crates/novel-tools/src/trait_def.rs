@@ -38,10 +38,8 @@ pub trait Tool: Send + Sync {
     }
 
     fn check_permissions(&self, input: &Value, ctx: &ToolContext) -> PermissionResult {
-        if let Some(reason) = ctx.deny_rule_block(
-            self.name(),
-            optional_file_path(input).as_deref(),
-        ) {
+        if let Some(reason) = ctx.deny_rule_block(self.name(), optional_file_path(input).as_deref())
+        {
             return PermissionResult::Deny { reason };
         }
         if self.name() == "ForkSubAgent" && !ctx.allow_fork {

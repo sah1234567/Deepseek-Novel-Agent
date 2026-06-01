@@ -27,12 +27,3 @@ export function apiMessagesToUi(messages: ApiUiMessage[]): UIMessage[] {
       messageKind: m.messageKind,
     }));
 }
-
-export function tryParseJson(raw: string): unknown {
-  if (!raw.trim()) return {};
-  try {
-    return JSON.parse(raw) as unknown;
-  } catch {
-    return raw;
-  }
-}

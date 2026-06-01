@@ -88,8 +88,7 @@ fn matcher_matches(matcher: &str, tool_name: &str, tool_input: Option<&Value>) -
         let Some(v) = tool_input else {
             return false;
         };
-        return optional_file_path(v)
-            .is_some_and(|p| normalize_rel_path(&p).contains("chapters/"));
+        return optional_file_path(v).is_some_and(|p| normalize_rel_path(&p).contains("chapters/"));
     }
     if matcher.starts_with("Write|Edit") {
         return tool_name == "Write" || tool_name == "Edit";
@@ -108,7 +107,6 @@ fn truncate(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     #[test]
     fn default_hook_config_is_empty() {
@@ -125,7 +123,7 @@ mod tests {
 
     #[test]
     fn tool_schemas_filtered() {
-        let reg = novel_tools::default_registry(PathBuf::from("."));
+        let reg = novel_tools::default_registry();
         let schemas = tool_schemas_for_agent(&reg, &["Read".into(), "NoSuch".into()]);
         assert_eq!(schemas.len(), 1);
         assert_eq!(schemas[0].0, "Read");

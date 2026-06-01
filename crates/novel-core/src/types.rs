@@ -153,8 +153,13 @@ pub enum CompactionAction {
     Started,
     GeneratingSummary,
     RebuildingSession,
-    Done { tokens_before: usize, tokens_after: usize },
-    Failed { reason: String },
+    Done {
+        tokens_before: usize,
+        tokens_after: usize,
+    },
+    Failed {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -170,9 +175,7 @@ pub enum TerminalReason {
     MaxReactLoops(u32),
     AbortedStreaming,
     AbortedTools,
-    ModelError {
-        message: String,
-    },
+    ModelError { message: String },
 }
 
 impl TerminalReason {

@@ -21,9 +21,9 @@ env:
   CARGO_BUILD_JOBS: 1
 
 jobs:
-  # ── 前端：与 verify_all 一致 ───────────────────────────────
+  # ── 前端：Vitest + build（与 post-change-checklist 步骤 6 一致）──
   frontend:
-    name: Frontend
+    name: Frontend (Vitest + build)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -34,12 +34,8 @@ jobs:
           cache: npm
           cache-dependency-path: ui/package-lock.json
 
-      - name: Install, build, test
-        working-directory: ui
-        run: |
-          npm ci
-          npm run build
-          npm test
+      - name: npm test (no warnings) + build
+        run: bash scripts/ci-frontend.sh
 
   # ── Rust 静态检查 + 单元/集成测试（Ubuntu，最快反馈）────────
   rust:
@@ -57,31 +53,50 @@ jobs:
           workspaces: .
           cache-all-crates: true
 
-      - name: rustfmt
-        run: cargo fmt --all -- --check
+      - name: rustfmt + cargo check
+        run: bash scripts/ci-rust-static.sh
 
-      - name: cargo check
-        run: cargo check --workspace
-
-      - name: clippy (deny unwrap in core crates)
-        shell: bash
-        run: |
-          set -euo pipefail
-          for pkg in novel-core novel-knowledge novel-compaction novel-config novel-skills novel-deepseek; do
-            echo "=== clippy -p $pkg ==="
-            cargo clippy -p "$pkg" -- -D clippy::unwrap_used
-          done
+      - name: clippy (workspace, deny warnings + unwrap_used)
+        run: bash scripts/ci-clippy.sh
 
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest
 
-      - name: nextest (workspace + integration)
-        run: |
-          cargo nextest run --workspace
-          cargo nextest run -p novel-integration-tests
+      - name: nextest (workspace, CI profile)
+        run: bash scripts/ci-rust-test.sh
 
-  # ── 跨平台测试（仅 main/master push，PR 不跑以省分钟）──────
+  # ── Windows 全量门禁（与 scripts/ci-windows-gate.sh / 本地 ci-windows.ps1 一致）──
+  rust-windows:
+    name: Rust (Windows gate)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+          cache-all-crates: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: Windows CI gate (ci-windows-gate.sh)
+        shell: bash
+        run: bash scripts/ci-windows-gate.sh
+
+  # ── 跨平台 nextest（仅 main/master push；Windows 已由 rust-windows 覆盖）──────
   rust-matrix:
     name: Rust (${{ matrix.os }})
     if: github.event_name == 'push'
@@ -90,7 +105,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -112,10 +127,9 @@ jobs:
         with:
           tool: cargo-nextest
 
-      - name: nextest
-        run: |
-          cargo nextest run --workspace
-          cargo nextest run -p novel-integration-tests
+      - name: nextest (workspace, CI profile)
+        shell: bash
+        run: bash scripts/ci-rust-test.sh
 
   # ── Tauri 壳编译冒烟（不打包；无需图标）────────────────────
   tauri-compile:
@@ -138,19 +152,8 @@ jobs:
           cache: npm
           cache-dependency-path: ui/package-lock.json
 
-      - name: Build frontend for Tauri
-        working-directory: ui
-        run: npm ci && npm run build
-
-      - name: Install Linux Tauri deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev \
-            libssl-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev
-
-      - name: cargo build novel-agent (src-tauri)
-        run: cargo build -p novel-agent --manifest-path src-tauri/Cargo.toml
+      - name: Tauri compile smoke
+        run: bash scripts/ci-tauri.sh
 
   # ── 依赖安全审计 ───────────────────────────────────────────
   security-audit:
@@ -161,6 +164,5 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - uses: rustsec/audit-check@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: cargo audit
+        run: bash scripts/ci-security-audit.sh

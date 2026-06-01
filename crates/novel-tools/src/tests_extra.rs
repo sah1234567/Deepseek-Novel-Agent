@@ -9,7 +9,7 @@ mod bash_tests {
     async fn bash_lists_directory() {
         let tmp = TempDir::new().unwrap();
         std::fs::write(tmp.path().join("hello.txt"), "x").unwrap();
-        let reg = Arc::new(default_registry(tmp.path().to_path_buf()));
+        let reg = Arc::new(default_registry());
         let ex = ToolExecutor::new(reg);
         let ctx = ToolContext {
             permission_mode: PermissionMode::Auto,
@@ -33,7 +33,7 @@ mod bash_tests {
     #[tokio::test(flavor = "current_thread")]
     async fn bash_blocks_rm_rf() {
         let tmp = TempDir::new().unwrap();
-        let reg = Arc::new(default_registry(tmp.path().to_path_buf()));
+        let reg = Arc::new(default_registry());
         let ex = ToolExecutor::new(reg);
         let ctx = ToolContext {
             permission_mode: PermissionMode::Auto,
@@ -64,8 +64,7 @@ mod novel_tools_tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn default_registry_has_all_novel_tools() {
-        let tmp = TempDir::new().unwrap();
-        let reg = default_registry(tmp.path().to_path_buf());
+        let reg = default_registry();
         let names = [
             "Read",
             "Write",
@@ -103,7 +102,7 @@ mod novel_tools_tests {
              | Ch5 | F01 | 埋设 | 伤疤 | 待回收 | Ch10 | 陈默 |\n",
         )
         .unwrap();
-        let reg = Arc::new(default_registry(tmp.path().to_path_buf()));
+        let reg = Arc::new(default_registry());
         let ex = ToolExecutor::new(reg);
         let ctx = ToolContext {
             permission_mode: PermissionMode::Auto,
@@ -136,7 +135,7 @@ mod permission_tests {
     fn plan_mode_allows_write_under_plan_only() {
         use crate::PermissionResult;
         let tmp = TempDir::new().unwrap();
-        let reg = default_registry(tmp.path().to_path_buf());
+        let reg = default_registry();
         let write = reg.get("Write").expect("Write");
         let ctx = ToolContext {
             permission_mode: PermissionMode::Plan,
@@ -159,7 +158,7 @@ mod permission_tests {
     fn todo_write_allowed_in_normal_mode() {
         use crate::PermissionResult;
         let tmp = TempDir::new().unwrap();
-        let reg = default_registry(tmp.path().to_path_buf());
+        let reg = default_registry();
         let tool = reg.get("TodoWrite").expect("TodoWrite registered");
         let ctx = ToolContext {
             permission_mode: PermissionMode::Normal,
@@ -173,7 +172,7 @@ mod permission_tests {
     #[tokio::test(flavor = "current_thread")]
     async fn user_approved_write_bypasses_normal_mode_ask() {
         let tmp = TempDir::new().unwrap();
-        let reg = Arc::new(default_registry(tmp.path().to_path_buf()));
+        let reg = Arc::new(default_registry());
         let ex = ToolExecutor::new(reg);
         let ctx = ToolContext {
             permission_mode: PermissionMode::Normal,
@@ -204,10 +203,7 @@ mod permission_tests {
             ..ToolContext::new(tmp.path().to_path_buf())
         };
         let out = crate::builtin::GlobTool
-            .call(
-                json!({"glob_pattern": "*hello*", "search_root": "."}),
-                &ctx,
-            )
+            .call(json!({"glob_pattern": "*hello*", "search_root": "."}), &ctx)
             .await
             .unwrap();
         assert!(out.content.contains("hello.txt"));
@@ -216,7 +212,7 @@ mod permission_tests {
     #[tokio::test(flavor = "current_thread")]
     async fn write_accepts_file_path_alias() {
         let tmp = TempDir::new().unwrap();
-        let reg = Arc::new(default_registry(tmp.path().to_path_buf()));
+        let reg = Arc::new(default_registry());
         let ex = ToolExecutor::new(reg);
         let ctx = ToolContext {
             permission_mode: PermissionMode::Auto,

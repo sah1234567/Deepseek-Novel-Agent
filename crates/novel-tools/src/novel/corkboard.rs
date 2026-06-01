@@ -2,9 +2,9 @@ use super::common::{count_chinese_chars, in_chapter_range, list_outline_files};
 use crate::{Tool, ToolContext, ToolError, ToolOutput};
 use async_trait::async_trait;
 use regex::Regex;
-use std::sync::OnceLock;
 use serde::Serialize;
 use serde_json::{json, Value};
+use std::sync::OnceLock;
 
 #[derive(Debug, Serialize)]
 struct CorkboardCard {
@@ -57,7 +57,9 @@ fn parse_scene_sections(content: &str, chapter_num: u32) -> Vec<CorkboardCard> {
             .map(|m| m.as_str().trim())
             .unwrap_or("")
             .to_string();
-        let line_idx = content[..cap.get(0).expect("capture group 0").start()].lines().count();
+        let line_idx = content[..cap.get(0).expect("capture group 0").start()]
+            .lines()
+            .count();
         scene_starts.push((num, title, line_idx));
     }
 
@@ -113,7 +115,8 @@ fn parse_scene_sections(content: &str, chapter_num: u32) -> Vec<CorkboardCard> {
             .lines()
             .find(|l| l.contains('字'))
             .and_then(|l| {
-                word_count_regex().captures(l)
+                word_count_regex()
+                    .captures(l)
                     .and_then(|c| c.get(1))
                     .and_then(|m| m.as_str().parse().ok())
             })
@@ -310,7 +313,8 @@ impl Tool for CorkboardTool {
 
         let result = CorkboardResult { cards };
         Ok(ToolOutput {
-            content: serde_json::to_string_pretty(&result).map_err(|e| ToolError::Execution(format!("json serialize: {e}")))?,
+            content: serde_json::to_string_pretty(&result)
+                .map_err(|e| ToolError::Execution(format!("json serialize: {e}")))?,
             is_error: false,
         })
     }

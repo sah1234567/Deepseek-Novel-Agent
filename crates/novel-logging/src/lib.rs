@@ -1,3 +1,6 @@
+#![deny(clippy::unwrap_used)]
+#![cfg_attr(test, allow(clippy::unwrap_used))]
+
 use std::path::Path;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
@@ -24,8 +27,8 @@ fn wants_file_log(project_root: Option<&Path>) -> Option<std::path::PathBuf> {
 /// Initialize tracing: human-readable stderr, optional JSON file at `{project_root}/.novel/logs/debug.log`.
 pub fn init_logging(project_root: Option<&Path>) {
     INIT.call_once(|| {
-        let filter = EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new(DEFAULT_FILTER));
+        let filter =
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_FILTER));
         let stderr_layer = fmt::layer().with_target(true).with_thread_ids(false);
 
         if let Some(log_path) = wants_file_log(project_root) {
@@ -52,14 +55,4 @@ pub fn init_logging(project_root: Option<&Path>) {
             .with(stderr_layer)
             .try_init();
     });
-}
-
-/// Initialize tracing to stderr only (no project root).
-pub fn init() {
-    init_logging(None);
-}
-
-/// Backward-compatible alias: enables file log when `NOVEL_DEBUG_LOG=1` or debug build.
-pub fn init_with_json_log(project_root: &Path) {
-    init_logging(Some(project_root));
 }

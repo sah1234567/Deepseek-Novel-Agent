@@ -66,7 +66,7 @@ impl Tool for EditTool {
     fn validate_input(&self, input: &Value) -> Result<(), ValidationError> {
         extract_file_path(input)?;
         require_str(input, "old_string")?;
-        if !input.get("new_string").is_some() {
+        if input.get("new_string").is_none() {
             return Err(ValidationError::MissingField("new_string".into()));
         }
         Ok(())

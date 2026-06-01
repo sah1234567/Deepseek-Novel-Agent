@@ -54,7 +54,11 @@ impl TokenUsage {
 
     pub fn cache_hit_rate(&self) -> f64 {
         let denom = self.total_prompt();
-        if denom == 0 { 0.0 } else { self.cache_hit_tokens as f64 / denom as f64 }
+        if denom == 0 {
+            0.0
+        } else {
+            self.cache_hit_tokens as f64 / denom as f64
+        }
     }
 }
 
@@ -109,4 +113,3 @@ pub struct WebSearchResult {
     pub url: String,
     pub snippet: String,
 }
-

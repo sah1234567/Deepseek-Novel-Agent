@@ -1,3 +1,6 @@
+#![deny(clippy::unwrap_used)]
+#![cfg_attr(test, allow(clippy::unwrap_used))]
+
 mod agent_config;
 mod error;
 mod hook;
@@ -6,8 +9,8 @@ mod paths;
 mod project;
 
 pub use agent_config::{
-    load_agent_api_config, load_agent_api_config_from_root, resolve_agent_api_base,
-    resolve_agent_api_key, save_agent_api_config, AgentApiConfig,
+    load_agent_api_config, resolve_agent_api_base, resolve_agent_api_key, save_agent_api_config,
+    AgentApiConfig,
 };
 pub use error::ConfigError;
 pub use hook::{HookConfig, HookMatcher, HookRule};

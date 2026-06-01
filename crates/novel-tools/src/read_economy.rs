@@ -44,7 +44,11 @@ pub fn max_lines_for_path(path: &str) -> Option<usize> {
     }
 }
 
-pub fn read_pre_check(path: &str, limit: Option<usize>, total_lines: usize) -> Result<(), ToolError> {
+pub fn read_pre_check(
+    path: &str,
+    limit: Option<usize>,
+    total_lines: usize,
+) -> Result<(), ToolError> {
     let Some(max) = max_lines_for_path(path) else {
         return Ok(());
     };

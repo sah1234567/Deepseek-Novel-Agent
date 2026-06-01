@@ -1,8 +1,8 @@
 //! Unified pipeline: tool execution result → LLM-facing tool_result text.
 
+use crate::read_economy::enforce_tool_output_limits;
 use crate::tool_error_hints::enhance_tool_error_for_llm;
 use crate::tool_result_middleware::{append_middleware_lines, MiddlewareCtx};
-use crate::read_economy::enforce_tool_output_limits;
 use crate::{ToolError, ToolOutput};
 use serde_json::Value;
 
@@ -101,7 +101,9 @@ mod tests {
     fn read_dedup_injects_hint() {
         let spec = ToolResultSpec {
             tool_name: "Read",
-            tool_input: Some(&serde_json::json!({"file_path": "chapters/ch01.md", "offset": 5, "limit": 8})),
+            tool_input: Some(
+                &serde_json::json!({"file_path": "chapters/ch01.md", "offset": 5, "limit": 8}),
+            ),
         };
         let out = format_tool_result_for_llm(
             spec,
@@ -129,7 +131,8 @@ mod tests {
             tool_name: "Edit",
             tool_input: None,
         };
-        let err = ToolError::Execution("Read foo.md before editing (read-before-write policy)".into());
+        let err =
+            ToolError::Execution("Read foo.md before editing (read-before-write policy)".into());
         let out = format_tool_result_for_llm(spec, Err(err));
         assert!(out.content.contains("Next steps:"));
         assert!(out.content.contains("Read or Tail"));

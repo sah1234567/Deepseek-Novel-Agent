@@ -2,13 +2,17 @@ use crate::{require_str_any, Tool, ToolContext, ToolError, ToolOutput};
 use async_trait::async_trait;
 use novel_skills::load_skill;
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub struct InvokeSkillTool;
 
 /// Resolve a skill id to `skills/{skill_id}/SKILL.md`.
 /// Checks project-level override first, then agent-level skills dir.
-fn resolve_skill_path(project_root: &PathBuf, skills_dir: Option<&PathBuf>, skill_id: &str) -> Option<PathBuf> {
+fn resolve_skill_path(
+    project_root: &Path,
+    skills_dir: Option<&Path>,
+    skill_id: &str,
+) -> Option<PathBuf> {
     // Project-level override
     let folder_path = project_root.join("skills").join(skill_id).join("SKILL.md");
     if folder_path.exists() {
@@ -57,9 +61,10 @@ impl Tool for InvokeSkillTool {
 
     async fn call(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
         let skill_id = require_str_any(&input, &["skill_id", "skillId"])?;
-        let path = resolve_skill_path(&ctx.project_root, ctx.skills_dir.as_ref(), &skill_id).ok_or_else(|| {
-            ToolError::Execution(format!("skill not found: skills/{skill_id}/SKILL.md"))
-        })?;
+        let path = resolve_skill_path(&ctx.project_root, ctx.skills_dir.as_deref(), &skill_id)
+            .ok_or_else(|| {
+                ToolError::Execution(format!("skill not found: skills/{skill_id}/SKILL.md"))
+            })?;
         let skill = load_skill(&path).map_err(|e| ToolError::Execution(e.to_string()))?;
 
         // Build base directory prefix (like Claude Code's "Base directory for this skill")

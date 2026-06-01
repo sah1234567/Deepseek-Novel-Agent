@@ -31,7 +31,11 @@ mod tests {
 
     #[test]
     fn partial_report_has_task_and_explanation() {
-        let r = build_partial_report("KnowledgeAuditor", "扫描第3章", OVERFLOW_KIND_INPUT_REJECTED);
+        let r = build_partial_report(
+            "KnowledgeAuditor",
+            "扫描第3章",
+            OVERFLOW_KIND_INPUT_REJECTED,
+        );
         assert!(r.contains("## 任务"));
         assert!(r.contains("扫描第3章"));
         assert!(r.contains(OVERFLOW_KIND_INPUT_REJECTED));

@@ -24,7 +24,22 @@ pub struct UiMessage {
     pub message_kind: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionTranscriptArchive {
+    pub epoch: i32,
+    pub messages: Vec<UiMessage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionTranscript {
+    pub archives: Vec<SessionTranscriptArchive>,
+    pub active: Vec<UiMessage>,
+}
+
 const SUB_AGENT_REPORT_PREFIX: &str = "[子 Agent 完成:";
+const CONTEXT_REFRESH_PREFIX: &str = "[上下文刷新]";
 
 pub fn fork_messages_to_ui(messages: &[novel_state::ForkMessage]) -> Vec<UiMessage> {
     let mut tool_names: HashMap<String, String> = HashMap::new();
@@ -185,7 +200,9 @@ pub fn stored_messages_to_ui(stored: &[StoredMessage]) -> Vec<UiMessage> {
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            let message_kind = if text.starts_with(SUB_AGENT_REPORT_PREFIX) {
+            let message_kind = if text.starts_with(CONTEXT_REFRESH_PREFIX) {
+                Some("contextRefresh".into())
+            } else if text.starts_with(SUB_AGENT_REPORT_PREFIX) {
                 Some("subAgentReport".into())
             } else {
                 None
@@ -195,7 +212,11 @@ pub fn stored_messages_to_ui(stored: &[StoredMessage]) -> Vec<UiMessage> {
                 kind: "text".to_string(),
                 text,
             }];
-            if let Some(rc) = m.content_json.get("reasoning_content").and_then(|v| v.as_str()) {
+            if let Some(rc) = m
+                .content_json
+                .get("reasoning_content")
+                .and_then(|v| v.as_str())
+            {
                 if !rc.is_empty() {
                     blocks.insert(
                         0,
@@ -209,7 +230,7 @@ pub fn stored_messages_to_ui(stored: &[StoredMessage]) -> Vec<UiMessage> {
             }
             UiMessage {
                 id: m.id.clone(),
-                role: if message_kind.is_some() {
+                role: if message_kind.as_deref() == Some("subAgentReport") {
                     "subAgentReport".to_string()
                 } else {
                     m.role.clone()
@@ -221,6 +242,26 @@ pub fn stored_messages_to_ui(stored: &[StoredMessage]) -> Vec<UiMessage> {
             }
         })
         .collect()
+}
+
+pub fn build_session_transcript(
+    db: &novel_state::Database,
+    session_id: &str,
+) -> Result<SessionTranscript, novel_state::StateError> {
+    let epochs = db.get_archived_epochs(session_id)?;
+    let mut archives = Vec::with_capacity(epochs.len());
+    for epoch in epochs {
+        let stored = db.get_archived_messages(session_id, epoch)?;
+        archives.push(SessionTranscriptArchive {
+            epoch,
+            messages: stored_messages_to_ui(&stored),
+        });
+    }
+    let active_stored = db.get_session_messages(session_id, None)?;
+    Ok(SessionTranscript {
+        archives,
+        active: stored_messages_to_ui(&active_stored),
+    })
 }
 
 #[cfg(test)]
@@ -261,7 +302,11 @@ mod tests {
                 "ok",
                 serde_json::json!({ "content": "ok", "tool_call_id": "tc1" }),
             ),
-            stored("assistant", "done", serde_json::json!({ "content": "done" })),
+            stored(
+                "assistant",
+                "done",
+                serde_json::json!({ "content": "done" }),
+            ),
         ]);
         assert_eq!(msgs.len(), 4);
         assert_eq!(msgs[0].role, "user");
@@ -278,6 +323,17 @@ mod tests {
             stored("user", "hi", serde_json::json!({ "content": "hi" })),
         ]);
         assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].role, "user");
+    }
+
+    #[test]
+    fn context_refresh_message_kind() {
+        let msgs = stored_messages_to_ui(&[stored(
+            "user",
+            "ctx",
+            serde_json::json!({ "content": "[上下文刷新]\n## 会话历史摘要\nsum" }),
+        )]);
+        assert_eq!(msgs[0].message_kind.as_deref(), Some("contextRefresh"));
         assert_eq!(msgs[0].role, "user");
     }
 }

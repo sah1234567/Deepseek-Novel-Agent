@@ -159,20 +159,20 @@ mod tests {
 
     #[test]
     fn list_nihao_work_chapters_if_present() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../works/你好");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../works/你好");
         if !root.is_dir() {
             return;
         }
         let files = list_project_files(&root).unwrap();
         assert!(files.iter().any(|e| e.path == "chapters"));
-        assert!(files.iter().any(|e| e.path.starts_with("chapters/") && !e.is_dir));
+        assert!(files
+            .iter()
+            .any(|e| e.path.starts_with("chapters/") && !e.is_dir));
     }
 
     #[test]
     fn read_nihao_chapter_if_present() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../works/你好");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../works/你好");
         if !root.is_dir() {
             return;
         }

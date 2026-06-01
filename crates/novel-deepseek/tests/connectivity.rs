@@ -1,6 +1,7 @@
 //! Live connectivity checks against DeepSeek endpoints from `config.toml`.
 //! Run: `DEEPSEEK_API_KEY=sk-... cargo test -p novel-deepseek -- --ignored --nocapture live_endpoints`
 
+#![allow(clippy::unwrap_used)]
 use novel_deepseek::{
     verify_endpoints, verify_web_search_endpoint, ChatClient, LlmChatMessage, StreamEvent,
     StreamOutcome,
@@ -68,7 +69,7 @@ async fn drain_after_interrupt_returns_three_class_tokens() {
             &messages,
             &[],
             512,
-            |_: StreamEvent| {},     // drop stream events
+            |_: StreamEvent| {},                     // drop stream events
             None::<fn(novel_deepseek::LlmToolCall)>, // no tool callback
             Some(Arc::clone(&cancel)),
         )
@@ -81,10 +82,14 @@ async fn drain_after_interrupt_returns_three_class_tokens() {
             partial,
             background_usage,
         } => {
-            assert!(partial.content.is_none() || partial.content.as_deref() == Some(""),
-                "cancelled before first chunk → content empty");
-            assert!(partial.usage.is_none(),
-                "cancelled before first chunk → no SSE usage yet (drain provides it)");
+            assert!(
+                partial.content.is_none() || partial.content.as_deref() == Some(""),
+                "cancelled before first chunk → content empty"
+            );
+            assert!(
+                partial.usage.is_none(),
+                "cancelled before first chunk → no SSE usage yet (drain provides it)"
+            );
             background_usage
         }
         StreamOutcome::Complete(_) => {
@@ -100,7 +105,10 @@ async fn drain_after_interrupt_returns_three_class_tokens() {
         .expect("drain returned None (token data missing)");
 
     let total_prompt = usage.cache_hit_tokens + usage.cache_miss_tokens;
-    assert!(total_prompt > 0, "prompt tokens should be > 0, got {total_prompt}");
+    assert!(
+        total_prompt > 0,
+        "prompt tokens should be > 0, got {total_prompt}"
+    );
     assert!(
         usage.completion_tokens > 0,
         "completion tokens should be > 0 (drain generates 1 at min), got {}",
@@ -117,10 +125,7 @@ async fn drain_after_interrupt_returns_three_class_tokens() {
 
     println!(
         "Drain after interrupt: hit={}, miss={}, completion={}, total_prompt={}",
-        usage.cache_hit_tokens,
-        usage.cache_miss_tokens,
-        usage.completion_tokens,
-        total_prompt,
+        usage.cache_hit_tokens, usage.cache_miss_tokens, usage.completion_tokens, total_prompt,
     );
 }
 
@@ -133,15 +138,13 @@ async fn drain_with_thinking_returns_three_class_tokens() {
     let model = std::env::var("DEEPSEEK_MODEL").unwrap_or_else(|_| "deepseek-v4-flash".into());
     let mut client = ChatClient::deepseek(&api_key, &model, "https://api.deepseek.com/v1", true);
 
-    let messages = vec![
-        LlmChatMessage {
-            role: "user".into(),
-            content: "用50字介绍西湖。".into(),
-            tool_call_id: None,
-            tool_calls: None,
-            reasoning_content: None,
-        },
-    ];
+    let messages = vec![LlmChatMessage {
+        role: "user".into(),
+        content: "用50字介绍西湖。".into(),
+        tool_call_id: None,
+        tool_calls: None,
+        reasoning_content: None,
+    }];
 
     let cancel = Arc::new(AtomicBool::new(true));
     let result = client
@@ -157,7 +160,9 @@ async fn drain_with_thinking_returns_three_class_tokens() {
         .expect("create_stream should not error");
 
     let rx = match result {
-        StreamOutcome::Cancelled { background_usage, .. } => background_usage,
+        StreamOutcome::Cancelled {
+            background_usage, ..
+        } => background_usage,
         StreamOutcome::Complete(_) => panic!("expected Cancelled"),
     };
 

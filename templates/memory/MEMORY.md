@@ -14,4 +14,4 @@
 
 - 用户明确表达的偏好 → 写入 `memory/`
 - 作品规范（POV、字数）→ 写在 `AGENTS.md`
-- 压缩后 `[上下文刷新]` 会重新注入 memory 摘要
+- 压缩后 Memory 经 system `## Memory` 节在下次 compact 时刷新（非 `[上下文刷新]` user）

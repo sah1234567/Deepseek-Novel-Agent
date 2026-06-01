@@ -38,6 +38,20 @@ novel_agent/
 
 作品数据在 `works/` 下，与 Agent 代码分离。切换作品时前端同步切换会话库与文件树。审计日志在 `{作品}/.novel/logs/`。
 
+### 清理作品会话库
+
+需要清空对话历史时，可删除 `works/**/.novel-agent/state.db*`（不影响 `knowledge/`、`chapters/`、`settings.json` 与审计日志）：
+
+```powershell
+# Windows
+.\scripts\reset-work-databases.ps1
+
+# Git Bash / Linux / macOS
+./scripts/reset-work-databases.sh
+```
+
+运行后重启应用，在 StatusBar 用 `+` 新建 session 即可。
+
 ---
 
 ## 快速开始
@@ -71,7 +85,15 @@ cargo tauri build
 
 可选环境变量：`DEEPSEEK_API_BASE`、`NOVEL_MODEL`、`NOVEL_COMPACTION_THRESHOLD` 等（见 [novel-config](docs/crates/novel-config.md)）。
 
-**测试：** `cargo nextest run` 或 `.\scripts\run_tests.ps1`（Windows）。
+**测试与 CI：**
+
+```powershell
+.\scripts\ci-windows.ps1  # Windows：与 GitHub rust-windows 相同（推荐）
+.\scripts\ci-local.ps1      # Windows → ci-windows-gate；其他 OS → ci-pr-gate
+.\scripts\run_tests.ps1     # 仅后端 nextest（--profile ci）
+```
+
+前端：`cd ui && npm test && npm run build`。详见 [docs/README.md](docs/README.md) CI 节。
 
 ---
 
@@ -87,7 +109,9 @@ cargo tauri build
 
 ## 界面简述
 
-三栏：**文件树** · **待办** · **聊天**。StatusBar 提供作品/会话切换、权限模式、Token 统计与子 Agent 状态。聊天区支持流式回复、工具卡片批准/拒绝、AskUserQuestion 问答、SubAgent 详情 overlay。
+**两栏主区：** **文件树** · **聊天**（`TranscriptView` 分段渲染；SubAgent 经 `SubAgentForkCard` 进入 overlay）。**StatusBar** 提供作品/会话切换、Todo 下拉、权限与模型选择、Token 统计与子 Agent 状态。Settings 为弹窗面板。
+
+聊天区支持流式回复、工具卡片批准/拒绝、AskUserQuestion 问答、SubAgent 详情 overlay。Turn 进行中（流式、待批准工具、待回答问题）时模型与权限选择器禁用。
 
 **会话（StatusBar）：**
 
@@ -97,4 +121,4 @@ cargo tauri build
 | `+` 新建 | `create_session`，当前作品下空白会话 |
 | 标签 | `{标题} · 对话 N 轮 · {相对时间} · {模型}` |
 
-会话列表按最近 LLM 活跃时间降序排列。详见 [FRAMEWORK.md §2.2](FRAMEWORK.md#22-作品与会话)。
+会话列表按最近 LLM 活跃时间降序排列。StatusBar 展示会话累计 token 三分类与当前上下文（DB `context_tokens`，最近一次 API 快照；经轮询刷新）。详见 [FRAMEWORK.md §2.2](FRAMEWORK.md#22-作品与会话)。

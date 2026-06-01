@@ -17,15 +17,16 @@ fn main() {
             let config = AppConfig::from_agent_root(agent_root);
             let templates_dir = config.templates_dir();
             if !templates_dir.is_dir() {
-                return Err(format!(
-                    "scaffold templates not found: {}",
-                    templates_dir.display()
-                )
-                .into());
+                return Err(
+                    format!("scaffold templates not found: {}", templates_dir.display()).into(),
+                );
             }
             if !config.active_project.exists() {
-                novel_knowledge::init_project_scaffold(&config.active_project, templates_dir.as_path())
-                    .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+                novel_knowledge::init_project_scaffold(
+                    &config.active_project,
+                    templates_dir.as_path(),
+                )
+                .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
             }
             if let Some(parent) = config.db_path().parent() {
                 std::fs::create_dir_all(parent).ok();
@@ -51,6 +52,7 @@ fn main() {
             commands::list_works,
             commands::resume_session,
             commands::get_fork_messages,
+            commands::get_session_transcript,
             commands::get_session_messages,
             commands::list_sessions,
             commands::list_project_files,

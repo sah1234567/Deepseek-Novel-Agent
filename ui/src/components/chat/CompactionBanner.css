@@ -1,0 +1,48 @@
+.compaction-banner {
+  position: absolute;
+  top: 0.75rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.875rem;
+  border-radius: 999px;
+  font-size: 0.875rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+}
+
+.compaction-banner-info {
+  background: var(--color-bg-elevated, #2a2a2e);
+  color: var(--color-accent-blue, #7eb8ff);
+  border: 1px solid rgba(126, 184, 255, 0.35);
+}
+
+.compaction-banner-success {
+  background: var(--color-bg-elevated, #2a2a2e);
+  color: #8fd4a0;
+  border: 1px solid rgba(143, 212, 160, 0.35);
+}
+
+.compaction-banner-warn {
+  background: var(--color-bg-elevated, #2a2a2e);
+  color: var(--color-warn, #ffa198);
+  border: 1px solid rgba(255, 161, 152, 0.35);
+}
+
+.compaction-banner-spinner {
+  width: 0.875rem;
+  height: 0.875rem;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: compaction-spin 0.8s linear infinite;
+}
+
+@keyframes compaction-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

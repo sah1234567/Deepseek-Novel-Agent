@@ -1,18 +1,16 @@
+#![deny(clippy::unwrap_used)]
+#![cfg_attr(test, allow(clippy::unwrap_used))]
+
 mod causality;
 mod character;
 mod derive;
 mod error;
 mod evolution_log;
-mod faction;
 mod index;
 mod parser;
 mod project_tree;
-mod prop;
-mod regex_cache;
 mod scaffold;
 mod scaffold_templates;
-mod scene;
-mod skill_encyclopedia;
 
 pub use causality::{parse_causality_markdown, CausalityGraph, CausalityNode};
 pub use character::{CharacterCategory, CharacterFrontmatter, CharacterStatus};
@@ -23,34 +21,12 @@ pub use error::KnowledgeError;
 pub use evolution_log::{
     append_evolution_log, compress_evolution_table, find_table_last_row, TableRow,
 };
-pub use faction::{parse_faction_table, read_factions, FactionRow};
 pub use index::{ensure_index, rebuild_index};
 pub use parser::parse_frontmatter;
 pub use project_tree::{list_project_files, read_project_file, ProjectFileEntry};
-pub use prop::{last_prop_row, parse_prop_table, read_props, PropRow};
 pub use scaffold::init_project_scaffold;
-pub use scene::{last_scene_row, parse_scene_table, read_scenes, SceneRow};
-pub use skill_encyclopedia::{parse_skill_encyclopedia, read_skills, skill_exists, SkillEntry};
 
 use std::path::{Path, PathBuf};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KnowledgeFileType {
-    CharacterCard,
-    RelationIndex,
-    WorldSetting,
-    Timeline,
-    PowerSystem,
-    PropTracking,
-    SceneTracking,
-    FactionTracking,
-    SkillEncyclopedia,
-    Foreshadowing,
-    Causality,
-    Outline,
-    DetailedOutline,
-    MasterIndex,
-}
 
 pub struct KnowledgeStore {
     pub root: PathBuf,

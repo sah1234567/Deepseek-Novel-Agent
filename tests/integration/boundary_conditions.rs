@@ -1,5 +1,7 @@
 //! Integration tests covering FRAMEWORK.md §10 boundary conditions.
 
+#![allow(clippy::unwrap_used)]
+
 use novel_config::load_project_settings;
 use novel_core::{AgentEngine, AgentType, EngineConfig, ForkError};
 use novel_knowledge::{append_evolution_log, parse_causality_markdown, KnowledgeStore};
@@ -33,7 +35,7 @@ fn knowledge_utf8_only() {
     let tmp = TempDir::new().unwrap();
     let store = KnowledgeStore::new(tmp.path());
     let path = tmp.path().join("bad.bin");
-    std::fs::write(&path, &[0xFF, 0xFE]).unwrap();
+    std::fs::write(&path, [0xFF, 0xFE]).unwrap();
     let err = store.read_file("bad.bin").unwrap_err();
     assert!(matches!(
         err,
@@ -68,9 +70,7 @@ async fn fork_max_turns_boundary() {
     std::fs::create_dir_all(engine_config(&tmp).project_root.clone()).unwrap();
     let engine = AgentEngine::new(engine_config(&tmp)).unwrap();
     assert!(matches!(
-        engine
-            .fork(AgentType::KnowledgeAuditor, "  ".into())
-            .await,
+        engine.fork(AgentType::KnowledgeAuditor, "  ".into()).await,
         Err(novel_core::AgentError::Fork(ForkError::EmptyTask))
     ));
 }

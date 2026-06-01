@@ -111,7 +111,10 @@ fn glob_path_match(path: &str, pattern: &str) -> bool {
     let path = normalize_rel_path(path);
     let pattern = normalize_rel_path(pattern);
     glob_segments_match(
-        &path.split('/').filter(|s| !s.is_empty()).collect::<Vec<_>>(),
+        &path
+            .split('/')
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>(),
         &pattern
             .split('/')
             .filter(|s| !s.is_empty())
@@ -124,8 +127,9 @@ fn glob_segments_match(path: &[&str], pat: &[&str]) -> bool {
         ([], []) => true,
         (_, []) => false,
         ([], [head, tail @ ..]) if *head == "**" => glob_segments_match(&[], tail),
-        (path, [head, tail @ ..]) if *head == "**" => (0..=path.len())
-            .any(|i| glob_segments_match(&path[i..], tail)),
+        (path, [head, tail @ ..]) if *head == "**" => {
+            (0..=path.len()).any(|i| glob_segments_match(&path[i..], tail))
+        }
         ([p, ps @ ..], [q, qs @ ..]) if str_glob_match(p, q) => glob_segments_match(ps, qs),
         _ => false,
     }
@@ -242,7 +246,10 @@ mod tests {
             "knowledge/plot/细纲/chapter-001-细纲.md",
             "knowledge/**"
         ));
-        assert!(glob_path_match("chapters/chapter-001.md", "chapters/chapter-*.md"));
+        assert!(glob_path_match(
+            "chapters/chapter-001.md",
+            "chapters/chapter-*.md"
+        ));
         assert!(!glob_path_match("chapters/chapter-001.md", "knowledge/*"));
         assert!(glob_path_match(
             "knowledge/plot/细纲/chapter-001-细纲.md",
@@ -253,10 +260,7 @@ mod tests {
 
     #[test]
     fn expand_trailing_slash_star() {
-        assert_eq!(
-            expand_agent_glob_pattern("knowledge/*"),
-            "knowledge/**"
-        );
+        assert_eq!(expand_agent_glob_pattern("knowledge/*"), "knowledge/**");
     }
 
     #[test]
@@ -267,10 +271,7 @@ mod tests {
             "{}/knowledge/*.md",
             normalize_rel_path(&root.to_string_lossy())
         );
-        assert_eq!(
-            strip_project_prefix(&pattern, &root),
-            "knowledge/*.md"
-        );
+        assert_eq!(strip_project_prefix(&pattern, &root), "knowledge/*.md");
     }
 
     #[test]

@@ -9,11 +9,8 @@ pub enum AgentType {
 }
 
 /// Agent types the main session may fork via `ForkSubAgent`.
-pub const FORKABLE_AGENT_TYPE_NAMES: &[&str] = &[
-    "KnowledgeAuditor",
-    "ChapterCraftAnalyzer",
-    "GeneralPurpose",
-];
+pub const FORKABLE_AGENT_TYPE_NAMES: &[&str] =
+    &["KnowledgeAuditor", "ChapterCraftAnalyzer", "GeneralPurpose"];
 
 impl std::fmt::Display for AgentType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -55,7 +52,8 @@ impl AgentType {
                 agent_type: self,
                 name: "chapter-craft-analyzer".into(),
                 when_to_use: "对话质量 + 叙事节奏 + 角色情感轨迹（只读报告）".into(),
-                system_prompt: include_str!("../../../prompt/agents/chapter-craft-analyzer.md").into(),
+                system_prompt: include_str!("../../../prompt/agents/chapter-craft-analyzer.md")
+                    .into(),
                 max_react_loops: 25,
                 tools: vec![
                     "Read".into(),
@@ -149,10 +147,7 @@ mod tests {
             knowledge_auditor_max_react_loops: 42,
             ..AgentConfig::default()
         };
-        assert_eq!(
-            AgentType::KnowledgeAuditor.max_react_loops_for(&cfg),
-            42
-        );
+        assert_eq!(AgentType::KnowledgeAuditor.max_react_loops_for(&cfg), 42);
     }
 
     #[test]

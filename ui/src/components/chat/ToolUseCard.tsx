@@ -1,35 +1,38 @@
 import { useState } from "react";
-import type { ToolCall, StreamingToolUse } from "../../hooks/useAgent";
+import type { ToolCall } from "../../hooks/useAgent";
 import { formatToolSummary, formatToolInput } from "../../utils/tools";
 import "./ToolUseCard.css";
-
-type ToolLike = ToolCall | (StreamingToolUse & { needsApproval?: boolean; status?: ToolCall["status"]; result?: string; progressDescription?: string });
 
 export function ToolUseCard({
   tool,
   isStreamingInput,
-  isStreaming: _isStreaming,
   onApprove,
   onDeny,
 }: {
-  tool: ToolLike;
+  tool: ToolCall;
   isStreamingInput?: boolean;
-  isStreaming?: boolean;
   onApprove?: (id: string) => void;
   onDeny?: (id: string, reason?: string) => void;
 }) {
   const [detailOpen, setDetailOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
-  const isStreamingTool = isStreamingInput && "unparsedInput" in tool;
+  const isStreamingTool = isStreamingInput || tool.status === "streaming-args";
   const input = isStreamingTool
-    ? (tool.parsedInput !== undefined
-        ? tool.parsedInput
-        : (() => { try { return JSON.parse(tool.unparsedInput); } catch { return {}; } })())
-    : "input" in tool ? tool.input : {};
-  const status = "status" in tool && tool.status ? tool.status : "running";
-  const needsApproval = "needsApproval" in tool && !!tool.needsApproval;
-  const result = "result" in tool ? tool.result : undefined;
-  const progress = "progressDescription" in tool ? tool.progressDescription : undefined;
+    ? tool.parsedInput !== undefined
+      ? tool.parsedInput
+      : (() => {
+          try {
+            return JSON.parse(tool.unparsedInput ?? "{}");
+          } catch {
+            return {};
+          }
+        })()
+    : tool.input;
+  const status =
+    tool.status === "streaming-args" ? "running" : tool.status ?? "running";
+  const needsApproval = !!tool.needsApproval;
+  const result = tool.result;
+  const progress = tool.progressDescription;
   const toolName = tool.name;
 
   const statusIcon =

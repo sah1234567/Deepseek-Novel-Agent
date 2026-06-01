@@ -6,8 +6,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::{watch, Semaphore};
 
-pub const DEFAULT_MAX_CONCURRENT_TOOLS: usize = 10;
-
 #[derive(Clone)]
 pub struct ToolCallSpec {
     pub id: String,
@@ -81,9 +79,11 @@ struct TrackedTool {
     status: TrackedStatus,
 }
 
+type CompletedToolResults = Vec<(String, Result<crate::ToolOutput, ToolError>)>;
+
 pub struct StreamingToolExecutor {
     queue: VecDeque<TrackedTool>,
-    completed: Arc<Mutex<Vec<(String, Result<crate::ToolOutput, ToolError>)>>>,
+    completed: Arc<Mutex<CompletedToolResults>>,
     concurrency_sem: Arc<Semaphore>,
     serial_lock: Arc<tokio::sync::Mutex<()>>,
     registry: Arc<crate::ToolRegistry>,
@@ -244,10 +244,7 @@ impl StreamingToolExecutor {
                 let errored_description = Arc::clone(&self.errored_description);
                 let sibling_abort = self.sibling_abort.clone();
                 let handle = tokio::spawn(async move {
-                    let _permit = sem
-                        .acquire_owned()
-                        .await
-                        .expect("semaphore never closed");
+                    let _permit = sem.acquire_owned().await.expect("semaphore never closed");
                     let executor = ToolExecutor {
                         registry: registry.clone(),
                     };
@@ -329,9 +326,8 @@ impl StreamingToolExecutor {
             .iter()
             .map(|(id, _)| id.clone())
             .collect();
-        self.queue.retain(|t| {
-            !(t.status == TrackedStatus::Executing && done.contains(&t.call.id))
-        });
+        self.queue
+            .retain(|t| !(t.status == TrackedStatus::Executing && done.contains(&t.call.id)));
     }
 
     fn pending_count(&self, in_flight_handles: usize) -> usize {
@@ -447,8 +443,7 @@ mod tests {
 
     #[tokio::test]
     async fn partition_read_only_concurrent() {
-        let tmp = TempDir::new().unwrap();
-        let reg = Arc::new(default_registry(tmp.path().to_path_buf()));
+        let reg = Arc::new(default_registry());
         let ex = ToolExecutor::new(reg);
         let r = ex.registry.get("Read").unwrap();
         assert!(r.is_concurrency_safe());
@@ -458,8 +453,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_tool_is_cancel_on_interrupt() {
-        let tmp = TempDir::new().unwrap();
-        let reg = Arc::new(default_registry(tmp.path().to_path_buf()));
+        let reg = Arc::new(default_registry());
         assert_eq!(
             reg.get("Read").unwrap().interrupt_behavior(),
             InterruptBehavior::Cancel
@@ -473,7 +467,7 @@ mod tests {
     #[tokio::test]
     async fn abort_generates_synthetic_results() {
         let tmp = TempDir::new().unwrap();
-        let reg = Arc::new(default_registry(tmp.path().to_path_buf()));
+        let reg = Arc::new(default_registry());
         let ctx = ToolContext {
             permission_mode: PermissionMode::Auto,
             project_root: tmp.path().to_path_buf(),
@@ -496,7 +490,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("peek.txt");
         std::fs::write(&path, "hello").unwrap();
-        let reg = Arc::new(default_registry(tmp.path().to_path_buf()));
+        let reg = Arc::new(default_registry());
         let ctx = ToolContext {
             permission_mode: PermissionMode::Auto,
             project_root: tmp.path().to_path_buf(),
@@ -516,18 +510,18 @@ mod tests {
             }
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
-        assert!(!ex.peek_completed_results().is_empty(), "tool should finish");
-        // UI poll uses peek — buffer must still be intact for turn finalization.
         assert!(
-            ex.peek_completed_results()
-                .iter()
-                .any(|(id, r)| id == "r1" && r.is_ok())
+            !ex.peek_completed_results().is_empty(),
+            "tool should finish"
         );
+        // UI poll uses peek — buffer must still be intact for turn finalization.
+        assert!(ex
+            .peek_completed_results()
+            .iter()
+            .any(|(id, r)| id == "r1" && r.is_ok()));
         let final_results = ex.get_remaining_results().await;
         assert!(
-            final_results
-                .iter()
-                .any(|(id, r)| id == "r1" && r.is_ok()),
+            final_results.iter().any(|(id, r)| id == "r1" && r.is_ok()),
             "polled UI results must still be collected for the LLM turn"
         );
         let _ = tx;
@@ -539,7 +533,7 @@ mod tests {
         for name in ["a.txt", "b.txt", "c.txt"] {
             std::fs::write(tmp.path().join(name), "x").unwrap();
         }
-        let reg = Arc::new(default_registry(tmp.path().to_path_buf()));
+        let reg = Arc::new(default_registry());
         let ctx = ToolContext {
             permission_mode: PermissionMode::Auto,
             project_root: tmp.path().to_path_buf(),
@@ -555,7 +549,12 @@ mod tests {
             });
         }
         let results = ex.get_remaining_results().await;
-        assert_eq!(results.len(), 3, "expected one result per tool, got {:?}", results);
+        assert_eq!(
+            results.len(),
+            3,
+            "expected one result per tool, got {:?}",
+            results
+        );
         for (id, r) in &results {
             assert!(r.is_ok(), "tool {id} should succeed, got {r:?}");
             assert!(
@@ -569,7 +568,7 @@ mod tests {
     #[tokio::test]
     async fn unknown_tool_errors() {
         let tmp = TempDir::new().unwrap();
-        let reg = Arc::new(default_registry(tmp.path().to_path_buf()));
+        let reg = Arc::new(default_registry());
         let ex = ToolExecutor::new(reg);
         let ctx = ToolContext {
             permission_mode: PermissionMode::Auto,

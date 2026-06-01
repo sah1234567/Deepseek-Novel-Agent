@@ -161,7 +161,7 @@ mod tests {
     async fn errors_when_no_api_key() {
         std::env::remove_var("DEEPSEEK_API_KEY");
         let tmp = TempDir::new().unwrap();
-        let reg = Arc::new(default_registry(tmp.path().to_path_buf()));
+        let reg = Arc::new(default_registry());
         let ex = ToolExecutor::new(reg);
         let ctx = ToolContext {
             permission_mode: PermissionMode::Auto,
@@ -185,7 +185,7 @@ mod tests {
     #[ignore = "requires DEEPSEEK_API_KEY and network"]
     async fn writes_cache_under_dot_websearch() {
         let tmp = TempDir::new().unwrap();
-        let reg = Arc::new(default_registry(tmp.path().to_path_buf()));
+        let reg = Arc::new(default_registry());
         let ex = ToolExecutor::new(reg);
         let ctx = ToolContext {
             permission_mode: PermissionMode::Auto,

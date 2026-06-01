@@ -8,9 +8,20 @@
 
 ### 1.1 AgentEngine — 主引擎
 
-`AgentEngine` 管理完整的小说创作会话。创建时加载作品配置与 Skill、构建 23 个工具的 ToolRegistry、拼装 system prompt（静态层 + 5 个动态段），消息列表首条为 system message。`resume` 从 SQLite 恢复历史会话，`turn_number` 从已有消息推导。
+`AgentEngine` 管理完整的小说创作会话。创建时加载作品配置与 Skill、构建 23 个工具的 ToolRegistry、`assemble_system_prompt` 拼装 system（静态 + 动态段），**立即** persist `(0,0)` system 与 `system_static_frozen` metadata。`resume` 从 SQLite 加载**冻结** system（禁止 `build_initial_prompt` 覆盖），`turn_number` 从已有消息推导。
 
-每条用户消息 `turn_number += 1`；每次 LLM API 返回累计 token 与 `api_call_count`。主循环为 `handle_message → run_inner_turn_loop`，每轮 LLM 流式调用 + 流中 Tool 调度 → drain hooks → 下一轮或结束。
+每条用户消息 `turn_number += 1`；每次 LLM API 返回经 `Database::accumulate_session_tokens` 累计 token 与 `api_call_count`。主循环为 `handle_message → run_inner_turn_loop`，每轮 LLM 流式调用 + 流中 Tool 调度 → drain hooks → 下一轮或结束。
+
+**Token 记账（四类 DB 字段）：**
+
+| 字段 | 规则 |
+|------|------|
+| `cache_hit_tokens` / `cache_miss_tokens` / `completion_tokens` | 各自独立 `+=` 本次 API 对应值（主 Agent 与 SubAgent 均参与） |
+| `context_tokens` | 覆盖为本次 API 的 `hit+miss+comp`（主 Agent 与 SubAgent 调用均会更新 DB） |
+
+内存侧 `last_context_tokens` 供 compaction 阈值判断。StatusBar token 经 `get_app_status` 5s 轮询 + `turn-complete` / `session-resumed` 刷新。
+
+SubAgent 与主 Agent 共用 `EngineShared.active_llm`（含 UI model override），防止 flash/pro 混用导致 prefix cache 失效。
 
 **公共 API：**
 
@@ -18,7 +29,7 @@
 |------|------|
 | `new` / `resume` | 新建或恢复会话 |
 | `handle_message` | 用户消息，驱动完整的 inner turn loop |
-| `fork(agent_type, task)` | Fork 子 Agent |
+| `fork(agent_type, task)` | Fork 子 Agent（内部路径） |
 | `approve_tool` / `deny_tool` | 批准/拒绝待确认工具，批准后可续跑 turn |
 | `answer_question` | AskUserQuestion 回答后继续 turn |
 | `status_snapshot()` | 返回 `EngineStatus` 供前端轮询 |
@@ -33,7 +44,6 @@
 |------|---------------|------------|
 | `ForkSubAgent` 工具 | 一条摘要（`[子 Agent 完成: {type}]`） | `fork_messages` + UI overlay |
 | PostToolUse 自动触发 | **不 inject** | `fork_messages` + UI overlay |
-| Tauri IPC 手动 fork | 无 | `fork_messages` |
 
 工具路径：本批 subagent 并行执行 → join → 按 fork_queue FIFO 逐条注入摘要报告。父 system prompt 不变，DeepSeek prefix cache 可命中 `[m0]`。子 Agent 的消息数组仅 `[system_prompt, task_message]` 2 条。
 
@@ -59,15 +69,17 @@ Workflow（策划/写章/改稿/写后）经 **InvokeSkill** 加载对应 SKILL.
 
 **静态层：** `prompt/system.md` 经 `include_str!()` 编译期嵌入。
 
-**动态上下文：** agents_md、knowledge_index（≤2000 字符）、memory（≤4KB，截断时追加 WARNING）、progress（章节进度 + TodoWrite）、skill_summaries（仅 name+description 摘要，不含 body）。
+**动态上下文：** agents_md、knowledge_index（≤2000 字符）、memory（≤4KB，截断时追加 WARNING）、progress（章节进度 + TodoWrite）、skill_summaries（仅 name+description 摘要，不含 body；**压缩时读盘刷新**）。
 
-**Skill 加载：** Agent 级 `skills/` + 可选作品级 `works/{名}/skills/`（同 id 覆盖）；system prompt 只含摘要，body 经 InvokeSkill 按需加载，references 经 Read 渐进打开。
+**Skill 加载：** Agent 级 `skills/` + 可选作品级 `works/{名}/skills/`（同 id 覆盖）；system prompt 只含摘要（压缩时重读目录），body 经 InvokeSkill 按需加载，references 经 Read 渐进打开。
 
 **读盘经济：** `system.md` §2.3 + `novel-tools` pipeline 硬限（knowledge/** >80 行拒绝注入）；Grep 使用 ripgrep 后端；Read 256KB 硬限。
 
 **术语：** **Session Turn**（`turn_number`）= 用户一条消息及其完整 inner loop；**ReAct loop** = Turn 内单次 LLM→工具循环；**API 调用**（`api_call_count`）= 一次 LLM 请求，一次 Session Turn 可含多次。达 Subagent ReAct 上限时注入提醒 + report-only 收尾轮（禁 tool），非硬截断。
 
-**压缩后序列：** 刷新 system → `[激活 Skill]`（已 Invoke 的全文重注入）→ `[会话历史摘要]` → 最近 5 轮 ReAct。
+**压缩后序列（API 工作集）：** system（AGENTS/Workspace metadata 冻结 + Index/Memory/Progress/**Skills 摘要** 读盘刷新）→ `[上下文刷新]` user（Skill 全文 + 会话摘要）→ 最近 5 轮 ReAct。压缩 **mid-turn** 不新开 Session Turn。
+
+**KV cache：** system 中 AGENTS/Workspace 前缀跨压缩字节不变；Index/Memory/Progress/Skills 摘要与 `[上下文刷新]` 每次压缩更新。Resume 使用 DB 完整 system 快照。
 
 ### 1.5 断路器
 
@@ -87,7 +99,7 @@ Workflow（策划/写章/改稿/写后）经 **InvokeSkill** 加载对应 SKILL.
 
 `AbortController` 提供 `AtomicBool` 快路径 + `watch::channel` 广播。中断原因：`UserCancel`（Esc 键）、`SubmitInterrupt`（发送新消息中断当前流）。
 
-中断时：取消 SSE 流 → 持久化 partial assistant → 补充缺失 tool_result → drain 请求保持 token 计数准确。Compaction 期间中断则跳过 LLM 摘要，降级为规则截断。
+中断时：取消 SSE 流 → 持久化 partial assistant → 补充缺失 tool_result → drain 请求保持 token 计数准确。用户主动中断 emit `TurnComplete`（`was_interrupted`），**不** emit `Event::Error`。Compaction 期间中断则跳过 LLM 摘要，降级为规则截断。
 
 ### 1.9 Turn 状态机
 
@@ -119,7 +131,7 @@ LLM 流式输出期间，arguments JSON 完整即开始权限检查与调度：
 | AskUserQuestion | 创作分歧问答 |
 | TurnStart / TurnComplete | Turn 生命周期 + token 统计；pending 工具/问答时不 TurnComplete |
 | AssistantSegmentComplete | 单段 LLM 结束；可选 `fork_run_id` 供 overlay 分段 |
-| SubAgentStarted / SubAgentComplete | 子 Agent 生命周期（含 agent_type、task_preview） |
+| SubAgentStarted / SubAgentComplete | 子 Agent 生命周期（含 agent_type、task_preview、**source**） |
 | SubAgentStreamDelta / SubAgentToolUpdate | 子 Agent 流式正文与工具，实时推送前端 overlay |
-| CompactionProgress | 压缩进度（含 attempt 计数，供前端断路器 UI） |
-| Error | 错误（含 recoverable 标志） |
+| CompactionProgress | 压缩进度（`compaction-progress` → CompactionBanner；payload：`started` / `generating-summary` / `rebuilding-session` / `done` / `failed`） |
+| Error | 可恢复错误（`turn-complete` `phase: "error"`）；用户主动中断不走此路径 |

@@ -114,11 +114,14 @@ impl ChatClient {
     // ── Message / tool conversion ─────────────────────────────
 
     pub fn to_openai_messages(messages: &[LlmChatMessage]) -> Vec<Value> {
-        messages.iter().map(|m| msg_to_json(m)).collect()
+        messages.iter().map(msg_to_json).collect()
     }
 
     pub fn build_tools(tools: &[(String, String, Value)]) -> Vec<Value> {
-        tools.iter().map(|(name, desc, schema)| tool_to_json(name, desc, schema)).collect()
+        tools
+            .iter()
+            .map(|(name, desc, schema)| tool_to_json(name, desc, schema))
+            .collect()
     }
 
     // ── Streaming ─────────────────────────────────────────────
@@ -173,9 +176,7 @@ impl ChatClient {
                 tracing::warn!(%status, body_preview = %preview, "deepseek_rate_limited");
                 return Err(LlmError::RateLimited(text));
             }
-            if status.as_u16() == 400
-                && text.to_lowercase().contains("maximum context length")
-            {
+            if status.as_u16() == 400 && text.to_lowercase().contains("maximum context length") {
                 tracing::warn!(%status, body_preview = %preview, "deepseek_context_length_exceeded");
                 return Err(LlmError::ContextLengthExceeded { body: text });
             }
@@ -233,9 +234,15 @@ impl ChatClient {
                 let line = line_buf[..pos].trim().to_string();
                 line_buf = line_buf[pos + 1..].to_string();
 
-                if line.is_empty() { continue; }
-                let Some(payload) = line.strip_prefix("data: ") else { continue; };
-                if payload == "[DONE]" { break; }
+                if line.is_empty() {
+                    continue;
+                }
+                let Some(payload) = line.strip_prefix("data: ") else {
+                    continue;
+                };
+                if payload == "[DONE]" {
+                    break;
+                }
 
                 let chunk: StreamChunk = match serde_json::from_str(payload) {
                     Ok(c) => c,
@@ -250,8 +257,11 @@ impl ChatClient {
 
                 // Usage (may appear in any chunk with include_usage)
                 if let Some(u) = &chunk.usage {
-                    let hit = u.prompt_tokens_details.as_ref()
-                        .and_then(|d| d.cached_tokens).unwrap_or(0) as i64;
+                    let hit = u
+                        .prompt_tokens_details
+                        .as_ref()
+                        .and_then(|d| d.cached_tokens)
+                        .unwrap_or(0) as i64;
                     let miss = u.prompt_tokens.unwrap_or(0) as i64 - hit;
                     let comp = u.completion_tokens.unwrap_or(0) as i64;
                     usage = Some(TokenUsage::from_deepseek_usage(hit, miss, comp, 0));
@@ -270,7 +280,9 @@ impl ChatClient {
                             if !rc.is_empty() {
                                 reasoning_buf.push_str(rc);
                                 on_event(StreamEvent::ContentBlockDelta {
-                                    index: 0, delta: rc.clone(), kind: ContentBlockKind::Thinking,
+                                    index: 0,
+                                    delta: rc.clone(),
+                                    kind: ContentBlockKind::Thinking,
                                 });
                             }
                         }
@@ -278,7 +290,9 @@ impl ChatClient {
                         if let Some(c) = &delta.content {
                             content_buf.push_str(c);
                             on_event(StreamEvent::ContentBlockDelta {
-                                index: 0, delta: c.clone(), kind: ContentBlockKind::Text,
+                                index: 0,
+                                delta: c.clone(),
+                                kind: ContentBlockKind::Text,
                             });
                         }
                         // tool_calls
@@ -286,13 +300,23 @@ impl ChatClient {
                             for tc in tcs {
                                 let idx = tc.index;
                                 let entry = pending.entry(idx).or_insert_with(|| PendingTool {
-                                    id: String::new(), name: None, arguments: String::new(),
-                                    start_emitted: false, ready_emitted: false,
+                                    id: String::new(),
+                                    name: None,
+                                    arguments: String::new(),
+                                    start_emitted: false,
+                                    ready_emitted: false,
                                 });
-                                if let Some(id) = &tc.id { entry.id = id.clone(); }
+                                if let Some(id) = &tc.id {
+                                    entry.id = id.clone();
+                                }
                                 if let Some(func) = &tc.function {
-                                    if let Some(name) = &func.name { entry.name = Some(name.clone()); }
-                                    if !entry.start_emitted && entry.name.is_some() && !entry.id.is_empty() {
+                                    if let Some(name) = &func.name {
+                                        entry.name = Some(name.clone());
+                                    }
+                                    if !entry.start_emitted
+                                        && entry.name.is_some()
+                                        && !entry.id.is_empty()
+                                    {
                                         on_event(StreamEvent::ToolUseStarted {
                                             index: idx,
                                             tool_call_id: entry.id.clone(),
@@ -303,7 +327,8 @@ impl ChatClient {
                                     if let Some(args) = &func.arguments {
                                         if !args.is_empty() && !entry.id.is_empty() {
                                             on_event(StreamEvent::ToolInputDelta {
-                                                tool_call_id: entry.id.clone(), delta: args.clone(),
+                                                tool_call_id: entry.id.clone(),
+                                                delta: args.clone(),
                                             });
                                         }
                                         entry.arguments.push_str(args);
@@ -319,7 +344,9 @@ impl ChatClient {
             }
         }
 
-        on_event(StreamEvent::MessageStop { stop_reason: stop_reason.clone() });
+        on_event(StreamEvent::MessageStop {
+            stop_reason: stop_reason.clone(),
+        });
 
         if let Some(ref mut cb) = on_tool_call {
             for entry in pending.values_mut() {
@@ -357,7 +384,7 @@ impl ChatClient {
             Ok(v) => v,
             Err(_) => return, // invalid JSON, wait for next chunk
         };
-        if entry.id.is_empty() || parsed.as_object().map_or(true, |o| o.is_empty()) {
+        if entry.id.is_empty() || parsed.as_object().is_none_or(|o| o.is_empty()) {
             return;
         }
         entry.ready_emitted = true;
@@ -374,7 +401,11 @@ impl ChatClient {
         let mut tools = Vec::new();
         for (_, p) in pending.drain() {
             if let Some(name) = p.name {
-                tools.push(LlmToolCall { id: p.id, name, arguments: p.arguments });
+                tools.push(LlmToolCall {
+                    id: p.id,
+                    name,
+                    arguments: p.arguments,
+                });
             }
         }
         tools
@@ -388,8 +419,16 @@ impl ChatClient {
         stop_reason: Option<String>,
     ) -> LlmCompletion {
         LlmCompletion {
-            content: if content.is_empty() { None } else { Some(content) },
-            reasoning_content: if reasoning.is_empty() { None } else { Some(reasoning) },
+            content: if content.is_empty() {
+                None
+            } else {
+                Some(content)
+            },
+            reasoning_content: if reasoning.is_empty() {
+                None
+            } else {
+                Some(reasoning)
+            },
             tool_calls,
             usage: usage.clone(),
             stop_reason,
@@ -425,8 +464,11 @@ impl ChatClient {
     /// gone. Use the SSE `usage` chunk when available; drain is a last resort
     /// so interrupted turns record something rather than nothing.
     async fn drain_usage_background(
-        &self, messages: &[Value], tools: &[Value],
-        initial: Option<TokenUsage>, tx: tokio::sync::oneshot::Sender<Option<TokenUsage>>,
+        &self,
+        messages: &[Value],
+        tools: &[Value],
+        initial: Option<TokenUsage>,
+        tx: tokio::sync::oneshot::Sender<Option<TokenUsage>>,
         timeout_secs: u64,
     ) {
         let mut body = serde_json::json!({
@@ -436,39 +478,69 @@ impl ChatClient {
         if self.thinking_enabled {
             body["thinking"] = serde_json::json!({ "type": "enabled" });
         }
-        if !tools.is_empty() { body["tools"] = Value::Array(tools.to_vec()); }
+        if !tools.is_empty() {
+            body["tools"] = Value::Array(tools.to_vec());
+        }
         let url = format!("{}/chat/completions", self.api_base);
         let drain = async {
-            let resp = self.http.post(&url)
+            let resp = self
+                .http
+                .post(&url)
                 .header("Authorization", format!("Bearer {}", self.api_key))
-                .json(&body).send().await.ok()?;
+                .json(&body)
+                .send()
+                .await
+                .ok()?;
             let json: Value = resp.json().await.ok()?;
             let u = json.get("usage")?;
-            let hit = u.get("prompt_tokens_details")
+            let hit = u
+                .get("prompt_tokens_details")
                 .and_then(|d| d.get("cached_tokens"))
-                .and_then(|v| v.as_i64()).unwrap_or(0);
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
             let prompt = u.get("prompt_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
-            let comp = u.get("completion_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
+            let comp = u
+                .get("completion_tokens")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
             Some(TokenUsage::from_deepseek_usage(hit, prompt - hit, comp, 0))
         };
         let final_usage = tokio::time::timeout(Duration::from_secs(timeout_secs), drain)
-            .await.unwrap_or(initial);
+            .await
+            .unwrap_or(initial);
         let _ = tx.send(final_usage);
     }
 
     pub async fn complete_via_stream(
-        &mut self, messages: &[LlmChatMessage], tools: &[(String, String, Value)],
-        max_tokens: u32, cancel: Option<Arc<AtomicBool>>,
+        &mut self,
+        messages: &[LlmChatMessage],
+        tools: &[(String, String, Value)],
+        max_tokens: u32,
+        cancel: Option<Arc<AtomicBool>>,
     ) -> Result<LlmCompletion, LlmError> {
-        match self.create_stream(messages, tools, max_tokens, |_| {}, None::<fn(LlmToolCall)>, cancel).await? {
+        match self
+            .create_stream(
+                messages,
+                tools,
+                max_tokens,
+                |_| {},
+                None::<fn(LlmToolCall)>,
+                cancel,
+            )
+            .await?
+        {
             StreamOutcome::Complete(c) => Ok(c),
             StreamOutcome::Cancelled { .. } => Err(LlmError::Cancelled),
         }
     }
 
     pub fn offline_complete(messages: &[LlmChatMessage]) -> LlmCompletion {
-        let last_user = messages.iter().rev()
-            .find(|m| m.role == "user").map(|m| m.content.as_str()).unwrap_or("");
+        let last_user = messages
+            .iter()
+            .rev()
+            .find(|m| m.role == "user")
+            .map(|m| m.content.as_str())
+            .unwrap_or("");
         LlmCompletion {
             content: Some(format!("收到：{last_user}")),
             tool_calls: vec![],
@@ -524,8 +596,8 @@ impl ChatClient {
             return Err(LlmError::Api(format!("web_search HTTP {status}: {text}")));
         }
 
-        let json: serde_json::Value =
-            serde_json::from_str(&text).map_err(|e| LlmError::Api(format!("web_search JSON: {e}")))?;
+        let json: serde_json::Value = serde_json::from_str(&text)
+            .map_err(|e| LlmError::Api(format!("web_search JSON: {e}")))?;
 
         let mut results = Vec::new();
         if let Some(blocks) = json.get("content").and_then(|c| c.as_array()) {
@@ -533,11 +605,27 @@ impl ChatClient {
                 if block.get("type").and_then(|t| t.as_str()) == Some("web_search_tool_result") {
                     if let Some(tool_result) = block.get("content").and_then(|c| c.as_array()) {
                         for item in tool_result.iter().take(max_results) {
-                            let title = item.get("title").and_then(|t| t.as_str()).unwrap_or("").to_string();
-                            let result_url = item.get("url").and_then(|u| u.as_str()).unwrap_or("").to_string();
-                            let snippet = item.get("snippet").and_then(|s| s.as_str()).unwrap_or("").to_string();
+                            let title = item
+                                .get("title")
+                                .and_then(|t| t.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let result_url = item
+                                .get("url")
+                                .and_then(|u| u.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let snippet = item
+                                .get("snippet")
+                                .and_then(|s| s.as_str())
+                                .unwrap_or("")
+                                .to_string();
                             if !title.is_empty() {
-                                results.push(WebSearchResult { title, url: result_url, snippet });
+                                results.push(WebSearchResult {
+                                    title,
+                                    url: result_url,
+                                    snippet,
+                                });
                             }
                         }
                     }
@@ -563,10 +651,16 @@ fn msg_to_json(m: &LlmChatMessage) -> Value {
         obj["tool_call_id"] = Value::String(id.clone());
     }
     if let Some(tcs) = &m.tool_calls {
-        obj["tool_calls"] = Value::Array(tcs.iter().map(|tc| serde_json::json!({
-            "id": tc.id, "type": "function",
-            "function": { "name": tc.name, "arguments": tc.arguments }
-        })).collect());
+        obj["tool_calls"] = Value::Array(
+            tcs.iter()
+                .map(|tc| {
+                    serde_json::json!({
+                        "id": tc.id, "type": "function",
+                        "function": { "name": tc.name, "arguments": tc.arguments }
+                    })
+                })
+                .collect(),
+        );
     }
     obj
 }
@@ -590,8 +684,11 @@ mod tests {
     #[test]
     fn offline_complete_echoes_user() {
         let msgs = vec![LlmChatMessage {
-            role: "user".into(), content: "你好".into(),
-            tool_call_id: None, tool_calls: None, reasoning_content: None,
+            role: "user".into(),
+            content: "你好".into(),
+            tool_call_id: None,
+            tool_calls: None,
+            reasoning_content: None,
         }];
         let r = ChatClient::offline_complete(&msgs);
         assert!(r.content.unwrap().contains("你好"));
@@ -600,7 +697,8 @@ mod tests {
     #[test]
     fn build_tools_non_empty() {
         let tools = ChatClient::build_tools(&[(
-            "Read".into(), "Read file".into(),
+            "Read".into(),
+            "Read file".into(),
             json!({"type": "object", "properties": {}, "required": []}),
         )]);
         assert_eq!(tools.len(), 1);
@@ -620,12 +718,38 @@ mod tests {
     #[test]
     fn to_openai_messages_all_roles() {
         let msgs = vec![
-            LlmChatMessage { role: "system".into(), content: "sys".into(), tool_call_id: None, tool_calls: None, reasoning_content: None },
-            LlmChatMessage { role: "user".into(), content: "hi".into(), tool_call_id: None, tool_calls: None, reasoning_content: None },
-            LlmChatMessage { role: "assistant".into(), content: "hello".into(), tool_call_id: None,
-                tool_calls: Some(vec![LlmToolCall { id: "c1".into(), name: "Read".into(), arguments: r#"{"p":"t"}"#.into() }]),
-                reasoning_content: None },
-            LlmChatMessage { role: "tool".into(), content: "r".into(), tool_call_id: Some("c1".into()), tool_calls: None, reasoning_content: None },
+            LlmChatMessage {
+                role: "system".into(),
+                content: "sys".into(),
+                tool_call_id: None,
+                tool_calls: None,
+                reasoning_content: None,
+            },
+            LlmChatMessage {
+                role: "user".into(),
+                content: "hi".into(),
+                tool_call_id: None,
+                tool_calls: None,
+                reasoning_content: None,
+            },
+            LlmChatMessage {
+                role: "assistant".into(),
+                content: "hello".into(),
+                tool_call_id: None,
+                tool_calls: Some(vec![LlmToolCall {
+                    id: "c1".into(),
+                    name: "Read".into(),
+                    arguments: r#"{"p":"t"}"#.into(),
+                }]),
+                reasoning_content: None,
+            },
+            LlmChatMessage {
+                role: "tool".into(),
+                content: "r".into(),
+                tool_call_id: Some("c1".into()),
+                tool_calls: None,
+                reasoning_content: None,
+            },
         ];
         let result = ChatClient::to_openai_messages(&msgs);
         assert_eq!(result.len(), 4);
@@ -635,9 +759,13 @@ mod tests {
 
     #[test]
     fn sse_chunk_parses_reasoning_content() {
-        let json = r#"{"choices":[{"delta":{"reasoning_content":"think..."},"finish_reason":null}]}"#;
+        let json =
+            r#"{"choices":[{"delta":{"reasoning_content":"think..."},"finish_reason":null}]}"#;
         let chunk: StreamChunk = serde_json::from_str(json).unwrap();
-        assert_eq!(chunk.choices.unwrap()[0].delta.reasoning_content.as_deref(), Some("think..."));
+        assert_eq!(
+            chunk.choices.unwrap()[0].delta.reasoning_content.as_deref(),
+            Some("think...")
+        );
     }
 
     #[test]
@@ -647,7 +775,15 @@ mod tests {
         let usage = chunk.usage.unwrap();
         assert_eq!(usage.prompt_tokens, Some(100));
         let choices = chunk.choices.unwrap();
-        assert_eq!(choices[0].delta.tool_calls.as_ref().unwrap()[0].function.as_ref().unwrap().name.as_deref(), Some("Read"));
+        assert_eq!(
+            choices[0].delta.tool_calls.as_ref().unwrap()[0]
+                .function
+                .as_ref()
+                .unwrap()
+                .name
+                .as_deref(),
+            Some("Read")
+        );
     }
 
     #[test]
@@ -689,5 +825,4 @@ mod tests {
         assert!(write.ready_emitted);
         assert!(!partial.ready_emitted);
     }
-
 }

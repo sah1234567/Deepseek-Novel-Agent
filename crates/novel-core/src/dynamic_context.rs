@@ -6,6 +6,85 @@ use novel_state::Database;
 
 use crate::system_prompt::DynamicContext;
 
+/// Frozen static system segments snapshotted at session creation.
+#[derive(Debug, Clone)]
+pub struct FrozenStaticContext {
+    pub agents_md: String,
+    pub workspace_path: String,
+}
+
+pub fn frozen_static_from_dynamic(dynamic: &DynamicContext) -> FrozenStaticContext {
+    FrozenStaticContext {
+        agents_md: dynamic.agents_md.clone(),
+        workspace_path: dynamic.workspace_path.clone(),
+    }
+}
+
+pub fn persist_frozen_system_metadata(
+    db: &Database,
+    session_id: &str,
+    dynamic: &DynamicContext,
+) -> Result<(), novel_state::StateError> {
+    use crate::system_prompt::system_static_sha256;
+    let meta = serde_json::json!({
+        "system_static_frozen": true,
+        "frozen_agents_md": dynamic.agents_md,
+        "frozen_workspace_path": dynamic.workspace_path,
+        "system_static_sha256": system_static_sha256(dynamic),
+        "compaction_count": 0,
+    });
+    db.set_session_metadata(session_id, &meta)
+}
+
+pub fn load_frozen_static_from_metadata(
+    db: &Database,
+    session_id: &str,
+) -> Result<FrozenStaticContext, novel_state::StateError> {
+    db.require_frozen_system_metadata(session_id)?;
+    let meta = db.get_session_metadata(session_id)?.ok_or_else(|| {
+        novel_state::StateError::Validation(format!("session {session_id} missing metadata"))
+    })?;
+    let agents_md = meta
+        .get("frozen_agents_md")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let workspace_path = meta
+        .get("frozen_workspace_path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    Ok(FrozenStaticContext {
+        agents_md,
+        workspace_path,
+    })
+}
+
+/// Rebuild system prompt with frozen AGENTS/Workspace and freshly loaded dynamic sections.
+pub fn refresh_system_dynamic_context(
+    project_root: &Path,
+    session_id: &str,
+    db: &Database,
+    agent_skills_dir: &Path,
+    frozen: &FrozenStaticContext,
+) -> DynamicContext {
+    let live = build_dynamic_context(
+        project_root,
+        session_id,
+        db,
+        &frozen.agents_md,
+        agent_skills_dir,
+    );
+    DynamicContext {
+        agents_md: frozen.agents_md.clone(),
+        workspace_path: frozen.workspace_path.clone(),
+        skill_summaries: live.skill_summaries,
+        knowledge_index: live.knowledge_index,
+        memory: live.memory,
+        progress: live.progress,
+    }
+}
+
 /// Load memory/ index and referenced files (≤ max_bytes total).
 pub fn load_memory(project_root: &Path, max_bytes: usize) -> String {
     let memory_dir = project_root.join("memory");
@@ -195,8 +274,7 @@ pub fn build_dynamic_context(
         .read_file("knowledge/INDEX.md")
         .unwrap_or_else(|_| "（索引尚未创建）".into());
     let project_skills = project_root.join("skills");
-    let skills =
-        novel_skills::load_skills_merged(&project_skills, skills_dir).unwrap_or_default();
+    let skills = novel_skills::load_skills_merged(&project_skills, skills_dir).unwrap_or_default();
     let skill_summaries: Vec<(String, String)> = skills
         .iter()
         .map(|s| {
@@ -300,10 +378,7 @@ fn resolve_skill_path(
     agent_skills_dir: &Path,
     skill_id: &str,
 ) -> Option<PathBuf> {
-    let project_path = project_root
-        .join("skills")
-        .join(skill_id)
-        .join("SKILL.md");
+    let project_path = project_root.join("skills").join(skill_id).join("SKILL.md");
     if project_path.exists() {
         return Some(project_path);
     }
@@ -314,11 +389,7 @@ fn resolve_skill_path(
     None
 }
 
-fn load_skill_body(
-    project_root: &Path,
-    agent_skills_dir: &Path,
-    skill_id: &str,
-) -> Option<String> {
+fn load_skill_body(project_root: &Path, agent_skills_dir: &Path, skill_id: &str) -> Option<String> {
     let path = resolve_skill_path(project_root, agent_skills_dir, skill_id)?;
     load_skill(&path).ok().map(|s| s.body)
 }
@@ -370,8 +441,7 @@ pub fn filter_loadable_reference_paths(
                 .split('/')
                 .next()
                 .is_some_and(|id| invoked.contains(id))
-                && resolve_skill_reference_path(project_root, agent_skills_dir, canonical)
-                    .is_some()
+                && resolve_skill_reference_path(project_root, agent_skills_dir, canonical).is_some()
         })
         .collect()
 }
@@ -388,9 +458,7 @@ pub fn format_activated_skill_block(
     for skill_id in skill_ids.iter().rev() {
         if let Some(body) = load_skill_body(project_root, agent_skills_dir, skill_id) {
             // Prepend base directory prefix so LLM knows where to find reference files
-            if let Some(skill_dir) =
-                resolve_skill_dir(project_root, agent_skills_dir, skill_id)
-            {
+            if let Some(skill_dir) = resolve_skill_dir(project_root, agent_skills_dir, skill_id) {
                 let dir_str = skill_dir.display().to_string();
                 out.push_str(&format!(
                     "> Skill 根目录: {dir_str}/\n> 引用文件请用此路径+相对路径拼接。\n\n"
@@ -433,6 +501,7 @@ fn resolve_skill_dir(
 
 /// Full SKILL.md bodies for invoked skills (post-compaction user message).
 /// Missing or unreadable skills are skipped silently; caller should pass loadable IDs only.
+#[cfg(test)]
 pub fn format_invoked_skill_bodies(
     project_root: &Path,
     agent_skills_dir: &Path,
@@ -470,8 +539,11 @@ mod tests {
         let tmp = TempDir::new().expect("tmp");
         let skill_dir = tmp.path().join("skills").join("kept");
         std::fs::create_dir_all(&skill_dir).expect("dir");
-        std::fs::write(skill_dir.join("SKILL.md"), "---\nname: kept\ndescription: d\n---\n# ok\n")
-            .expect("w");
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: kept\ndescription: d\n---\n# ok\n",
+        )
+        .expect("w");
         let agent_skills = tmp.path().join("agent_skills");
         std::fs::create_dir_all(&agent_skills).expect("dir");
         let ids = filter_loadable_skill_ids(
@@ -510,13 +582,7 @@ mod tests {
 
     #[test]
     fn dedupe_skill_ids_preserves_first_seen_order() {
-        let ids = dedupe_skill_ids(&[
-            "a".into(),
-            "b".into(),
-            "a".into(),
-            "c".into(),
-            "b".into(),
-        ]);
+        let ids = dedupe_skill_ids(&["a".into(), "b".into(), "a".into(), "c".into(), "b".into()]);
         assert_eq!(ids, vec!["a", "b", "c"]);
     }
 
@@ -549,12 +615,38 @@ mod tests {
         assert!(ctx.progress.contains("已完成章节文件"));
     }
 
+    #[test]
+    fn refresh_system_dynamic_context_reloads_skill_summaries_from_disk() {
+        let tmp = TempDir::new().expect("tmp");
+        std::fs::create_dir_all(tmp.path().join("chapters")).expect("dir");
+        let agent_skills = tmp.path().join("agent_skills");
+        std::fs::create_dir_all(&agent_skills).expect("dir");
+        let db = Database::open(tmp.path().join("t.db")).expect("db");
+        let sid = db
+            .create_session(tmp.path().to_str().unwrap(), "m")
+            .expect("s");
+        let frozen = FrozenStaticContext {
+            agents_md: "agents".into(),
+            workspace_path: tmp
+                .path()
+                .canonicalize()
+                .unwrap_or_else(|_| tmp.path().to_path_buf())
+                .display()
+                .to_string(),
+        };
+
+        let before = refresh_system_dynamic_context(tmp.path(), &sid, &db, &agent_skills, &frozen);
+        assert!(before.skill_summaries.is_empty());
+
+        write_skill(&tmp, "mid-session", "# body");
+
+        let after = refresh_system_dynamic_context(tmp.path(), &sid, &db, &agent_skills, &frozen);
+        assert_eq!(after.skill_summaries.len(), 1);
+        assert_eq!(after.skill_summaries[0].0, "mid-session");
+    }
+
     fn write_reference(tmp: &TempDir, skill_id: &str, name: &str, body: &str) {
-        let dir = tmp
-            .path()
-            .join("skills")
-            .join(skill_id)
-            .join("references");
+        let dir = tmp.path().join("skills").join(skill_id).join("references");
         std::fs::create_dir_all(&dir).expect("dir");
         std::fs::write(dir.join(name), body).expect("w");
     }
@@ -593,14 +685,11 @@ mod tests {
     fn parse_skill_reference_path_agent_bundle() {
         let tmp = TempDir::new().expect("tmp");
         let agent_skills = tmp.path().join("agent_skills");
-        let dir = agent_skills
-            .join("romance")
-            .join("references");
+        let dir = agent_skills.join("romance").join("references");
         std::fs::create_dir_all(&dir).expect("dir");
         std::fs::write(dir.join("harem.md"), "# h").expect("w");
         let abs = dir.join("harem.md");
-        let parsed =
-            parse_skill_reference_path(tmp.path(), &agent_skills, abs.to_str().unwrap());
+        let parsed = parse_skill_reference_path(tmp.path(), &agent_skills, abs.to_str().unwrap());
         assert_eq!(
             parsed,
             Some(("romance".into(), "romance/references/harem.md".into()))
@@ -641,9 +730,13 @@ mod tests {
             &refs,
         );
         let romance_pos = block.find("### romance\n").expect("skill2");
-        let harem_pos = block.find("### romance/references/harem.md\n").expect("ref2");
+        let harem_pos = block
+            .find("### romance/references/harem.md\n")
+            .expect("ref2");
         let apocalypse_pos = block.find("### apocalypse\n").expect("skill");
-        let zombie_pos = block.find("### apocalypse/references/zombie.md\n").expect("ref");
+        let zombie_pos = block
+            .find("### apocalypse/references/zombie.md\n")
+            .expect("ref");
         assert!(romance_pos < harem_pos);
         assert!(harem_pos < apocalypse_pos);
         assert!(apocalypse_pos < zombie_pos);
@@ -677,9 +770,6 @@ mod tests {
             "b/references/y.md".into(),
             "a/references/x.md".into(),
         ]);
-        assert_eq!(
-            paths,
-            vec!["a/references/x.md", "b/references/y.md"]
-        );
+        assert_eq!(paths, vec!["a/references/x.md", "b/references/y.md"]);
     }
 }

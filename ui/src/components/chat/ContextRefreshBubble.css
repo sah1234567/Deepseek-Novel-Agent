@@ -1,0 +1,23 @@
+.message-context-refresh {
+  margin: 0.75rem 0;
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  background: rgba(126, 184, 255, 0.08);
+  border: 1px dashed rgba(126, 184, 255, 0.35);
+  font-size: 0.9rem;
+}
+
+.message-context-refresh header {
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+  color: var(--color-accent-blue, #7eb8ff);
+}
+
+.message-context-refresh details {
+  margin-top: 0.35rem;
+}
+
+.message-context-refresh summary {
+  cursor: pointer;
+  font-weight: 500;
+}

@@ -1,6 +1,4 @@
-use crate::{
-    checkpoint::Checkpoint, message::StoredMessage, session::Session, StateError,
-};
+use crate::{message::StoredMessage, session::Session, StateError};
 use chrono::Utc;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::params;
@@ -48,48 +46,6 @@ const MIGRATIONS: &[&str] = &[
     "#,
     "CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, turn_number, sequence);",
     r#"
-    CREATE TABLE IF NOT EXISTS checkpoints (
-        id TEXT PRIMARY KEY,
-        parent_session_id TEXT NOT NULL REFERENCES sessions(id),
-        fork_point INTEGER NOT NULL,
-        shared_prefix_hash TEXT NOT NULL,
-        snapshot_cache_hit INTEGER DEFAULT 0,
-        snapshot_cache_miss INTEGER DEFAULT 0,
-        snapshot_completion INTEGER DEFAULT 0,
-        created_at TEXT NOT NULL
-    );
-    "#,
-    r#"
-    CREATE TABLE IF NOT EXISTS sub_agent_runs (
-        id TEXT PRIMARY KEY,
-        checkpoint_id TEXT NOT NULL REFERENCES checkpoints(id),
-        agent_type TEXT NOT NULL,
-        task TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'running',
-        cache_hit_tokens INTEGER DEFAULT 0,
-        cache_miss_tokens INTEGER DEFAULT 0,
-        completion_tokens INTEGER DEFAULT 0,
-        cache_hit_rate REAL DEFAULT 0.0,
-        estimated_savings REAL DEFAULT 0.0,
-        result_json TEXT,
-        turns_executed INTEGER DEFAULT 0,
-        started_at TEXT NOT NULL,
-        finished_at TEXT
-    );
-    "#,
-    r#"
-    CREATE VIEW IF NOT EXISTS daily_token_stats AS
-    SELECT
-        date(created_at) AS day,
-        SUM(cache_hit_tokens) AS total_cache_hit,
-        SUM(cache_miss_tokens) AS total_cache_miss,
-        SUM(completion_tokens) AS total_completion,
-        ROUND(CAST(SUM(cache_hit_tokens) AS REAL) /
-              NULLIF(SUM(cache_hit_tokens) + SUM(cache_miss_tokens), 0), 4) AS overall_cache_hit_rate
-    FROM sessions
-    GROUP BY date(created_at);
-    "#,
-    r#"
     CREATE TABLE IF NOT EXISTS session_todos (
         session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
         todo_id TEXT NOT NULL,
@@ -126,6 +82,21 @@ const MIGRATIONS: &[&str] = &[
     );
     "#,
     "CREATE INDEX IF NOT EXISTS idx_fork_messages_run ON fork_messages(run_id, sequence);",
+    r#"
+    CREATE TABLE IF NOT EXISTS message_archive (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        compaction_epoch INTEGER NOT NULL,
+        turn_number INTEGER NOT NULL,
+        sequence INTEGER NOT NULL,
+        role TEXT NOT NULL,
+        content_json TEXT NOT NULL,
+        archived_at TEXT NOT NULL,
+        UNIQUE(session_id, compaction_epoch, turn_number, sequence)
+    );
+    "#,
+    "CREATE INDEX IF NOT EXISTS idx_message_archive_session ON message_archive(session_id, compaction_epoch, turn_number, sequence);",
+    "UPDATE schema_version SET version = 2 WHERE version < 2;",
 ];
 
 pub struct Database {
@@ -162,6 +133,40 @@ impl Database {
         Self::drop_legacy_total_tokens_column(&conn)?;
         Self::ensure_context_tokens_column(&conn)?;
         Self::ensure_api_call_count_column(&conn)?;
+        Self::drop_unused_legacy_schema(&conn)?;
+        Self::ensure_message_archive_table(&conn)?;
+        Ok(())
+    }
+
+    fn ensure_message_archive_table(conn: &rusqlite::Connection) -> Result<(), StateError> {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS message_archive (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                compaction_epoch INTEGER NOT NULL,
+                turn_number INTEGER NOT NULL,
+                sequence INTEGER NOT NULL,
+                role TEXT NOT NULL,
+                content_json TEXT NOT NULL,
+                archived_at TEXT NOT NULL,
+                UNIQUE(session_id, compaction_epoch, turn_number, sequence)
+            );
+            CREATE INDEX IF NOT EXISTS idx_message_archive_session
+                ON message_archive(session_id, compaction_epoch, turn_number, sequence);
+            UPDATE schema_version SET version = 2 WHERE version < 2;
+            "#,
+        )?;
+        Ok(())
+    }
+
+    /// Remove pre-fork_runs schema (checkpoints / sub_agent_runs / daily_token_stats); never written in production.
+    fn drop_unused_legacy_schema(conn: &rusqlite::Connection) -> Result<(), StateError> {
+        conn.execute_batch(
+            "DROP VIEW IF EXISTS daily_token_stats;
+             DROP TABLE IF EXISTS sub_agent_runs;
+             DROP TABLE IF EXISTS checkpoints;",
+        )?;
         Ok(())
     }
 
@@ -340,7 +345,14 @@ impl Database {
                 last_active_at = ?4,
                 model = ?5
              WHERE id = ?6",
-            params![hit, miss, completion, Utc::now().to_rfc3339(), last_model, session_id],
+            params![
+                hit,
+                miss,
+                completion,
+                Utc::now().to_rfc3339(),
+                last_model,
+                session_id
+            ],
         )?;
         if n == 0 {
             return Err(StateError::SessionNotFound(session_id.into()));
@@ -478,13 +490,120 @@ impl Database {
         Ok(())
     }
 
+    /// Copy current working-set rows into `message_archive` before compaction replace.
+    pub fn archive_session_messages(
+        &self,
+        session_id: &str,
+        compaction_epoch: i32,
+    ) -> Result<(), StateError> {
+        let conn = self.pool.get()?;
+        let tx = conn.unchecked_transaction()?;
+        let archived_at = Utc::now().to_rfc3339();
+        {
+            let mut stmt = tx.prepare(
+                "SELECT turn_number, sequence, role, content_json FROM messages
+                 WHERE session_id = ?1 ORDER BY turn_number, sequence",
+            )?;
+            let mut rows = stmt.query(params![session_id])?;
+            while let Some(row) = rows.next()? {
+                let turn: i32 = row.get(0)?;
+                let seq: i32 = row.get(1)?;
+                let role: String = row.get(2)?;
+                let content: String = row.get(3)?;
+                let id = Uuid::new_v4().to_string();
+                tx.execute(
+                    "INSERT INTO message_archive
+                     (id, session_id, compaction_epoch, turn_number, sequence, role, content_json, archived_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    params![
+                        id,
+                        session_id,
+                        compaction_epoch,
+                        turn,
+                        seq,
+                        role,
+                        content,
+                        archived_at
+                    ],
+                )?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn get_archived_epochs(&self, session_id: &str) -> Result<Vec<i32>, StateError> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT compaction_epoch FROM message_archive
+             WHERE session_id = ?1 ORDER BY compaction_epoch",
+        )?;
+        let rows = stmt.query_map(params![session_id], |row| row.get(0))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StateError::from)
+    }
+
+    pub fn get_archived_messages(
+        &self,
+        session_id: &str,
+        compaction_epoch: i32,
+    ) -> Result<Vec<StoredMessage>, StateError> {
+        let conn = self.pool.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, session_id, turn_number, sequence, role, content_json,
+                    0, 0, 0, NULL, archived_at
+             FROM message_archive
+             WHERE session_id = ?1 AND compaction_epoch = ?2
+             ORDER BY turn_number, sequence",
+        )?;
+        let rows = stmt.query(params![session_id, compaction_epoch])?;
+        map_messages(rows)
+    }
+
+    pub fn get_compaction_count(&self, session_id: &str) -> Result<i32, StateError> {
+        Ok(self
+            .get_session_metadata(session_id)?
+            .and_then(|v| v.get("compaction_count").and_then(|n| n.as_i64()))
+            .unwrap_or(0) as i32)
+    }
+
+    /// Increment compaction counter and return the new epoch used for archiving.
+    pub fn increment_compaction_count(&self, session_id: &str) -> Result<i32, StateError> {
+        let next = self.get_compaction_count(session_id)? + 1;
+        let mut meta = self
+            .get_session_metadata(session_id)?
+            .unwrap_or_else(|| serde_json::json!({}));
+        if let Some(obj) = meta.as_object_mut() {
+            obj.insert("compaction_count".into(), serde_json::json!(next));
+        }
+        self.set_session_metadata(session_id, &meta)?;
+        Ok(next)
+    }
+
+    pub fn require_frozen_system_metadata(&self, session_id: &str) -> Result<(), StateError> {
+        let meta = self
+            .get_session_metadata(session_id)?
+            .ok_or_else(|| StateError::Validation(format!(
+                "session {session_id} missing metadata; run scripts/reset-work-databases and create a new session"
+            )))?;
+        if !meta
+            .get("system_static_frozen")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            return Err(StateError::Validation(format!(
+                "session {session_id} uses legacy format; run scripts/reset-work-databases and create a new session"
+            )));
+        }
+        Ok(())
+    }
+
     pub fn get_session_metadata(
         &self,
         session_id: &str,
     ) -> Result<Option<serde_json::Value>, StateError> {
         let conn = self.pool.get()?;
-        let mut stmt =
-            conn.prepare("SELECT metadata_json FROM sessions WHERE id = ?1")?;
+        let mut stmt = conn.prepare("SELECT metadata_json FROM sessions WHERE id = ?1")?;
         let mut rows = stmt.query(params![session_id])?;
         if let Some(row) = rows.next()? {
             let raw: Option<String> = row.get(0)?;
@@ -539,7 +658,11 @@ impl Database {
         if let Some(obj) = meta.as_object_mut() {
             obj.insert(
                 "invoked_skill_ids".into(),
-                serde_json::Value::Array(ids.iter().map(|s| serde_json::Value::String(s.clone())).collect()),
+                serde_json::Value::Array(
+                    ids.iter()
+                        .map(|s| serde_json::Value::String(s.clone()))
+                        .collect(),
+                ),
             );
         }
         self.set_session_metadata(session_id, &meta)
@@ -662,34 +785,6 @@ impl Database {
         Ok(())
     }
 
-    pub fn get_fork_run(&self, run_id: &str) -> Result<Option<crate::ForkRun>, StateError> {
-        let conn = self.pool.get()?;
-        let mut stmt = conn.prepare(
-            "SELECT id, session_id, parent_turn_number, agent_type, task, source, status,
-                    report_message_id, started_at, finished_at
-             FROM fork_runs WHERE id = ?1",
-        )?;
-        let mut rows = stmt.query(params![run_id])?;
-        if let Some(row) = rows.next()? {
-            let started: String = row.get(8)?;
-            let finished: Option<String> = row.get(9)?;
-            Ok(Some(crate::ForkRun {
-                id: row.get(0)?,
-                session_id: row.get(1)?,
-                parent_turn_number: row.get(2)?,
-                agent_type: row.get(3)?,
-                task: row.get(4)?,
-                source: row.get(5)?,
-                status: row.get(6)?,
-                report_message_id: row.get(7)?,
-                started_at: started.parse().unwrap_or_else(|_| Utc::now()),
-                finished_at: finished.and_then(|s| s.parse().ok()),
-            }))
-        } else {
-            Ok(None)
-        }
-    }
-
     pub fn get_fork_messages(&self, run_id: &str) -> Result<Vec<crate::ForkMessage>, StateError> {
         let conn = self.pool.get()?;
         let mut stmt = conn.prepare(
@@ -709,43 +804,6 @@ impl Database {
             })
         })?;
         Ok(rows.filter_map(|r| r.ok()).collect())
-    }
-
-    pub fn create_checkpoint(
-        &self,
-        session_id: &str,
-        fork_point: i32,
-    ) -> Result<String, StateError> {
-        let id = Uuid::new_v4().to_string();
-        let hash = format!("fork-{}-{}", session_id, fork_point);
-        let conn = self.pool.get()?;
-        conn.execute(
-            "INSERT INTO checkpoints (id, parent_session_id, fork_point, shared_prefix_hash, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![id, session_id, fork_point, hash, Utc::now().to_rfc3339()],
-        )?;
-        Ok(id)
-    }
-
-    pub fn get_checkpoint(&self, id: &str) -> Result<Option<Checkpoint>, StateError> {
-        let conn = self.pool.get()?;
-        let mut stmt = conn.prepare(
-            "SELECT id, parent_session_id, fork_point, shared_prefix_hash, created_at
-             FROM checkpoints WHERE id = ?1",
-        )?;
-        let mut rows = stmt.query(params![id])?;
-        if let Some(row) = rows.next()? {
-            let created: String = row.get(4)?;
-            Ok(Some(Checkpoint {
-                id: row.get(0)?,
-                parent_session_id: row.get(1)?,
-                fork_point: row.get(2)?,
-                shared_prefix_hash: row.get(3)?,
-                created_at: created.parse().unwrap_or_else(|_| Utc::now()),
-            }))
-        } else {
-            Ok(None)
-        }
     }
 
     pub fn upsert_session_todos(
@@ -829,8 +887,62 @@ mod tests {
         let tables = db.list_tables().unwrap();
         assert!(tables.contains(&"sessions".to_string()));
         assert!(tables.contains(&"messages".to_string()));
-        assert!(tables.contains(&"checkpoints".to_string()));
+        assert!(tables.contains(&"fork_runs".to_string()));
+        assert!(tables.contains(&"fork_messages".to_string()));
         assert!(tables.contains(&"session_todos".to_string()));
+        assert!(tables.contains(&"message_archive".to_string()));
+        assert!(!tables.contains(&"checkpoints".to_string()));
+        assert!(!tables.contains(&"sub_agent_runs".to_string()));
+    }
+
+    #[test]
+    fn archive_session_messages_preserves_epoch() {
+        let db = test_db();
+        let sid = db.create_session("/tmp/proj", "deepseek-chat").unwrap();
+        db.insert_message(
+            &sid,
+            0,
+            0,
+            "system",
+            &serde_json::json!({"role":"system","content":"sys"}),
+            None,
+        )
+        .unwrap();
+        db.insert_message(
+            &sid,
+            1,
+            0,
+            "user",
+            &serde_json::json!({"role":"user","content":"hello"}),
+            None,
+        )
+        .unwrap();
+        db.archive_session_messages(&sid, 1).unwrap();
+        let epochs = db.get_archived_epochs(&sid).unwrap();
+        assert_eq!(epochs, vec![1]);
+        let archived = db.get_archived_messages(&sid, 1).unwrap();
+        assert_eq!(archived.len(), 2);
+        db.replace_session_messages(
+            &sid,
+            &[(
+                0,
+                0,
+                "system",
+                &serde_json::json!({"role":"system","content":"new"}),
+            )],
+        )
+        .unwrap();
+        assert_eq!(db.get_session_messages(&sid, None).unwrap().len(), 1);
+        assert_eq!(db.get_archived_messages(&sid, 1).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn increment_compaction_count_metadata() {
+        let db = test_db();
+        let sid = db.create_session("/tmp/proj", "deepseek-chat").unwrap();
+        assert_eq!(db.get_compaction_count(&sid).unwrap(), 0);
+        assert_eq!(db.increment_compaction_count(&sid).unwrap(), 1);
+        assert_eq!(db.get_compaction_count(&sid).unwrap(), 1);
     }
 
     #[test]
@@ -850,10 +962,7 @@ mod tests {
         }
         let sys = serde_json::json!({"role":"system","content":"sys"});
         let user = serde_json::json!({"role":"user","content":"compact"});
-        let replacement = vec![
-            (0i32, 0i32, "system", &sys),
-            (1i32, 0i32, "user", &user),
-        ];
+        let replacement = vec![(0i32, 0i32, "system", &sys), (1i32, 0i32, "user", &user)];
         db.replace_session_messages(&sid, &replacement).unwrap();
         let msgs = db.get_session_messages(&sid, None).unwrap();
         assert_eq!(msgs.len(), 2);
@@ -915,8 +1024,10 @@ mod tests {
     fn token_accumulates_for_billing() {
         let db = test_db();
         let sid = db.create_session("/tmp/proj", "deepseek-chat").unwrap();
-        db.accumulate_session_tokens(&sid, 100, 50, 30, "deepseek-v4-pro").unwrap();
-        db.accumulate_session_tokens(&sid, 200, 80, 70, "deepseek-v4-pro").unwrap();
+        db.accumulate_session_tokens(&sid, 100, 50, 30, "deepseek-v4-pro")
+            .unwrap();
+        db.accumulate_session_tokens(&sid, 200, 80, 70, "deepseek-v4-pro")
+            .unwrap();
         let s = db.get_session(&sid).unwrap().unwrap();
         assert_eq!(s.cache_hit_tokens, 300);
         assert_eq!(s.cache_miss_tokens, 130);
@@ -943,7 +1054,8 @@ mod tests {
         let sid = db.create_session("/tmp/proj", "deepseek-chat").unwrap();
         let before = db.get_session(&sid).unwrap().unwrap().last_active_at;
         std::thread::sleep(std::time::Duration::from_millis(10));
-        db.accumulate_session_tokens(&sid, 1, 0, 0, "deepseek-v4-pro").unwrap();
+        db.accumulate_session_tokens(&sid, 1, 0, 0, "deepseek-v4-pro")
+            .unwrap();
         let after = db.get_session(&sid).unwrap().unwrap().last_active_at;
         assert!(after > before);
     }
@@ -953,9 +1065,12 @@ mod tests {
         let db = test_db();
         let sid = db.create_session("/tmp/proj", "deepseek-chat").unwrap();
         db.sync_user_turn_count(&sid, 1).unwrap();
-        db.accumulate_session_tokens(&sid, 10, 5, 2, "deepseek-v4-pro").unwrap();
-        db.accumulate_session_tokens(&sid, 10, 5, 2, "deepseek-v4-pro").unwrap();
-        db.accumulate_session_tokens(&sid, 10, 5, 2, "deepseek-v4-pro").unwrap();
+        db.accumulate_session_tokens(&sid, 10, 5, 2, "deepseek-v4-pro")
+            .unwrap();
+        db.accumulate_session_tokens(&sid, 10, 5, 2, "deepseek-v4-pro")
+            .unwrap();
+        db.accumulate_session_tokens(&sid, 10, 5, 2, "deepseek-v4-pro")
+            .unwrap();
         let s = db.get_session(&sid).unwrap().unwrap();
         assert_eq!(s.total_turns, 1);
         assert_eq!(s.api_call_count, 3);
@@ -965,7 +1080,15 @@ mod tests {
     fn message_insert_and_query() {
         let db = test_db();
         let sid = db.create_session("/tmp/proj", "deepseek-chat").unwrap();
-        db.insert_message(&sid, 1, 0, "user", &serde_json::json!({"content":"hello"}), None).unwrap();
+        db.insert_message(
+            &sid,
+            1,
+            0,
+            "user",
+            &serde_json::json!({"content":"hello"}),
+            None,
+        )
+        .unwrap();
         let msgs = db.get_session_messages(&sid, None).unwrap();
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0].role, "user");
@@ -976,7 +1099,15 @@ mod tests {
         let db = test_db();
         let sid = db.create_session("/tmp/proj", "deepseek-chat").unwrap();
         for t in 1..=5 {
-            db.insert_message(&sid, t, 0, "user", &serde_json::json!({"content":format!("t{t}")}), None).unwrap();
+            db.insert_message(
+                &sid,
+                t,
+                0,
+                "user",
+                &serde_json::json!({"content":format!("t{t}")}),
+                None,
+            )
+            .unwrap();
         }
         let msgs = db.get_session_messages(&sid, Some((2, 4))).unwrap();
         assert_eq!(msgs.len(), 3);
@@ -988,9 +1119,12 @@ mod tests {
         let a = db.create_session("/proj/a", "deepseek-chat").unwrap();
         let b = db.create_session("/proj/b", "deepseek-chat").unwrap();
         let c = db.create_session("/proj/a", "deepseek-chat").unwrap();
-        db.accumulate_session_tokens(&a, 1, 0, 0, "deepseek-v4-pro").unwrap();
-        db.accumulate_session_tokens(&b, 1, 0, 0, "deepseek-v4-pro").unwrap();
-        db.accumulate_session_tokens(&c, 1, 0, 0, "deepseek-v4-pro").unwrap();
+        db.accumulate_session_tokens(&a, 1, 0, 0, "deepseek-v4-pro")
+            .unwrap();
+        db.accumulate_session_tokens(&b, 1, 0, 0, "deepseek-v4-pro")
+            .unwrap();
+        db.accumulate_session_tokens(&c, 1, 0, 0, "deepseek-v4-pro")
+            .unwrap();
         let list = db.list_sessions("/proj/a", 10).unwrap();
         assert_eq!(list.len(), 2);
         // Most recent first
@@ -1004,7 +1138,8 @@ mod tests {
         {
             let db = Database::open(&p).unwrap();
             let id = db.create_session("/proj", "deepseek-chat").unwrap();
-            db.accumulate_session_tokens(&id, 10, 5, 2, "deepseek-v4-pro").unwrap();
+            db.accumulate_session_tokens(&id, 10, 5, 2, "deepseek-v4-pro")
+                .unwrap();
         }
         std::fs::remove_file(&p).unwrap();
         let db = Database::open(&p).unwrap();
@@ -1034,20 +1169,10 @@ mod tests {
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0].sequence, 0);
         assert_eq!(msgs[1].sequence, 1);
-        db.finish_fork_run(&run_id, "complete", Some("report-id")).unwrap();
-        let run = db.get_fork_run(&run_id).unwrap().unwrap();
-        assert_eq!(run.status, "complete");
-        assert_eq!(run.report_message_id.as_deref(), Some("report-id"));
-    }
-
-    #[test]
-    fn checkpoint_create_and_load() {
-        let db = test_db();
-        let sid = db.create_session("/proj", "deepseek-chat").unwrap();
-        let cid = db.create_checkpoint(&sid, 3).unwrap();
-        let cp = db.get_checkpoint(&cid).unwrap().unwrap();
-        assert_eq!(cp.parent_session_id, sid);
-        assert_eq!(cp.fork_point, 3);
+        db.finish_fork_run(&run_id, "complete", Some("report-id"))
+            .unwrap();
+        let msgs_after = db.get_fork_messages(&run_id).unwrap();
+        assert_eq!(msgs_after.len(), 2);
     }
 
     #[test]
@@ -1059,14 +1184,15 @@ mod tests {
             let db = Arc::clone(&db);
             let sid = sid.clone();
             handles.push(std::thread::spawn(move || {
-                db.accumulate_session_tokens(&sid, 1, 0, 0, "deepseek-v4-pro").unwrap();
+                db.accumulate_session_tokens(&sid, 1, 0, 0, "deepseek-v4-pro")
+                    .unwrap();
             }));
         }
         for h in handles {
             h.join().unwrap();
         }
         let s = db.get_session(&sid).unwrap().unwrap();
-        // Tokens replace (race — last write wins), API calls still increment
+        // Tokens replace (race ??? last write wins), API calls still increment
         assert!(s.cache_hit_tokens >= 1);
         assert_eq!(s.api_call_count, 10);
         assert_eq!(s.total_turns, 0);

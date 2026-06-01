@@ -4,11 +4,7 @@ use serde_json::{json, Value};
 
 pub struct ForkSubAgentTool;
 
-const VALID_AGENT_TYPES: &[&str] = &[
-    "KnowledgeAuditor",
-    "ChapterCraftAnalyzer",
-    "GeneralPurpose",
-];
+const VALID_AGENT_TYPES: &[&str] = &["KnowledgeAuditor", "ChapterCraftAnalyzer", "GeneralPurpose"];
 
 #[async_trait]
 impl Tool for ForkSubAgentTool {
@@ -62,9 +58,9 @@ impl Tool for ForkSubAgentTool {
         }
         let agent_type = require_str(&input, "agent_type")?;
         if !VALID_AGENT_TYPES.contains(&agent_type.as_str()) {
-            return Err(ToolError::Validation(ValidationError::InvalidField(format!(
-                "agent_type: {agent_type}"
-            ))));
+            return Err(ToolError::Validation(ValidationError::InvalidField(
+                format!("agent_type: {agent_type}"),
+            )));
         }
         let task_raw = require_str(&input, "task")?;
         let task = task_raw.trim();
@@ -73,9 +69,10 @@ impl Tool for ForkSubAgentTool {
                 "task".into(),
             )));
         }
-        let queue = ctx.fork_queue.as_ref().ok_or_else(|| {
-            ToolError::Internal("fork queue not configured on engine".into())
-        })?;
+        let queue = ctx
+            .fork_queue
+            .as_ref()
+            .ok_or_else(|| ToolError::Internal("fork queue not configured on engine".into()))?;
         let mut guard = queue
             .lock()
             .map_err(|_| ToolError::Internal("fork queue lock poisoned".into()))?;

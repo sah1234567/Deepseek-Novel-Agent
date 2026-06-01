@@ -77,7 +77,9 @@ mod tests {
             content: "Wrote file",
         };
         let lines = append_middleware_lines(&ctx);
-        assert!(lines.iter().any(|l| l.contains("[fact] touched: chapters/ch01.md")));
+        assert!(lines
+            .iter()
+            .any(|l| l.contains("[fact] touched: chapters/ch01.md")));
         assert!(lines.iter().any(|l| l.contains("[fact] context:")));
     }
 

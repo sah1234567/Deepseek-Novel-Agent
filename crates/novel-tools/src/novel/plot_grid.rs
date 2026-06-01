@@ -57,13 +57,19 @@ fn parse_outline_row(
         .or_else(|| cells.get(1).map(|s| s.as_str()))
         .and_then(|s| {
             let n = parse_chapter_num(s);
-            if n > 0 { Some(n) } else { s.parse().ok() }
+            if n > 0 {
+                Some(n)
+            } else {
+                s.parse().ok()
+            }
         })?;
     if chapter_num == 0 {
         return None;
     }
     // Structure unit: first column value, or current heading context
-    let unit = cells.first().map(|s| s.trim().to_string())
+    let unit = cells
+        .first()
+        .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty() && s != "—" && s != "-")
         .unwrap_or_else(|| current_unit.to_string());
     let tension = outline_col_value(cells, colmap, "张力")
@@ -83,12 +89,20 @@ fn parse_outline_row(
         chapter_num,
         GridRow {
             chapter: format!("Ch{chapter_num}"),
-            scene: outline_col_value(cells, colmap, "章节标题").unwrap_or("").to_string(),
-            pov_character: outline_col_value(cells, colmap, "pov").unwrap_or("—").to_string(),
-            timeline_point: outline_col_value(cells, colmap, "时间点").unwrap_or("—").to_string(),
+            scene: outline_col_value(cells, colmap, "章节标题")
+                .unwrap_or("")
+                .to_string(),
+            pov_character: outline_col_value(cells, colmap, "pov")
+                .unwrap_or("—")
+                .to_string(),
+            timeline_point: outline_col_value(cells, colmap, "时间点")
+                .unwrap_or("—")
+                .to_string(),
             tension_level: tension.clamp(1, 5),
             foreshadowings,
-            core_event: outline_col_value(cells, colmap, "核心事件").unwrap_or("").to_string(),
+            core_event: outline_col_value(cells, colmap, "核心事件")
+                .unwrap_or("")
+                .to_string(),
             structure_unit: unit,
         },
     ))
@@ -266,7 +280,8 @@ impl Tool for PlotGridTool {
                 .collect(),
         };
         Ok(ToolOutput {
-            content: serde_json::to_string_pretty(&result).map_err(|e| ToolError::Execution(format!("json serialize: {e}")))?,
+            content: serde_json::to_string_pretty(&result)
+                .map_err(|e| ToolError::Execution(format!("json serialize: {e}")))?,
             is_error: false,
         })
     }

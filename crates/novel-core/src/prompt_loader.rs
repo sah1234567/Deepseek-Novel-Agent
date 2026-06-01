@@ -9,7 +9,7 @@ fn fallback_prompt(agent_type: AgentType) -> &'static str {
             "你是章节文笔分析 Agent。分析对话、节奏、情感，输出自然语言报告。禁止 fork 与 JSON。"
         }
         AgentType::GeneralPurpose => {
-            "你是通用子 Agent。严格按下方自定义任务执行，输出自然语言报告。禁止 fork。"
+            "你是通用子 Agent。严格按下方自定义任务执行，结论写在返回正文中，禁止为说明新建文件。禁止 fork。"
         }
     }
 }
@@ -91,6 +91,13 @@ mod tests {
         let p = load_agent_prompt(AgentType::ChapterCraftAnalyzer).expect("prompt");
         assert!(p.contains("禁止 JSON"));
         assert!(p.contains("禁止 fork"));
+    }
+
+    #[test]
+    fn general_purpose_forbids_report_files() {
+        let p = load_agent_prompt(AgentType::GeneralPurpose).expect("prompt");
+        assert!(p.contains("严禁"));
+        assert!(p.contains("assistant 消息正文中返回"));
     }
 
     #[test]

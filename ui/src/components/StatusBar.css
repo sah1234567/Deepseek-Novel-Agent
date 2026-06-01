@@ -76,9 +76,20 @@
   padding: 0.3rem 0.5rem;
   font: inherit;
   font-size: 0.9375rem;
-  min-width: 10rem;
-  max-width: 16rem;
+  min-width: 8rem;
+  max-width: 14rem;
   cursor: pointer;
+}
+
+.work-control .session-select {
+  min-width: 8rem;
+  max-width: 14rem;
+}
+
+.session-select-session {
+  min-width: 18rem;
+  width: 28rem;
+  max-width: min(36rem, 100%);
 }
 
 .session-select:disabled {
@@ -250,13 +261,6 @@
   z-index: 100;
 }
 
-.todo-dropdown-empty {
-  font-size: 0.8125rem;
-  color: #6e7681;
-  padding: 0.75rem 1rem;
-  margin: 0;
-}
-
 .todo-dropdown-list {
   list-style: none;
   margin: 0;
@@ -326,6 +330,24 @@
   color: #3fb950;
 }
 
+.todo-dropdown-completed .todo-dropdown-content {
+  color: #8b949e;
+  text-decoration: line-through;
+}
+
+.todo-dropdown-pending .todo-dropdown-content {
+  color: #e6edf3;
+}
+
+.todo-dropdown-in_progress .todo-dropdown-content {
+  color: #e6edf3;
+}
+
+.todo-dropdown-cancelled .todo-dropdown-content {
+  color: #6e7681;
+  text-decoration: line-through;
+}
+
 .todo-dropdown-content {
   font-size: 0.8125rem;
   line-height: 1.35;
@@ -336,6 +358,11 @@
   .status-bar {
     flex-wrap: wrap;
     align-items: flex-start;
+  }
+
+  .session-select-session {
+    width: min(28rem, 100%);
+    max-width: 100%;
   }
 
   .token-group-stats {

@@ -61,7 +61,9 @@ pub fn work_path(agent_root: impl AsRef<Path>, name: &str) -> Result<PathBuf, Co
 pub fn validate_work_name(name: &str) -> Result<String, ConfigError> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
-        return Err(ConfigError::InvalidValue("work name must not be empty".into()));
+        return Err(ConfigError::InvalidValue(
+            "work name must not be empty".into(),
+        ));
     }
     if trimmed.contains('/') || trimmed.contains('\\') || trimmed.contains("..") {
         return Err(ConfigError::InvalidValue(
@@ -80,13 +82,10 @@ pub fn ensure_work_under_works(works_dir: &Path, path: &Path) -> Result<(), Conf
         path.canonicalize().map_err(ConfigError::Io)?
     } else if let Some(parent) = path.parent() {
         if parent.exists() {
-            parent
-                .canonicalize()
-                .map_err(ConfigError::Io)?
-                .join(
-                    path.file_name()
-                        .ok_or_else(|| ConfigError::InvalidValue("invalid work path".into()))?,
-                )
+            parent.canonicalize().map_err(ConfigError::Io)?.join(
+                path.file_name()
+                    .ok_or_else(|| ConfigError::InvalidValue("invalid work path".into()))?,
+            )
         } else {
             path.to_path_buf()
         }

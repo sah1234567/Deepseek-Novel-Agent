@@ -42,21 +42,31 @@ fn build_unattended_prompt(payload: &AskUserQuestionPayload) -> String {
 
     out.push_str("## 决策前准备\n\n");
     out.push_str("在做出选择之前，请先利用当前对话上下文中已有的信息进行分析：\n");
-    out.push_str("- 回顾本轮已 Read 的人物卡演变日志、关系索引、大纲、细纲、伏笔追踪等知识库文件\n");
+    out.push_str(
+        "- 回顾本轮已 Read 的人物卡演变日志、关系索引、大纲、细纲、伏笔追踪等知识库文件\n",
+    );
     out.push_str("- 回顾已完成的章节正文（尤其是最近几章），理解已有剧情铺垫和人物状态\n");
     out.push_str("- 如果上下文中缺少做出判断所需的关键信息，可 Read 相关文件后再决策\n\n");
 
     out.push_str("## 决策维度\n\n");
     out.push_str("综合分析以下维度：\n");
-    out.push_str("1. **已有剧情铺垫** — 前文已建立的人物性格、关系走向、情节伏笔，选择应与已有铺垫一致\n");
+    out.push_str(
+        "1. **已有剧情铺垫** — 前文已建立的人物性格、关系走向、情节伏笔，选择应与已有铺垫一致\n",
+    );
     out.push_str("2. **题材惯例与读者期待** — 当前作品所属题材的叙事惯例和目标读者的合理期待\n");
-    out.push_str("3. **后续剧情发展空间** — 哪个选项能为后续章节提供更丰富的冲突、转折和人物成长空间\n");
+    out.push_str(
+        "3. **后续剧情发展空间** — 哪个选项能为后续章节提供更丰富的冲突、转折和人物成长空间\n",
+    );
     out.push_str("4. **叙事价值与戏剧张力** — 哪个选项在文学性和阅读体验上更有价值\n");
     out.push_str("5. **人物弧光一致性** — 选择应服务于主要人物的成长弧线，避免人物性格断裂\n");
     out.push_str("6. **世界观自洽** — 选择应与已建立的世界观规则和设定体系保持一致\n");
 
     for (i, q) in payload.questions.iter().enumerate() {
-        out.push_str(&format!("\n---\n## 问题 {}: {}\n\n选项:\n", i + 1, q.prompt));
+        out.push_str(&format!(
+            "\n---\n## 问题 {}: {}\n\n选项:\n",
+            i + 1,
+            q.prompt
+        ));
         for opt in &q.options {
             out.push_str(&format!("- {}\n", opt.label));
         }
@@ -238,10 +248,7 @@ mod tests {
     async fn missing_questions_field_errors() {
         let tmp = TempDir::new().unwrap();
         let ctx = test_ctx(&tmp);
-        let err = AskUserQuestionTool
-            .call(json!({}), &ctx)
-            .await
-            .unwrap_err();
+        let err = AskUserQuestionTool.call(json!({}), &ctx).await.unwrap_err();
         assert!(err.to_string().contains("questions"));
     }
 }

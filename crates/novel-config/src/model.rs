@@ -20,7 +20,9 @@ pub struct ModelConfig {
     pub thinking_enabled: bool,
 }
 
-fn default_thinking() -> bool { true }
+fn default_thinking() -> bool {
+    true
+}
 
 impl Default for ModelConfig {
     fn default() -> Self {

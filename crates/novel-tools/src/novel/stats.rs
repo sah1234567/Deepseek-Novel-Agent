@@ -70,13 +70,14 @@ impl Tool for StatsTool {
     }
 
     async fn call(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
-        let chapter = parse_chapter_param(&input)
-            .map_err(ToolError::Validation)?;
+        let chapter = parse_chapter_param(&input).map_err(ToolError::Validation)?;
 
         if chapter != "all" {
-            let num: u32 = chapter
-                .parse()
-                .map_err(|_| ToolError::Validation(ValidationError::InvalidField(format!("invalid chapter number: {chapter}"))))?;
+            let num: u32 = chapter.parse().map_err(|_| {
+                ToolError::Validation(ValidationError::InvalidField(format!(
+                    "invalid chapter number: {chapter}"
+                )))
+            })?;
 
             let path = single_chapter_path(&ctx.project_root, num).ok_or_else(|| {
                 ToolError::Execution(format!(

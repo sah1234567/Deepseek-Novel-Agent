@@ -4,31 +4,28 @@ use crate::dynamic_context::{
 };
 use crate::interrupt::{AbortController, InterruptReason, ERROR_MESSAGE_USER_ABORT};
 use crate::message_bridge::{
-    assistant_from_completion, chat_slice_to_compaction, chat_to_compaction,
-    chat_to_json,
-    compaction_slice_to_chat, parse_tool_call_input, to_llm_messages,
-    tool_result_message,
+    assistant_from_completion, chat_slice_to_compaction, chat_to_compaction, chat_to_json,
+    compaction_slice_to_chat, parse_tool_call_input, to_llm_messages, tool_result_message,
 };
 use crate::messages::yield_missing_tool_result_blocks;
-use crate::subagent_react::{
-    react_limit_reminder_message, report_only_tool_rejection, SubagentLoopPhase,
-};
 use crate::subagent_overflow::{
     build_partial_report, task_preview_120, OVERFLOW_KIND_INPUT_REJECTED,
     OVERFLOW_KIND_OUTPUT_TRUNCATED,
 };
+use crate::subagent_react::{
+    react_limit_reminder_message, report_only_tool_rejection, SubagentLoopPhase,
+};
 use crate::turn::TurnContext;
+use crate::turn::MSG_SEQ_USER;
 use crate::{
     hooks::tool_schemas_for_agent, AgentEngine, AgentError, AgentType, ChatMessage,
-    CompactionAction, ContentBlockKind, Event, ForkError, ForkedAgentContext,
-    TerminalReason,
+    CompactionAction, ContentBlockKind, Event, ForkError, ForkedAgentContext, TerminalReason,
 };
 use novel_deepseek::{
     is_context_length_exceeded, is_output_truncated, ChatClient, LlmChatMessage, LlmCompletion,
     LlmError, LlmToolCall, StreamEvent, StreamOutcome,
 };
 use novel_logging::LogEvent;
-use crate::turn::MSG_SEQ_USER;
 use novel_tools::{
     AbortSignal, PermissionMode, PermissionResult, StreamingToolExecutor, ToolCallSpec,
     ToolContext, ToolExecutor, ToolRegistry,
@@ -160,10 +157,7 @@ impl StreamingToolDispatch {
                 .get(&tc.name)
                 .map(|t| t.validate_input(&input).map_err(|e| e.to_string()))
         } else if input.as_object().is_some_and(|o| o.is_empty()) {
-            Some(Err(format!(
-                "Invalid tool arguments JSON for {}",
-                tc.name
-            )))
+            Some(Err(format!("Invalid tool arguments JSON for {}", tc.name)))
         } else {
             registry
                 .get(&tc.name)
@@ -192,8 +186,7 @@ impl StreamingToolDispatch {
                 name: tc.name.clone(),
                 input,
             };
-            self.denied_specs
-                .insert(spec.id.clone(), (spec, reason));
+            self.denied_specs.insert(spec.id.clone(), (spec, reason));
             return;
         }
         if registry.get(&tc.name).is_none() {
@@ -312,12 +305,16 @@ impl AgentEngine {
         if self.llm.is_some() {
             return;
         }
-        let api_key =
-            novel_config::resolve_agent_api_key(&self.shared.global_config_path);
+        let api_key = novel_config::resolve_agent_api_key(&self.shared.global_config_path);
         let api_base = novel_config::resolve_agent_api_base(&self.shared.global_config_path);
         let model = &self.shared.settings.model.model;
         self.llm = match api_key {
-            Some(key) => Some(ChatClient::deepseek(&key, model, &api_base, self.shared.settings.model.thinking_enabled)),
+            Some(key) => Some(ChatClient::deepseek(
+                &key,
+                model,
+                &api_base,
+                self.shared.settings.model.thinking_enabled,
+            )),
             None => ChatClient::from_env(model).ok(),
         };
     }
@@ -357,25 +354,28 @@ impl AgentEngine {
         self.clear_interrupt();
         self.turn_number += 1;
 
-        let _ = self.shared.session.db.sync_user_turn_count(
-            &self.shared.session.id,
-            self.turn_number as i32,
-        );
+        let _ = self
+            .shared
+            .session
+            .db
+            .sync_user_turn_count(&self.shared.session.id, self.turn_number as i32);
 
         // Set session title from first user message
         if self.turn_number == 1 {
             let title: String = content.chars().take(50).collect();
-            let _ = self.shared.session.db.set_session_title(
-                &self.shared.session.id,
-                &title,
-            );
+            let _ = self
+                .shared
+                .session
+                .db
+                .set_session_title(&self.shared.session.id, &title);
         }
         // Apply model override for this turn (no persistent settings change)
         self.last_api_model = self.shared.settings.model.model.clone();
         if let Some(m) = model_override {
             if !m.is_empty() && m != self.shared.settings.model.model {
                 let api_key = novel_config::resolve_agent_api_key(&self.shared.global_config_path);
-                let api_base = novel_config::resolve_agent_api_base(&self.shared.global_config_path);
+                let api_base =
+                    novel_config::resolve_agent_api_base(&self.shared.global_config_path);
                 self.llm = match &api_key {
                     Some(key) => Some(ChatClient::deepseek(key, m, &api_base, true)),
                     None => ChatClient::from_env(m).ok(),
@@ -426,13 +426,7 @@ impl AgentEngine {
         let (th, tm, tc) = self
             .last_turn_usage
             .as_ref()
-            .map(|u| {
-                (
-                    u.cache_hit_tokens,
-                    u.cache_miss_tokens,
-                    u.completion_tokens,
-                )
-            })
+            .map(|u| (u.cache_hit_tokens, u.cache_miss_tokens, u.completion_tokens))
             .unwrap_or((0, 0, 0));
         tracing::info!(turn = self.turn_number, ?reason, "turn_complete");
         tracing::debug!(
@@ -488,7 +482,12 @@ impl AgentEngine {
         fork_run_id: &str,
         event_tx: Option<&mpsc::UnboundedSender<Event>>,
     ) -> Result<String, AgentError> {
-        if self.shared.sub_agent_count.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+        if self
+            .shared
+            .sub_agent_count
+            .load(std::sync::atomic::Ordering::SeqCst)
+            > 0
+        {
             return Err(AgentError::NestedForkProhibited);
         }
         self.sub_agent_inc();
@@ -562,7 +561,7 @@ impl AgentEngine {
                 .call_llm_and_execute(
                     &llm_msgs,
                     active_schemas,
-                    &mut turn_ctx,
+                    &turn_ctx,
                     event_tx,
                     Some(&mut child.messages),
                     false,
@@ -613,10 +612,9 @@ impl AgentEngine {
                     }
                     if let Err(TerminalReason::MaxReactLoops(_)) = turn_ctx.increment_inner() {
                         let spent = turn_ctx.inner_spent();
-                        child.messages.push(react_limit_reminder_message(
-                            spent,
-                            max_react_loops,
-                        ));
+                        child
+                            .messages
+                            .push(react_limit_reminder_message(spent, max_react_loops));
                         phase = phase.enter_report_only();
                         continue;
                     }
@@ -819,7 +817,9 @@ impl AgentEngine {
 
             match turn_ctx.increment_inner() {
                 Ok(()) => {}
-                Err(TerminalReason::MaxReactLoops(n)) => return Ok(TerminalReason::MaxReactLoops(n)),
+                Err(TerminalReason::MaxReactLoops(n)) => {
+                    return Ok(TerminalReason::MaxReactLoops(n))
+                }
                 Err(other) => return Ok(other),
             }
         }
@@ -847,6 +847,7 @@ impl AgentEngine {
         Ok(assistant)
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn call_llm_and_execute(
         &mut self,
         messages: &[LlmChatMessage],
@@ -1097,9 +1098,7 @@ impl AgentEngine {
                         );
                     } else if let Some(tx) = event_tx {
                         let input = parse_tool_call_input(&tc.arguments, &tc.id, &tc.name);
-                        let needs_approval = self
-                            .pending_tools
-                            .contains_key(&tc.id)
+                        let needs_approval = self.pending_tools.contains_key(&tc.id)
                             || dispatch.pending_specs.contains_key(&tc.id);
                         let _ = tx.send(Event::ToolCallRequest {
                             tool_call_id: tc.id.clone(),
@@ -1124,10 +1123,7 @@ impl AgentEngine {
 
             let mut results = executor.get_remaining_results().await;
             for (id, (_, reason)) in denied_specs {
-                results.push((
-                    id,
-                    Err(novel_tools::ToolError::PermissionDenied(reason)),
-                ));
+                results.push((id, Err(novel_tools::ToolError::PermissionDenied(reason))));
             }
             self.has_interruptible_tool_in_progress = false;
             for spec in &executed_specs {
@@ -1149,8 +1145,11 @@ impl AgentEngine {
                 self.messages.push(assistant);
             }
 
-            let tool_call_order: Vec<String> =
-                completion.tool_calls.iter().map(|tc| tc.id.clone()).collect();
+            let tool_call_order: Vec<String> = completion
+                .tool_calls
+                .iter()
+                .map(|tc| tc.id.clone())
+                .collect();
 
             if self.interrupt_requested() {
                 let _ = self
@@ -1176,7 +1175,7 @@ impl AgentEngine {
                     &tool_call_order,
                     &skip_result_events,
                     event_tx,
-                    message_sink.as_deref_mut(),
+                    message_sink,
                     persist_tool_messages,
                     fork_run_id,
                 )
@@ -1205,8 +1204,7 @@ impl AgentEngine {
             Ok(LlmCallOutcome::Continue(completion))
         }
     }
-
-    } // end first impl AgentEngine block
+} // end first impl AgentEngine block
 
 fn format_tool(
     spec: Option<&ToolCallSpec>,
@@ -1226,6 +1224,7 @@ fn format_tool(
 
 impl AgentEngine {
     /// Returns true if turn should pause (e.g. AskUserQuestion).
+    #[allow(clippy::too_many_arguments)]
     async fn execute_stream_results(
         &mut self,
         results: Vec<(
@@ -1253,14 +1252,10 @@ impl AgentEngine {
                     by_id.insert(id, result);
                 }
                 Some(existing) => {
-                    let incoming_needs_input = matches!(
-                        &result,
-                        Err(novel_tools::ToolError::NeedsUserInput { .. })
-                    );
-                    let existing_needs_input = matches!(
-                        existing,
-                        Err(novel_tools::ToolError::NeedsUserInput { .. })
-                    );
+                    let incoming_needs_input =
+                        matches!(&result, Err(novel_tools::ToolError::NeedsUserInput { .. }));
+                    let existing_needs_input =
+                        matches!(existing, Err(novel_tools::ToolError::NeedsUserInput { .. }));
                     if incoming_needs_input {
                         by_id.insert(id, result);
                     } else if existing_needs_input {
@@ -1399,11 +1394,8 @@ impl AgentEngine {
                                         .any(|p| p == &canonical)
                                     {
                                         self.read_skill_reference_paths.push(canonical);
-                                        let _ = self
-                                            .shared
-                                            .session
-                                            .db
-                                            .set_read_skill_reference_paths(
+                                        let _ =
+                                            self.shared.session.db.set_read_skill_reference_paths(
                                                 &self.shared.session.id,
                                                 &self.read_skill_reference_paths,
                                             );
@@ -1490,13 +1482,10 @@ impl AgentEngine {
         tool_call_id: &str,
         event_tx: Option<&mpsc::UnboundedSender<Event>>,
     ) -> Result<(), AgentError> {
-        let spec = self
-            .pending_tools
-            .remove(tool_call_id)
-            .ok_or_else(|| {
-                tracing::warn!(%tool_call_id, "approve_tool: unknown tool approval");
-                AgentError::Validation("unknown tool approval".into())
-            })?;
+        let spec = self.pending_tools.remove(tool_call_id).ok_or_else(|| {
+            tracing::warn!(%tool_call_id, "approve_tool: unknown tool approval");
+            AgentError::Validation("unknown tool approval".into())
+        })?;
         tracing::debug!(
             %tool_call_id,
             tool_name = %spec.name,
@@ -1541,13 +1530,10 @@ impl AgentEngine {
         reason: Option<String>,
         event_tx: Option<&mpsc::UnboundedSender<Event>>,
     ) -> Result<(), AgentError> {
-        let spec = self
-            .pending_tools
-            .remove(tool_call_id)
-            .ok_or_else(|| {
-                tracing::warn!(%tool_call_id, "deny_tool: unknown tool approval");
-                AgentError::Validation("unknown tool approval".into())
-            })?;
+        let spec = self.pending_tools.remove(tool_call_id).ok_or_else(|| {
+            tracing::warn!(%tool_call_id, "deny_tool: unknown tool approval");
+            AgentError::Validation("unknown tool approval".into())
+        })?;
         tracing::debug!(
             %tool_call_id,
             tool_name = %spec.name,
@@ -1661,13 +1647,7 @@ impl AgentEngine {
         let (th, tm, tc) = self
             .last_turn_usage
             .as_ref()
-            .map(|u| {
-                (
-                    u.cache_hit_tokens,
-                    u.cache_miss_tokens,
-                    u.completion_tokens,
-                )
-            })
+            .map(|u| (u.cache_hit_tokens, u.cache_miss_tokens, u.completion_tokens))
             .unwrap_or((0, 0, 0));
         tracing::debug!(
             session_id = %self.shared.session.id,
@@ -1733,7 +1713,9 @@ impl AgentEngine {
         max_chars: usize,
         max_output_tokens: u32,
     ) -> String {
-        use novel_compaction::{build_summary_trailing_user_prompt, rule_based_summary, truncate_summary};
+        use novel_compaction::{
+            build_summary_trailing_user_prompt, rule_based_summary, truncate_summary,
+        };
 
         let fallback = || rule_based_summary(to_summarize, max_chars);
 
@@ -1812,10 +1794,7 @@ impl AgentEngine {
             }
         };
         emit(event_tx, CompactionAction::Started);
-        tracing::info!(
-            tokens_before = self.last_context_tokens,
-            "compaction_start"
-        );
+        tracing::info!(tokens_before = self.last_context_tokens, "compaction_start");
         tracing::debug!(
             session_id = %self.shared.session.id,
             message_count = self.messages.len(),
@@ -1846,7 +1825,19 @@ impl AgentEngine {
 
         emit(event_tx, CompactionAction::RebuildingSession);
 
-        self.rebuild_system_message()?;
+        let epoch = self
+            .shared
+            .session
+            .db
+            .increment_compaction_count(&self.shared.session.id)
+            .map_err(AgentError::from)?;
+        self.shared
+            .session
+            .db
+            .archive_session_messages(&self.shared.session.id, epoch)
+            .map_err(AgentError::from)?;
+
+        self.refresh_system_dynamic_sections()?;
 
         let skill_ids = filter_loadable_skill_ids(
             &self.shared.session.project_root,
@@ -1892,15 +1883,17 @@ impl AgentEngine {
         )?;
 
         self.invoked_skill_ids = skill_ids.clone();
-        let _ = self.shared.session.db.set_invoked_skill_ids(
-            &self.shared.session.id,
-            &skill_ids,
-        );
+        let _ = self
+            .shared
+            .session
+            .db
+            .set_invoked_skill_ids(&self.shared.session.id, &skill_ids);
         self.read_skill_reference_paths = ref_paths.clone();
-        let _ = self.shared.session.db.set_read_skill_reference_paths(
-            &self.shared.session.id,
-            &ref_paths,
-        );
+        let _ = self
+            .shared
+            .session
+            .db
+            .set_read_skill_reference_paths(&self.shared.session.id, &ref_paths);
 
         let tokens_before = self.last_context_tokens;
         self.audit_log(LogEvent::CompactionTriggered {
@@ -1919,7 +1912,11 @@ impl AgentEngine {
 
         // Success: reset fail counter
         self.compaction_fail_count = 0;
-        tracing::info!(tokens_before, messages = self.messages.len(), "compaction_done");
+        tracing::info!(
+            tokens_before,
+            messages = self.messages.len(),
+            "compaction_done"
+        );
         tracing::debug!(
             session_id = %self.shared.session.id,
             tokens_after = self.last_context_tokens,
@@ -1937,10 +1934,7 @@ impl AgentEngine {
     }
 
     /// Wraps compact_and_sync with circuit-breaker counting.
-    async fn compact_with_events(
-        &mut self,
-        event_tx: Option<&mpsc::UnboundedSender<Event>>,
-    ) {
+    async fn compact_with_events(&mut self, event_tx: Option<&mpsc::UnboundedSender<Event>>) {
         match self.compact_and_sync(event_tx).await {
             Ok(()) => {}
             Err(e) => {
@@ -1998,12 +1992,8 @@ impl AgentEngine {
                 turn = 0;
                 seq_in_turn = 0;
                 (0, 0)
-            } else if msg.content.starts_with("[激活 Skill]") {
-                (self.turn_number as i32, 97)
-            } else if msg.content.starts_with("[会话历史摘要]")
-                || msg.content.starts_with("[上下文刷新]")
-            {
-                (self.turn_number as i32, 98)
+            } else if msg.content.starts_with("[上下文刷新]") {
+                (0, 1)
             } else if Self::is_sub_agent_report(msg) {
                 seq_in_turn += 1;
                 (turn, seq_in_turn)
@@ -2027,7 +2017,11 @@ impl AgentEngine {
         self.turn_message_seq
     }
 
-    fn persist_message_at_seq(&mut self, msg: &ChatMessage, sequence: i32) -> Result<(), AgentError> {
+    fn persist_message_at_seq(
+        &mut self,
+        msg: &ChatMessage,
+        sequence: i32,
+    ) -> Result<(), AgentError> {
         if sequence > self.turn_message_seq {
             self.turn_message_seq = sequence;
         }
@@ -2040,19 +2034,14 @@ impl AgentEngine {
             content_len,
             "persist_message"
         );
-        if let Err(e) = self
-            .shared
-            .session
-            .db
-            .insert_message(
-                &self.shared.session.id,
-                self.turn_number as i32,
-                sequence,
-                &msg.role,
-                &chat_to_json(msg),
-                None,
-            )
-        {
+        if let Err(e) = self.shared.session.db.insert_message(
+            &self.shared.session.id,
+            self.turn_number as i32,
+            sequence,
+            &msg.role,
+            &chat_to_json(msg),
+            None,
+        ) {
             tracing::error!(
                 error = %e,
                 role = %msg.role,
@@ -2070,10 +2059,7 @@ impl AgentEngine {
             .shared
             .session
             .db
-            .max_message_sequence_for_turn(
-                &self.shared.session.id,
-                self.turn_number as i32,
-            )
+            .max_message_sequence_for_turn(&self.shared.session.id, self.turn_number as i32)
             .map_err(AgentError::State)?;
         self.turn_message_seq = max;
         Ok(())
@@ -2163,12 +2149,20 @@ impl AgentEngine {
     }
 
     pub fn session_token_summary(&self) -> (i64, i64, i64, i64) {
-        self.shared.session
+        self.shared
+            .session
             .db
             .get_session(&self.shared.session.id)
             .ok()
             .flatten()
-            .map(|s| (s.cache_hit_tokens, s.cache_miss_tokens, s.completion_tokens, s.context_tokens))
+            .map(|s| {
+                (
+                    s.cache_hit_tokens,
+                    s.cache_miss_tokens,
+                    s.completion_tokens,
+                    s.context_tokens,
+                )
+            })
             .unwrap_or((0, 0, 0, 0))
     }
 
@@ -2199,7 +2193,8 @@ impl AgentEngine {
         // Full transcript in `fork_messages`; only summary enters parent `self.messages` / LLM context.
         let raw_pending: Vec<(String, String)> = {
             let mut guard = self
-                .shared.fork_queue
+                .shared
+                .fork_queue
                 .lock()
                 .map_err(|_| AgentError::Validation("fork queue lock poisoned".into()))?;
             std::mem::take(&mut *guard)
@@ -2217,10 +2212,7 @@ impl AgentEngine {
             pending.push((agent_type, task));
         }
 
-        tracing::debug!(
-            fork_count = pending.len(),
-            "drain_pending_forks_sync_start"
-        );
+        tracing::debug!(fork_count = pending.len(), "drain_pending_forks_sync_start");
 
         let mut handles = Vec::with_capacity(pending.len());
         let mut fork_run_ids = Vec::with_capacity(pending.len());
@@ -2243,14 +2235,8 @@ impl AgentEngine {
             self.sub_agent_inc();
             let event_tx_clone = event_tx.cloned();
             handles.push(tokio::spawn(async move {
-                let result = run_subagent_async(
-                    shared,
-                    agent_type,
-                    task,
-                    fork_run_id,
-                    event_tx_clone,
-                )
-                .await;
+                let result =
+                    run_subagent_async(shared, agent_type, task, fork_run_id, event_tx_clone).await;
                 (
                     agent_type,
                     result.unwrap_or_else(|e| format!("子 Agent 错误: {e}")),
@@ -2260,10 +2246,7 @@ impl AgentEngine {
 
         let fork_count = handles.len();
         for (i, handle) in handles.into_iter().enumerate() {
-            let fork_run_id = fork_run_ids
-                .get(i)
-                .cloned()
-                .unwrap_or_default();
+            let fork_run_id = fork_run_ids.get(i).cloned().unwrap_or_default();
             match handle.await {
                 Ok((agent_type, output)) => {
                     tracing::debug!(
@@ -2320,7 +2303,12 @@ pub async fn run_subagent_async(
     let api_base = novel_config::resolve_agent_api_base(&shared.global_config_path);
     let model = &shared.settings.model.model;
     let mut llm: Option<ChatClient> = match api_key {
-        Some(key) => Some(ChatClient::deepseek(&key, model, &api_base, shared.settings.model.thinking_enabled)),
+        Some(key) => Some(ChatClient::deepseek(
+            &key,
+            model,
+            &api_base,
+            shared.settings.model.thinking_enabled,
+        )),
         None => ChatClient::from_env(model).ok(),
     };
 
@@ -2513,7 +2501,10 @@ pub async fn run_subagent_async(
                 .await;
             match result {
                 Ok(StreamOutcome::Complete(c)) => c,
-                Ok(StreamOutcome::Cancelled { partial, background_usage }) => {
+                Ok(StreamOutcome::Cancelled {
+                    partial,
+                    background_usage,
+                }) => {
                     if let Ok(mut d) = dispatch_arc.lock() {
                         d.discard();
                     }
@@ -2521,7 +2512,9 @@ pub async fn run_subagent_async(
                     interrupt_reason = "流中断";
                     // Drain → keep session prompt_tokens correct. Three-class
                     // breakdown is drain's own, not the original request's.
-                    let usage = match tokio::time::timeout(Duration::from_secs(1), background_usage).await {
+                    let usage = match tokio::time::timeout(Duration::from_secs(1), background_usage)
+                        .await
+                    {
                         Ok(Ok(Some(u))) => Some(u),
                         _ => partial.usage.clone(),
                     };
@@ -2547,7 +2540,9 @@ pub async fn run_subagent_async(
                         d.discard();
                     }
                     child.messages = snapshot;
-                    shared.sub_agent_count.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                    shared
+                        .sub_agent_count
+                        .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
                     return Ok(build_partial_report(
                         &agent_type.to_string(),
                         &task_preview_120(&task),
@@ -2585,7 +2580,9 @@ pub async fn run_subagent_async(
                 &mut child.messages,
                 assistant_from_completion(&completion),
             )?;
-            shared.sub_agent_count.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            shared
+                .sub_agent_count
+                .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
             return Ok(build_partial_report(
                 &agent_type.to_string(),
                 &task_preview_120(&task),
@@ -2743,8 +2740,7 @@ pub async fn run_subagent_async(
         .unwrap_or_else(|| "（无文本输出）".into());
 
     let output = if was_interrupted {
-        let task_preview: String = child.fork.task_message.content
-            .chars().take(200).collect();
+        let task_preview: String = child.fork.task_message.content.chars().take(200).collect();
         let task_preview = if child.fork.task_message.content.len() > 200 {
             format!("{task_preview}…")
         } else {
@@ -2771,7 +2767,9 @@ pub async fn run_subagent_async(
     };
 
     // Decrement sub-agent count
-    shared.sub_agent_count.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    shared
+        .sub_agent_count
+        .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
 
     if let Some(ref tx) = event_tx {
         let _ = tx.send(Event::SubAgentComplete {
@@ -2831,7 +2829,8 @@ mod tests {
         let mut engine = AgentEngine::new(test_config(&tmp)).unwrap();
         engine.handle_message("持久化").await.unwrap();
         let stored = engine
-            .shared.session
+            .shared
+            .session
             .db
             .get_session_messages(&engine.shared.session.id, None)
             .unwrap();
@@ -2879,10 +2878,7 @@ mod tests {
             },
         );
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        engine
-            .deny_tool("write-1", None, Some(&tx))
-            .await
-            .unwrap();
+        engine.deny_tool("write-1", None, Some(&tx)).await.unwrap();
         assert!(engine.pending_user_question.is_some());
         let mut saw_turn_complete = false;
         while let Ok(ev) = rx.try_recv() {
@@ -2938,7 +2934,10 @@ mod tests {
         assert_eq!(turn_one[0].sequence, MSG_SEQ_USER);
         assert_eq!(turn_one[1].sequence, 1);
         assert_eq!(turn_one[2].sequence, 2);
-        assert!(turn_one[2].content_json.to_string().contains("子 Agent 完成"));
+        assert!(turn_one[2]
+            .content_json
+            .to_string()
+            .contains("子 Agent 完成"));
     }
 
     #[test]
@@ -3018,11 +3017,7 @@ mod tests {
         engine.messages.push(tool_msg);
 
         {
-            let mut guard = engine
-                .shared
-                .fork_queue
-                .lock()
-                .expect("fork queue lock");
+            let mut guard = engine.shared.fork_queue.lock().expect("fork queue lock");
             guard.push((
                 "KnowledgeAuditor".into(),
                 "审计 chapters/chapter-001.md".into(),
@@ -3053,7 +3048,13 @@ mod tests {
                 m.sequence
             );
         }
-        assert_eq!(engine.shared.sub_agent_count.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(
+            engine
+                .shared
+                .sub_agent_count
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
     }
 
     #[tokio::test]
@@ -3082,11 +3083,7 @@ mod tests {
         engine.messages.push(tool_msg);
 
         {
-            let mut guard = engine
-                .shared
-                .fork_queue
-                .lock()
-                .expect("fork queue lock");
+            let mut guard = engine.shared.fork_queue.lock().expect("fork queue lock");
             guard.push((
                 "KnowledgeAuditor".into(),
                 "审计 chapters/chapter-001.md".into(),
@@ -3103,6 +3100,7 @@ mod tests {
             .unwrap();
         let report = stored
             .iter()
+            .filter(|m| m.role != "system")
             .find(|m| m.content_json.to_string().contains("子 Agent 完成"))
             .expect("sub-agent report in parent session");
         let fork_run_id = report
@@ -3171,19 +3169,9 @@ mod tests {
         engine.messages.push(tool_msg);
 
         {
-            let mut guard = engine
-                .shared
-                .fork_queue
-                .lock()
-                .expect("fork queue lock");
-            guard.push((
-                "KnowledgeAuditor".into(),
-                "任务 A：chapter-001".into(),
-            ));
-            guard.push((
-                "ChapterCraftAnalyzer".into(),
-                "任务 B：chapter-001".into(),
-            ));
+            let mut guard = engine.shared.fork_queue.lock().expect("fork queue lock");
+            guard.push(("KnowledgeAuditor".into(), "任务 A：chapter-001".into()));
+            guard.push(("ChapterCraftAnalyzer".into(), "任务 B：chapter-001".into()));
         }
 
         engine.drain_pending_forks(None).await.unwrap();
@@ -3196,23 +3184,19 @@ mod tests {
             .unwrap();
         let reports: Vec<_> = stored
             .iter()
-            .filter(|m| m.content_json.to_string().contains("子 Agent 完成"))
+            .filter(|m| m.role != "system" && m.content_json.to_string().contains("子 Agent 完成"))
             .collect();
         assert_eq!(reports.len(), 2);
         assert_eq!(reports[0].sequence, 2);
         assert_eq!(reports[1].sequence, 3);
-        assert!(
-            reports[0]
-                .content_json
-                .to_string()
-                .contains("KnowledgeAuditor")
-        );
-        assert!(
-            reports[1]
-                .content_json
-                .to_string()
-                .contains("ChapterCraftAnalyzer")
-        );
+        assert!(reports[0]
+            .content_json
+            .to_string()
+            .contains("KnowledgeAuditor"));
+        assert!(reports[1]
+            .content_json
+            .to_string()
+            .contains("ChapterCraftAnalyzer"));
     }
 
     #[test]

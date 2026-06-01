@@ -7,6 +7,8 @@
 //!   $env:DEEPSEEK_API_KEY = "sk-..."
 //!   cargo nextest run -p novel-core --test live_invoke_skill_turn --run-ignored all
 
+#![allow(clippy::unwrap_used)]
+
 use novel_core::{AgentEngine, EngineConfig};
 use std::collections::HashSet;
 use std::time::Duration;
@@ -33,17 +35,12 @@ fn write_skill(skills_root: &std::path::Path, id: &str) {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("SKILL.md"),
-        format!(
-            "---\nname: {id}\ndescription: live test skill\nwhen_to_use: test\n---\n# {id}\n"
-        ),
+        format!("---\nname: {id}\ndescription: live test skill\nwhen_to_use: test\n---\n# {id}\n"),
     )
     .unwrap();
 }
 
-fn assert_unique_turn_sequences(
-    stored: &[novel_state::StoredMessage],
-    session_id: &str,
-) {
+fn assert_unique_turn_sequences(stored: &[novel_state::StoredMessage], session_id: &str) {
     let mut seen = HashSet::new();
     for m in stored {
         assert_eq!(
@@ -86,16 +83,14 @@ async fn live_turn_invoke_skills_no_duplicate_db_rows() {
 
     let session_id = engine.shared.session.id.clone();
 
-    let prompt = "请在本轮依次调用 InvokeSkill，skill_id 分别为 novel-planning、rebirth、power-fantasy \
+    let prompt =
+        "请在本轮依次调用 InvokeSkill，skill_id 分别为 novel-planning、rebirth、power-fantasy \
                   （各调用一次，不要跳过）。完成后用一句话确认三个 skill 已加载。";
 
-    let result = tokio::time::timeout(
-        Duration::from_secs(300),
-        engine.handle_message(prompt),
-    )
-    .await
-    .expect("turn timed out after 300s")
-    .expect("handle_message should not return State/DB error");
+    let result = tokio::time::timeout(Duration::from_secs(300), engine.handle_message(prompt))
+        .await
+        .expect("turn timed out after 300s")
+        .expect("handle_message should not return State/DB error");
 
     println!("terminal reason: {result:?}");
 
@@ -109,7 +104,11 @@ async fn live_turn_invoke_skills_no_duplicate_db_rows() {
     assert_unique_turn_sequences(&stored, &session_id);
 
     let tool_rows: Vec<_> = stored.iter().filter(|m| m.role == "tool").collect();
-    println!("persisted messages: {}, tool results: {}", stored.len(), tool_rows.len());
+    println!(
+        "persisted messages: {}, tool results: {}",
+        stored.len(),
+        tool_rows.len()
+    );
     assert!(
         !tool_rows.is_empty(),
         "expected at least one InvokeSkill tool result in DB"

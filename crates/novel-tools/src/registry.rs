@@ -41,12 +41,10 @@ impl Default for ToolRegistry {
 #[cfg(test)]
 mod tests {
     use crate::default_registry;
-    use tempfile::TempDir;
 
     #[test]
     fn default_registry_has_novel_tools() {
-        let tmp = TempDir::new().unwrap();
-        let reg = default_registry(tmp.path().to_path_buf());
+        let reg = default_registry();
         assert!(reg.get("CharacterSearch").is_some());
         assert!(reg.get("PlotGraph").is_some());
         assert!(reg.get("TrackingQuery").is_some());

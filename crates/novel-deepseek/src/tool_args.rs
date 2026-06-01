@@ -32,8 +32,14 @@ mod tests {
 
     #[test]
     fn empty_becomes_empty_object() {
-        assert_eq!(parse_tool_arguments("").unwrap(), Value::Object(Default::default()));
-        assert_eq!(parse_tool_arguments("  ").unwrap(), Value::Object(Default::default()));
+        assert_eq!(
+            parse_tool_arguments("").unwrap(),
+            Value::Object(Default::default())
+        );
+        assert_eq!(
+            parse_tool_arguments("  ").unwrap(),
+            Value::Object(Default::default())
+        );
     }
 
     #[test]

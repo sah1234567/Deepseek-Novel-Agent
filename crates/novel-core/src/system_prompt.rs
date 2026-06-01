@@ -66,6 +66,27 @@ impl SystemPromptBuilder {
         }
         parts.join("\n\n")
     }
+
+    /// Static-only system prompt (AGENTS + Workspace frozen; other sections empty).
+    pub fn build_static_only(&self, dynamic: &DynamicContext) -> String {
+        self.build(&DynamicContext {
+            agents_md: dynamic.agents_md.clone(),
+            knowledge_index: String::new(),
+            memory: String::new(),
+            progress: String::new(),
+            skill_summaries: Vec::new(),
+            workspace_path: dynamic.workspace_path.clone(),
+        })
+    }
+}
+
+/// Hash of the static system segment for metadata validation.
+pub fn system_static_sha256(dynamic: &DynamicContext) -> String {
+    use std::hash::{Hash, Hasher};
+    let static_prompt = SystemPromptBuilder::new().build_static_only(dynamic);
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    static_prompt.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
 }
 
 impl Default for SystemPromptBuilder {
@@ -112,5 +133,20 @@ mod tests {
         assert!(prompt.contains("## Skills"));
         assert!(prompt.contains("- xianxia: 仙侠规范"));
         assert!(prompt.contains("- post-change: 修改后清单 - 代码改动完成后执行"));
+    }
+
+    #[test]
+    fn system_static_sha256_ignores_skill_summaries() {
+        let base = DynamicContext {
+            agents_md: "agents".into(),
+            workspace_path: "g:\\works\\demo".into(),
+            ..Default::default()
+        };
+        let mut with_skills = base.clone();
+        with_skills.skill_summaries = vec![("xianxia".into(), "仙侠".into())];
+        assert_eq!(
+            system_static_sha256(&base),
+            system_static_sha256(&with_skills)
+        );
     }
 }

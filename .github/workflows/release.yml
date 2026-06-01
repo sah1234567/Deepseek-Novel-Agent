@@ -43,24 +43,21 @@ jobs:
           cache: npm
           cache-dependency-path: ui/package-lock.json
 
-      - name: Frontend
-        working-directory: ui
-        run: npm ci && npm run build && npm test
+      - name: Frontend (Vitest + build)
+        run: bash scripts/ci-frontend.sh
 
-      - name: rustfmt
-        run: cargo fmt --all -- --check
+      - name: rustfmt + cargo check
+        run: bash scripts/ci-rust-static.sh
 
-      - name: cargo check
-        run: cargo check --workspace
+      - name: clippy (workspace, deny warnings + unwrap_used)
+        run: bash scripts/ci-clippy.sh
 
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest
 
-      - name: Tests
-        run: |
-          cargo nextest run --workspace
-          cargo nextest run -p novel-integration-tests
+      - name: Tests (nextest, CI profile)
+        run: bash scripts/ci-rust-test.sh
 
   build-tauri:
     name: Tauri bundle (${{ matrix.os }})

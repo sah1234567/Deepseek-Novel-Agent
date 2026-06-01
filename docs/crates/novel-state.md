@@ -9,87 +9,70 @@
 ### 1.1 Database
 
 - r2d2 连接池 + rusqlite，WAL 模式
-- `Database::open(path)` 自动 migrations
+- `Database::open(path)` 自动 migrations（schema v2 含 `message_archive`）
 - 最大连接 8，超时 5s
 - **每作品独立 DB：** `{work}/.novel-agent/state.db`
 
-### 1.2 Schema（6 表 + 1 视图）
+### 1.2 Schema（7 表 + schema_version）
 
-**schema_version：** 迁移版本号
+**schema_version：** 迁移版本号（当前 v2）
 
 **sessions：** UUID 主键，project_root, title, status, model, provider
-- Token 三类：cache_hit_tokens, cache_miss_tokens, completion_tokens
-- `total_turns`、`api_call_count`、`metadata_json`（JSON，存 session 级元数据）
+- Token 三类：`cache_hit_tokens`, `cache_miss_tokens`, `completion_tokens`（各自独立 `+=`）
+- `context_tokens`：最近一次 API 调用的 `hit+miss+comp` 快照（覆盖写入）
+- `total_turns`、`api_call_count`、`metadata_json`（JSON，含 `system_static_frozen`、`frozen_*`、`compaction_count` 等）
 
-**messages：** session_id FK，turn_number, sequence, role, content_json
-- 消息级 token 三类 + estimated_tokens
+**messages：** API **工作集**（压缩后仅保留 system + context user + retain ReAct + 新轮次）
+- turn/seq 编码：`(0,0)` system → `(0,1)` `[上下文刷新]` user → `turn≥1` 真实对话
 - 唯一约束：(session_id, turn_number, sequence)
 
-**checkpoints：** Fork 检查点
+**message_archive：** 每次压缩前从 `messages` 整表快照（含 `compaction_epoch`）；供 UI 全历史回放，**不进 LLM API**
 
-**sub_agent_runs：** legacy schema，运行时未使用；新 fork transcript 用 `fork_runs` / `fork_messages`
-
-**fork_runs：** 每次 fork 实例（`source`: `tool` | `hook`）；`report_message_id` 仅工具路径 inject 后有值
-
-**fork_messages：** 子 Agent 内 assistant/tool 消息（与 parent `messages` 分离）；`get_fork_messages(run_id)` 供 IPC/overlay
+**fork_runs / fork_messages：** 子 Agent transcript（与 parent `messages` 分离）
 
 **session_todos：** 会话级待办（TodoWrite 工具）
 
-**daily_token_stats 视图**
+**Legacy cleanup：** 打开 DB 时自动 `DROP` 旧版 `checkpoints` / `sub_agent_runs` / `daily_token_stats`。
 
 ### 1.3 核心操作
 
-**Session：** 创建、查询、状态更新、token 累加（`accumulate_session_tokens` 同时递增 `api_call_count` 并刷新 `last_active_at`）。用户对话轮数由 `sync_user_turn_count` 独立写入（不刷新时间戳）。列表按 `project_root` 过滤、`last_active_at` 降序。
+**Session：** 创建、查询、状态更新。
 
-**Message：** 插入、按 turn range 查询、Compaction 后 `replace_session_messages` 全量替换。
+**Token 与活跃时间（单一 API）：** `accumulate_session_tokens(session_id, hit, miss, completion, model)` 在一次 UPDATE 中：
+- 三类 token 各自 `+=`
+- `context_tokens = hit + miss + completion`（覆盖为本次 API 快照）
+- `api_call_count += 1`
+- 刷新 `last_active_at` 与 `model`
 
-**Metadata：** `invoked_skill_ids` 与 `read_skill_reference_paths` 存于 session `metadata_json`，resume / compaction rebuild 时恢复。
+主 Agent 与 SubAgent 的 LLM 调用均经此 API 落库。用户对话轮数由 `sync_user_turn_count` 独立写入（不刷新时间戳；`[上下文刷新]` user 不计入）。
 
-**Todos / Fork transcript：** TodoWrite 经 upsert 持久化；子 Agent 经 `fork_runs` + `fork_messages`（与 parent messages 分离）。
+**Message：** 增量 `insert_message`；Compaction **先** `archive_session_messages(epoch)` **再** `replace_session_messages`（工作集全量替换）。
 
-**API 配置：** 已从 DB 迁移至 agent 级 `api_config.json`。
+**Archive：** `get_archived_epochs`、`get_archived_messages(session_id, epoch)`。
 
-### 1.4 成本定价
+**Metadata：** `invoked_skill_ids`、`read_skill_reference_paths`；`system_static_frozen` + `frozen_agents_md` / `frozen_workspace_path` / `system_static_sha256`；`compaction_count`。
 
-- `COST_HIT_PER_M: 0.014`
-- `COST_MISS_PER_M: 0.14`
-- `COST_COMPLETION_PER_M: 0.28`
-- `compute_cost_usd(hit, miss, completion)`
+**Resume 校验：** 会话 metadata 异常时可运行 `reset-work-databases` 后新建 session。
 
-TodoWrite 通过 `upsert_session_todos` 写入；`dynamic_context::load_progress` 与 `get_app_status` 读取展示。
+**Todos / Fork transcript：** 同前。
 
-### 1.5 SessionSummary
+### 1.4 SessionSummary
 
-`list_sessions(project_root, limit)` 返回：
+`list_sessions(project_root, limit)` 返回：id、title、status、model、last_active_at、created_at、**total_turns**（用户对话轮，不含 `[上下文刷新]`）、**api_call_count**。
 
-| 字段 | 说明 |
-|------|------|
-| id | 会话 UUID |
-| title | 可选标题（首条用户消息自动写入前 50 字） |
-| status | active / archived 等 |
-| model | 最后一次 API 调用使用的模型 |
-| last_active_at | 最后一次 LLM API 调用结束或中断的时间（`accumulate_session_tokens` / `touch_last_active_at`）；切换会话 resume **不**更新 |
-| created_at | 会话创建时间 |
-| total_turns | 用户对话轮数（每条用户消息 +1） |
-| api_call_count | LLM API 调用次数（inner loop / 子 Agent 计费统计） |
+**Token 相关函数：** `accumulate_session_tokens`、`sync_user_turn_count`、`touch_last_active_at`（行为同前）。
 
-（不含 `total_cost_usd`；费用由 token 字段按需计算。）
+**`last_active_at` 更新规则：** LLM 返回/中断时更新；`resume_session` 纯切换不更新。
 
-**Token 累加：** `accumulate_session_tokens` 更新 token 三类计数、递增 `api_call_count` 并刷新 `last_active_at`；**不**修改 `total_turns`。用户轮数由 `sync_user_turn_count` 写入（**不**刷新 `last_active_at`）。`update_session_status` 仅改 status。
+**迁移：** 无 runtime 合并；库格式异常时用 [reset-work-databases](../../scripts/reset-work-databases.ps1) 清理后新建 session。
 
-**`last_active_at` 更新规则：**
+### 1.5 Compaction 持久化协作
 
-| 场景 | 是否更新 |
-|------|----------|
-| LLM 正常返回（有/无 usage 元数据） | ✅ `accumulate_session_tokens` 或 `touch_last_active_at` |
-| 流式输出被用户中断 | ✅ 中断处理分支（有 usage 则 accumulate，否则 touch） |
-| LLM 已返回、工具执行阶段按 Esc | ❌ 不额外更新（时间戳停在 LLM 结束时刻） |
-| 本轮尚未发起任何 API 即中断 | ❌ |
-| `resume_session` / 仅切换查看会话 | ❌ |
-| `sync_user_turn_count` | ❌ |
+1. `increment_compaction_count` → epoch
+2. `archive_session_messages` — 压缩前整表快照
+3. `novel-core` 内存重建后 `replace_session_messages` — 仅工作集
+4. `invoked_skill_ids` / reference paths 同步 metadata
 
-**迁移：** 旧库首次打开时 `ensure_api_call_count_column` 将原 `total_turns`（实为 API 计数）迁入 `api_call_count`，并按 messages 中 user 消息重算 `total_turns`。
+**建会话：** `AgentEngine::new` 即 `insert_message(0,0,system)` + 写入静态快照 metadata（非等到首次 compact）。
 
-### 1.6 Compaction 持久化协作
-
-压缩完成后 `novel-core::turn_loop` 调用 `replace_session_messages`，将内存中已压缩的 messages 写回 DB。`invoked_skill_ids` 同步更新，保证 refresh 后 resume 行为一致。
+**清理会话库：** [reset-work-databases](../../scripts/reset-work-databases.ps1) / `.sh` — 见 [README §清理作品会话库](../../README.md#清理作品会话库)。

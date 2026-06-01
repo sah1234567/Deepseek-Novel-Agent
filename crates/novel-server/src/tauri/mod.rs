@@ -10,7 +10,10 @@ mod engine_loop;
 mod events;
 mod state;
 
-pub use dto::{fork_messages_to_ui, stored_messages_to_ui, UiContentBlock, UiMessage};
+pub use dto::{
+    build_session_transcript, fork_messages_to_ui, stored_messages_to_ui, SessionTranscript,
+    SessionTranscriptArchive, UiContentBlock, UiMessage,
+};
 pub use engine_loop::{AppStatus, WorkSummary};
 pub use events::{
     emit_core_event, StreamChunkPayload, SubAgentCompletePayload, ToolCallRequestPayload,
@@ -42,7 +45,11 @@ pub fn spawn_event_forwarder(
     event_tx
 }
 
-pub async fn send_message(ctx: &CommandContext, content: String, model: Option<String>) -> Result<String, String> {
+pub async fn send_message(
+    ctx: &CommandContext,
+    content: String,
+    model: Option<String>,
+) -> Result<String, String> {
     if content.trim().is_empty() {
         return Err("empty message".into());
     }
@@ -69,7 +76,7 @@ pub async fn send_message(ctx: &CommandContext, content: String, model: Option<S
 pub async fn interrupt(ctx: &CommandContext, reason: Option<String>) -> Result<(), String> {
     let r = reason
         .as_deref()
-        .map(novel_core::InterruptReason::from_str)
+        .map(novel_core::InterruptReason::parse_reason)
         .unwrap_or(novel_core::InterruptReason::UserCancel);
     ctx.abort_controller.request(r);
     Ok(())
@@ -177,8 +184,7 @@ pub async fn init_novel_project(ctx: &CommandContext) -> Result<(), String> {
         let cfg = ctx.config.read().await;
         (cfg.active_project.clone(), cfg.templates_dir())
     };
-    novel_knowledge::init_project_scaffold(&work, templates.as_path())
-        .map_err(|e| e.to_string())
+    novel_knowledge::init_project_scaffold(&work, templates.as_path()).map_err(|e| e.to_string())
 }
 
 pub fn list_works(works_dir: &std::path::Path) -> Result<Vec<WorkSummary>, String> {
@@ -199,8 +205,7 @@ pub fn list_works(works_dir: &std::path::Path) -> Result<Vec<WorkSummary>, Strin
         else {
             continue;
         };
-        let initialized =
-            path.join("AGENTS.md").is_file() || path.join("knowledge").is_dir();
+        let initialized = path.join("AGENTS.md").is_file() || path.join("knowledge").is_dir();
         works.push(WorkSummary {
             name: name.to_string(),
             path: path.to_string_lossy().into_owned(),
@@ -294,6 +299,21 @@ pub async fn resume_session(ctx: &CommandContext, session_id: String) -> Result<
     Ok(sid)
 }
 
+pub async fn get_session_transcript(
+    ctx: &CommandContext,
+    session_id: Option<String>,
+) -> Result<SessionTranscript, String> {
+    let sid = match session_id {
+        Some(id) => id,
+        None => get_app_status(ctx).await?.session_id,
+    };
+    let db = {
+        let cfg = ctx.config.read().await;
+        novel_state::Database::open(cfg.db_path()).map_err(|e| e.to_string())?
+    };
+    dto::build_session_transcript(&db, &sid).map_err(|e| e.to_string())
+}
+
 pub async fn get_session_messages(
     ctx: &CommandContext,
     session_id: Option<String>,
@@ -385,11 +405,8 @@ pub async fn set_api_config(
     api_base: String,
 ) -> Result<(), String> {
     let path = ctx.config.read().await.global_config_path.clone();
-    novel_config::save_agent_api_config(
-        &path,
-        &novel_config::AgentApiConfig { api_key, api_base },
-    )
-    .map_err(|e| e.to_string())
+    novel_config::save_agent_api_config(&path, &novel_config::AgentApiConfig { api_key, api_base })
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

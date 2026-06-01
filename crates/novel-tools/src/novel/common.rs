@@ -25,7 +25,9 @@ pub fn outline_col_value<'a>(
     map: &OutlineColumnMap,
     name: &str,
 ) -> Option<&'a str> {
-    map.get(name).and_then(|&i| cells.get(i)).map(|s| s.as_str())
+    map.get(name)
+        .and_then(|&i| cells.get(i))
+        .map(|s| s.as_str())
 }
 
 /// Detect if a row looks like a header (first cell is a known column label).
@@ -164,7 +166,9 @@ pub fn list_chapter_files(root: &Path) -> Vec<(u32, PathBuf)> {
         if path.extension().and_then(|e| e.to_str()) != Some("md") {
             continue;
         }
-        let Some(file_name) = path.file_name() else { continue; };
+        let Some(file_name) = path.file_name() else {
+            continue;
+        };
         let num = parse_chapter_num(&file_name.to_string_lossy());
         if num > 0 {
             out.push((num, path));
@@ -185,7 +189,9 @@ pub fn list_outline_files(root: &Path) -> Vec<(u32, PathBuf)> {
         if path.extension().and_then(|e| e.to_str()) != Some("md") {
             continue;
         }
-        let Some(file_name) = path.file_name() else { continue; };
+        let Some(file_name) = path.file_name() else {
+            continue;
+        };
         let num = parse_chapter_num(&file_name.to_string_lossy());
         if num > 0 {
             out.push((num, path));

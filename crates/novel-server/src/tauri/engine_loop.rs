@@ -1,9 +1,6 @@
 use crate::AppConfig;
-use novel_core::{
-    AbortController, AgentEngine, AgentError, EngineStatus, Event,
-    TerminalReason,
-};
 use novel_config::ensure_work_under_works;
+use novel_core::{AbortController, AgentEngine, AgentError, EngineStatus, Event, TerminalReason};
 use novel_state::SessionTodo;
 use novel_tools::PermissionMode;
 use std::sync::Arc;
@@ -92,7 +89,8 @@ fn build_app_status(engine: &AgentEngine, active_work_name: &str) -> AppStatus {
         has_interruptible_tool_in_progress,
     } = engine.status_snapshot();
     let todos = engine
-        .shared.session
+        .shared
+        .session
         .db
         .list_session_todos(&session_id)
         .unwrap_or_default();
@@ -212,10 +210,7 @@ pub fn spawn_engine_loop(
                     });
                     let _ = reply.send(result);
                 }
-                EngineCommand::ResumeSession {
-                    session_id,
-                    reply,
-                } => {
+                EngineCommand::ResumeSession { session_id, reply } => {
                     tracing::debug!(%session_id, "engine_command ResumeSession");
                     abort_controller.clear();
                     let ecfg = config.read().await.engine_config();
@@ -240,17 +235,18 @@ pub fn spawn_engine_loop(
                     tracing::debug!("engine_command CreateSession");
                     abort_controller.clear();
                     let ecfg = config.read().await.engine_config();
-                    let result = match AgentEngine::new_with_abort(ecfg, Arc::clone(&abort_controller)) {
-                        Ok(e) => {
-                            let sid = e.shared.session.id.clone();
-                            engine = e;
-                            Ok(sid)
-                        }
-                        Err(e) => {
-                            tracing::warn!(error = %e, "engine_command CreateSession failed");
-                            Err(e.to_string())
-                        }
-                    };
+                    let result =
+                        match AgentEngine::new_with_abort(ecfg, Arc::clone(&abort_controller)) {
+                            Ok(e) => {
+                                let sid = e.shared.session.id.clone();
+                                engine = e;
+                                Ok(sid)
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = %e, "engine_command CreateSession failed");
+                                Err(e.to_string())
+                            }
+                        };
                     let _ = reply.send(result);
                 }
                 EngineCommand::SwitchProjectAndCreateSession {
@@ -274,21 +270,22 @@ pub fn spawn_engine_loop(
                     if let Some(parent) = ecfg.db_path.parent() {
                         let _ = std::fs::create_dir_all(parent);
                     }
-                    let result = match AgentEngine::new_with_abort(ecfg, Arc::clone(&abort_controller)) {
-                        Ok(e) => {
-                            let sid = e.shared.session.id.clone();
-                            engine = e;
-                            Ok(sid)
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                error = %e,
-                                project_root = %project_root_display,
-                                "engine_command SwitchProjectAndCreateSession failed"
-                            );
-                            Err(e.to_string())
-                        }
-                    };
+                    let result =
+                        match AgentEngine::new_with_abort(ecfg, Arc::clone(&abort_controller)) {
+                            Ok(e) => {
+                                let sid = e.shared.session.id.clone();
+                                engine = e;
+                                Ok(sid)
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    error = %e,
+                                    project_root = %project_root_display,
+                                    "engine_command SwitchProjectAndCreateSession failed"
+                                );
+                                Err(e.to_string())
+                            }
+                        };
                     let _ = reply.send(result);
                 }
             }

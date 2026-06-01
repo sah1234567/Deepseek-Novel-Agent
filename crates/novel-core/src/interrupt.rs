@@ -12,13 +12,21 @@ pub enum InterruptReason {
 }
 
 impl InterruptReason {
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse_reason(s: &str) -> Self {
         match s {
             "interrupt" | "submit-interrupt" => Self::SubmitInterrupt,
             "sibling_error" => Self::SiblingError,
             "streaming_fallback" => Self::StreamingFallback,
             _ => Self::UserCancel,
         }
+    }
+}
+
+impl std::str::FromStr for InterruptReason {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self::parse_reason(s))
     }
 }
 
@@ -98,11 +106,11 @@ mod tests {
     #[test]
     fn parse_reason_strings() {
         assert_eq!(
-            InterruptReason::from_str("interrupt"),
+            "interrupt".parse::<InterruptReason>().unwrap(),
             InterruptReason::SubmitInterrupt
         );
         assert_eq!(
-            InterruptReason::from_str("user-cancel"),
+            "user-cancel".parse::<InterruptReason>().unwrap(),
             InterruptReason::UserCancel
         );
     }

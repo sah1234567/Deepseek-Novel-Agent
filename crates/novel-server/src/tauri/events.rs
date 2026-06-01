@@ -252,6 +252,7 @@ pub fn emit_core_event(app: &AppHandle, event: Event, message_id: &str) {
             );
         }
         Event::CompactionProgress { attempt, action } => {
+            // compaction-progress → useCompactionProgress / CompactionBanner (camelCase payload).
             let payload = match action {
                 novel_core::CompactionAction::Started => {
                     serde_json::json!({ "attempt": attempt, "action": "started" })
@@ -262,7 +263,10 @@ pub fn emit_core_event(app: &AppHandle, event: Event, message_id: &str) {
                 novel_core::CompactionAction::RebuildingSession => {
                     serde_json::json!({ "attempt": attempt, "action": "rebuilding-session" })
                 }
-                novel_core::CompactionAction::Done { tokens_before, tokens_after } => {
+                novel_core::CompactionAction::Done {
+                    tokens_before,
+                    tokens_after,
+                } => {
                     serde_json::json!({
                         "attempt": attempt,
                         "action": "done",

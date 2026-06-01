@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 use novel_core::{AgentEngine, AgentType, EngineConfig};
 use tempfile::TempDir;
 
@@ -48,7 +50,10 @@ async fn fork_from_system_only_deepseek_cache() {
             .unwrap();
     }
     let child = engine
-        .fork(AgentType::KnowledgeAuditor, "扫描 chapter-001 知识库遗漏".into())
+        .fork(
+            AgentType::KnowledgeAuditor,
+            "扫描 chapter-001 知识库遗漏".into(),
+        )
         .await
         .unwrap();
     // 始终从 system prompt 开始
@@ -94,10 +99,7 @@ async fn fork_general_purpose_includes_custom_task() {
     let engine = AgentEngine::new(cfg).unwrap();
     let custom = "对比 chapter-003 与 chapter-005 细纲人物出场";
     let child = engine
-        .fork(
-            AgentType::GeneralPurpose,
-            custom.into(),
-        )
+        .fork(AgentType::GeneralPurpose, custom.into())
         .await
         .unwrap();
     assert_eq!(child.messages.len(), 2);

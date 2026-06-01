@@ -32,5 +32,9 @@ name = "knowledge_workflow"
 path = "knowledge_workflow.rs"
 
 [[test]]
+name = "compaction_session"
+path = "compaction_session.rs"
+
+[[test]]
 name = "tool_execution"
 path = "tool_execution.rs"

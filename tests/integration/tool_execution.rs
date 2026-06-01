@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 use novel_tools::{default_registry, PermissionMode, ToolCallSpec, ToolContext, ToolExecutor};
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -7,7 +9,7 @@ async fn read_write_edit_chain() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path().to_path_buf();
     std::fs::create_dir_all(root.join("knowledge")).unwrap();
-    let reg = Arc::new(default_registry(root.clone()));
+    let reg = Arc::new(default_registry());
     let ex = ToolExecutor::new(reg);
     let ctx = ToolContext {
         permission_mode: PermissionMode::Auto,
@@ -75,7 +77,7 @@ async fn main_session_may_write_chapter_in_sandbox() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path().to_path_buf();
     std::fs::create_dir_all(root.join("chapters")).unwrap();
-    let reg = Arc::new(default_registry(root.clone()));
+    let reg = Arc::new(default_registry());
     let ex = ToolExecutor::new(reg);
     let ctx = ToolContext {
         permission_mode: PermissionMode::Auto,
@@ -107,7 +109,7 @@ async fn character_search_finds_name() {
         "## 性格演变日志\n| Ch1 | 天真 |\n",
     )
     .unwrap();
-    let reg = Arc::new(default_registry(root.clone()));
+    let reg = Arc::new(default_registry());
     let ex = ToolExecutor::new(reg);
     let ctx = ToolContext {
         permission_mode: PermissionMode::Auto,

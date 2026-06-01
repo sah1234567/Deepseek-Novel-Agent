@@ -1,17 +1,23 @@
-import { FormEvent, useCallback, useRef, useState } from "react";
-import type { ForkRunState, PendingQuestion, UIMessage } from "../../hooks/useAgent";
+import { FormEvent, useCallback, useMemo, useRef, useState } from "react";
+import type { ForkRunState, PendingQuestion } from "../../hooks/useAgent";
 import { useAgentContext } from "../../context/AgentContext";
 import { APP_DISPLAY_NAME } from "../../constants/app";
+import { isSyntheticUser } from "../../transcript";
 import { ScrollViewport } from "../layout/ScrollViewport";
 import { FilePreviewOverlay, type FilePreviewState } from "./FilePreviewOverlay";
-import { MessageBody } from "./MessageBody";
+import { TranscriptView } from "./TranscriptView";
+import { CompactionBanner } from "./CompactionBanner";
+import { useCompactionProgress } from "../../hooks/useCompactionProgress";
 import { SubAgentOverlay } from "./SubAgentOverlay";
-import { SubAgentReportCard } from "./SubAgentReportCard";
-import { ToolUseCard } from "./ToolUseCard";
-import ReactMarkdown from "react-markdown";
+import { SubAgentForkCard } from "./SubAgentForkCard";
+import {
+  agentLabelFromType,
+  buildForkSubAgentLinks,
+  listHookForkRuns,
+} from "../../utils/forkLinks";
 import "./ChatPanel.css";
 import "./DialogOverlays.css";
-import "./SubAgentReportCard.css";
+import "./SubAgentForkCard.css";
 
 const MODE_TOOLTIPS: Record<string, string> = {
   normal: "常规模式：读取文件自动执行，写入/编辑文件需作者确认",
@@ -95,68 +101,32 @@ function AskUserQuestionBlock({
   );
 }
 
-function countChineseChars(text: string): number {
-  let count = 0;
-  for (const ch of text) {
-    const c = ch.charCodeAt(0);
-    if ((c >= 0x4E00 && c <= 0x9FFF) || (c >= 0x3400 && c <= 0x4DBF)) count++;
-  }
-  return count;
-}
-
-function messageHeader(msg: UIMessage): string {
-  if (msg.role === "user") return "作者";
-  if (msg.role === "tool") return `工具 · ${msg.toolName}`;
-  if (msg.role === "subAgentReport") return "Subagent 报告";
-  return "Agent";
-}
-
-function ChatMessageBody({
-  msg,
-  approveTool,
-  denyTool,
+function HookForkCards({
   forkRuns,
-  onOpenFork,
+  openForkOverlay,
 }: {
-  msg: UIMessage;
-  approveTool: (id: string) => Promise<void>;
-  denyTool: (id: string, reason?: string) => Promise<void>;
-  forkRuns: Map<string, import("../../hooks/useAgent").ForkRunState>;
-  onOpenFork: (forkRunId: string) => void;
+  forkRuns: Map<string, ForkRunState>;
+  openForkOverlay: (forkRunId: string) => void;
 }) {
-  if (msg.role === "tool") {
-    return (
-      <ToolUseCard
-        tool={{
-          id: msg.id.replace(/^tool-/, ""),
-          name: msg.toolName ?? "Tool",
-          input: msg.toolInput ?? {},
-          status: msg.toolStatus ?? "done",
-          needsApproval: msg.toolStatus === "pending" || !!msg.needsApproval,
-          result: msg.contentBlocks[0]?.text,
-        }}
-        isStreaming={false}
-        onApprove={
-          msg.toolStatus === "pending" ? (id) => void approveTool(id) : undefined
-        }
-        onDeny={
-          msg.toolStatus === "pending"
-            ? (id, reason) => void denyTool(id, reason)
-            : undefined
-        }
-      />
-    );
-  }
-  if (msg.role === "subAgentReport") {
-    return (
-      <SubAgentReportCard
-        message={msg}
-        forkRun={msg.forkRunId ? forkRuns.get(msg.forkRunId) : undefined}
-        onLoadTranscript={onOpenFork}
-      />
-    );
-  }
-  return <MessageBody blocks={msg.contentBlocks} />;
+  const hookRuns = listHookForkRuns(forkRuns);
+  if (hookRuns.length === 0) return null;
+  return (
+    <>
+      {hookRuns.map((run) => (
+        <article key={run.forkRunId} className="message message-tool">
+          <header>Subagent · {agentLabelFromType(run.agentType)}</header>
+          <SubAgentForkCard
+            mode="hook"
+            agentType={run.agentType}
+            summary={run.taskPreview}
+            status={run.status === "running" ? "running" : "complete"}
+            reportContent={run.reportOutput}
+            onEnter={() => void openForkOverlay(run.forkRunId)}
+          />
+        </article>
+      ))}
+    </>
+  );
 }
 
 export function ChatPanel({
@@ -169,21 +139,17 @@ export function ChatPanel({
 }: {
   permissionMode: string;
   onSetPermissionMode: (mode: string) => Promise<void>;
-  /** True while an inner overlay covers the message list; preserves scroll underneath. */
   overlayActive?: boolean;
   filePreview?: FilePreviewState | null;
   subAgentForkRun?: ForkRunState;
   onCloseSubAgent?: () => void;
 }) {
   const {
-    messages,
+    transcriptMachine,
+    archivedEpochs,
+    flatMessages,
     isStreaming,
-    streamingText,
-    streamingThinking,
-    streamingToolUses,
-    activeToolCalls,
     pendingQuestion,
-    questionAnchorIndex,
     questionSelections,
     questionCustomText,
     questionError,
@@ -197,20 +163,22 @@ export function ChatPanel({
     setQuestionCustomText,
     answerQuestion,
     openForkOverlay,
-    hookForkBanner,
-    dismissHookForkBanner,
     model,
     setModel,
     forkRuns,
-    loadForkMessages,
+    turnInProgress,
   } = useAgentContext();
 
+  const compaction = useCompactionProgress();
   const [input, setInput] = useState("");
   const [stickyPrompt, setStickyPrompt] = useState<string | null>(null);
   const userMsgRef = useRef<HTMLElement | null>(null);
 
-  // Find the last user message for the current turn
-  const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
+  const forkLinks = useMemo(() => buildForkSubAgentLinks(flatMessages), [flatMessages]);
+
+  const lastUserMsg = [...transcriptMachine.context.turns]
+    .reverse()
+    .find((t) => !isSyntheticUser(t.user))?.user;
   const lastUserMsgText =
     lastUserMsg?.contentBlocks?.[0]?.text?.slice(0, 200) ?? "";
 
@@ -218,7 +186,6 @@ export function ChatPanel({
     (scrollTop: number) => {
       const el = userMsgRef.current;
       if (!el) return;
-      // User message scrolled above viewport → show sticky header
       if (scrollTop > el.offsetTop + el.offsetHeight + 8) {
         if (!stickyPrompt) setStickyPrompt(lastUserMsgText);
       } else {
@@ -237,14 +204,7 @@ export function ChatPanel({
   const canSubmitInterrupt = isStreaming && hasInput && hasInterruptibleToolInProgress;
   const submitBlockedByTools = isStreaming && hasInput && !hasInterruptibleToolInProgress;
 
-  const autoScrollDeps = [
-    messages,
-    streamingText,
-    streamingThinking,
-    activeToolCalls,
-    streamingToolUses,
-    pendingQuestion,
-  ];
+  const autoScrollDeps = [transcriptMachine, pendingQuestion, forkRuns];
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -265,32 +225,35 @@ export function ChatPanel({
     }
   }
 
-  const anchor = questionAnchorIndex ?? messages.length;
-  const messagesBeforeQuestion = pendingQuestion ? messages.slice(0, anchor) : messages;
-  const messagesAfterQuestion = pendingQuestion ? messages.slice(anchor) : [];
+  const renderUserRef = useCallback(
+    (user: (typeof flatMessages)[0], el: HTMLElement | null) => {
+      if (user === lastUserMsg) userMsgRef.current = el;
+    },
+    [lastUserMsg],
+  );
 
-  const showStreamingPreview =
-    isStreaming && (streamingText || streamingThinking || streamingToolUses.length > 0);
-  const activeIds = new Set(activeToolCalls.keys());
-  const archivedToolIds = new Set(
-    [...messagesBeforeQuestion, ...messagesAfterQuestion]
-      .filter((m) => m.role === "tool")
-      .map((m) => m.id.replace(/^tool-/, "")),
-  );
-  const streamingOnlyTools = streamingToolUses.filter(
-    (t) => !activeIds.has(t.id) && !archivedToolIds.has(t.id),
-  );
-  const liveActiveTools = Array.from(activeToolCalls.values()).filter(
-    (t) =>
-      !archivedToolIds.has(t.id) &&
-      (t.status === "pending" || t.status === "running"),
-  );
-  const pendingApprovalTools = liveActiveTools.filter((t) => t.status === "pending");
-  const runningLiveTools = liveActiveTools.filter((t) => t.status === "running");
+  const questionSlot = pendingQuestion ? (
+    <AskUserQuestionBlock
+      pendingQuestion={pendingQuestion}
+      questionSelections={questionSelections}
+      questionCustomText={questionCustomText}
+      questionError={questionError}
+      isStreaming={isStreaming}
+      toggleQuestionOption={toggleQuestionOption}
+      setQuestionCustomText={setQuestionCustomText}
+      answerQuestion={answerQuestion}
+    />
+  ) : null;
+
+  const hasTranscript =
+    archivedEpochs.length > 0 ||
+    transcriptMachine.context.turns.length > 0 ||
+    transcriptMachine.context.openSegment !== null;
 
   return (
     <section className="chat-panel">
       <div className="dialog-viewport">
+        <CompactionBanner state={compaction} />
         {stickyPrompt && (
           <button
             type="button"
@@ -308,109 +271,26 @@ export function ChatPanel({
           overlayActive={overlayActive}
           onScrollPositionChange={onScrollPosition}
         >
-          {messages.length === 0 && !showStreamingPreview && !pendingQuestion && (
+          {!hasTranscript && !pendingQuestion && (
             <p className="placeholder">发送消息开始与 {APP_DISPLAY_NAME} 对话…</p>
           )}
-          {messagesBeforeQuestion.map((msg) => (
-            <article
-              key={msg.id}
-              ref={
-                msg === lastUserMsg ? (el) => { userMsgRef.current = el; } : undefined
-              }
-              className={`message message-${msg.role}${isStreaming ? "" : ""}`}
-            >
-              <header>{messageHeader(msg)}</header>
-              <ChatMessageBody
-                msg={msg}
-                approveTool={approveTool}
-                denyTool={denyTool}
-                forkRuns={forkRuns}
-                onOpenFork={(forkRunId) => void loadForkMessages(forkRunId)}
-              />
-            </article>
-          ))}
+          <TranscriptView
+            machine={transcriptMachine}
+            archivedEpochs={archivedEpochs}
+            mode="main"
+            pendingQuestion={pendingQuestion}
+            questionSlot={questionSlot}
+            forkRuns={forkRuns}
+            forkLinks={forkLinks}
+            flatMessages={flatMessages}
+            onApproveTool={(id) => void approveTool(id)}
+            onDenyTool={(id, reason) => void denyTool(id, reason)}
+            onOpenForkOverlay={(id) => void openForkOverlay(id)}
+            renderUserRef={renderUserRef}
+            isStreaming={isStreaming}
+          />
 
-          {pendingQuestion && (
-            <AskUserQuestionBlock
-              pendingQuestion={pendingQuestion}
-              questionSelections={questionSelections}
-              questionCustomText={questionCustomText}
-              questionError={questionError}
-              isStreaming={isStreaming}
-              toggleQuestionOption={toggleQuestionOption}
-              setQuestionCustomText={setQuestionCustomText}
-              answerQuestion={answerQuestion}
-            />
-          )}
-
-          {messagesAfterQuestion.map((msg) => (
-            <article
-              key={msg.id}
-              ref={
-                msg === lastUserMsg ? (el) => { userMsgRef.current = el; } : undefined
-              }
-              className={`message message-${msg.role}${isStreaming ? "" : ""}`}
-            >
-              <header>{messageHeader(msg)}</header>
-              <ChatMessageBody
-                msg={msg}
-                approveTool={approveTool}
-                denyTool={denyTool}
-                forkRuns={forkRuns}
-                onOpenFork={(forkRunId) => void loadForkMessages(forkRunId)}
-              />
-            </article>
-          ))}
-
-          {pendingApprovalTools.map((tool) => (
-            <ToolUseCard
-              key={tool.id}
-              tool={tool}
-              isStreaming={isStreaming}
-              onApprove={(id) => void approveTool(id)}
-              onDeny={(id, reason) => void denyTool(id, reason)}
-            />
-          ))}
-
-          {showStreamingPreview && (
-            <article className="message message-assistant message-streaming">
-              <header>
-                Agent {isStreaming && <span className="streaming-dot" aria-hidden />}
-                {streamingText && (
-                  <span className="streaming-word-count">
-                    {countChineseChars(streamingText).toLocaleString()} 字
-                  </span>
-                )}
-              </header>
-              <div className="message-body">
-                {streamingThinking && (
-                  <details className="thinking-stream" open>
-                    <summary>思考中…</summary>
-                    <ReactMarkdown>{streamingThinking}</ReactMarkdown>
-                  </details>
-                )}
-                {streamingText && (
-                  <div className="streaming-text">
-                    <ReactMarkdown>{streamingText}</ReactMarkdown>
-                  </div>
-                )}
-              </div>
-            </article>
-          )}
-
-          {streamingOnlyTools.map((tool) => (
-            <ToolUseCard key={tool.id} tool={tool} isStreamingInput isStreaming={isStreaming} />
-          ))}
-
-          {runningLiveTools.map((tool) => (
-            <ToolUseCard
-              key={tool.id}
-              tool={tool}
-              isStreaming={isStreaming}
-              onApprove={(id) => void approveTool(id)}
-              onDeny={(id, reason) => void denyTool(id, reason)}
-            />
-          ))}
+          <HookForkCards forkRuns={forkRuns} openForkOverlay={(id) => void openForkOverlay(id)} />
         </ScrollViewport>
 
         {filePreview && <FilePreviewOverlay preview={filePreview} />}
@@ -418,24 +298,6 @@ export function ChatPanel({
           <SubAgentOverlay forkRun={subAgentForkRun} onClose={onCloseSubAgent} />
         )}
       </div>
-
-      {hookForkBanner && (
-        <div className="hook-fork-banner">
-          <span>日志检查完成</span>
-          <button
-            type="button"
-            onClick={() => {
-              void openForkOverlay(hookForkBanner.forkRunId);
-              dismissHookForkBanner();
-            }}
-          >
-            查看详情
-          </button>
-          <button type="button" className="hook-fork-banner-dismiss" onClick={dismissHookForkBanner}>
-            ✕
-          </button>
-        </div>
-      )}
 
       <form className="input-box" onSubmit={onSubmit}>
         <textarea
@@ -457,7 +319,7 @@ export function ChatPanel({
             className="mode-select"
             value={permissionMode}
             onChange={(e) => void onSetPermissionMode(e.target.value)}
-            disabled={isStreaming || !!pendingQuestion}
+            disabled={turnInProgress}
             title={MODE_TOOLTIPS[permissionMode] ?? permissionMode}
           >
             <option value="normal">常规</option>
@@ -469,8 +331,12 @@ export function ChatPanel({
             className="model-select"
             value={model}
             onChange={(e) => setModel(e.target.value)}
-            disabled={isStreaming}
-            title="选择模型（切换模型将导致 KV Cache 失效）"
+            disabled={turnInProgress}
+            title={
+              turnInProgress
+                ? "当前轮次进行中，结束后才可切换模型"
+                : "选择模型（切换模型将导致 KV Cache 失效）"
+            }
           >
             <option value="deepseek-v4-pro">v4-pro</option>
             <option value="deepseek-v4-flash">v4-flash</option>

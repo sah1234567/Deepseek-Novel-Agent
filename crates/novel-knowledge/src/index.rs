@@ -107,10 +107,16 @@ pub fn rebuild_index(store: &KnowledgeStore) -> Result<String, KnowledgeError> {
     if worlds_dir.is_dir() {
         if let Ok(world_entries) = std::fs::read_dir(&worlds_dir) {
             for world_entry in world_entries.flatten() {
-                let Ok(ft) = world_entry.file_type() else { continue };
-                if !ft.is_dir() { continue; }
+                let Ok(ft) = world_entry.file_type() else {
+                    continue;
+                };
+                if !ft.is_dir() {
+                    continue;
+                }
                 let world_name = world_entry.file_name().to_string_lossy().to_string();
-                if world_name.starts_with('_') { continue; }
+                if world_name.starts_with('_') {
+                    continue;
+                }
                 let world_dir = worlds_dir.join(&world_name);
 
                 lines.push(String::new());
@@ -126,14 +132,21 @@ pub fn rebuild_index(store: &KnowledgeStore) -> Result<String, KnowledgeError> {
                     if let Ok(wc_entries) = std::fs::read_dir(&wchars_dir) {
                         for wc in wc_entries.flatten() {
                             let name = wc.file_name().to_string_lossy().to_string();
-                            if !name.ends_with(".md") || name.starts_with('_') { continue; }
+                            if !name.ends_with(".md") || name.starts_with('_') {
+                                continue;
+                            }
                             let display = name.trim_end_matches(".md");
                             let rel = format!("knowledge/worlds/{world_name}/characters/{name}");
                             let (status, last_update) = match store.read_file(&rel) {
-                                Ok(content) => match parse_frontmatter::<CharacterFrontmatter>(&content) {
-                                    Ok((fm, _)) => (format!("{:?}", fm.status).to_lowercase(), fm.last_update),
-                                    Err(_) => ("unknown".into(), "—".into()),
-                                },
+                                Ok(content) => {
+                                    match parse_frontmatter::<CharacterFrontmatter>(&content) {
+                                        Ok((fm, _)) => (
+                                            format!("{:?}", fm.status).to_lowercase(),
+                                            fm.last_update,
+                                        ),
+                                        Err(_) => ("unknown".into(), "—".into()),
+                                    }
+                                }
                                 Err(_) => ("unknown".into(), "—".into()),
                             };
                             lines.push(format!(

@@ -2,7 +2,8 @@
 name: post-change-checklist
 description: >-
   Novel Agent 代码修改后的必做收尾清单：代码清理、Tracing 埋点、链路走查、Rust 审查、
-  编译测试、前端验证、Skill 与文档同步。在 novel_agent 内完成任何改动后自动执行。
+  cargo check + cargo clippy（0 warning）、后端 cargo-nextest 与前端 Vitest（npm test 全绿无警告）+ build、Skill 与文档同步。
+  在 novel_agent 内完成任何改动后自动执行。
 ---
 
 # 修改后收尾清单
@@ -14,8 +15,19 @@ description: >-
 | 阶段 | 步骤 | 说明 |
 |------|------|------|
 | 代码稳定 | 1 → 3 | 清理、**Tracing 埋点**、链路走查、Rust 审查；**任一步改了代码，须从步骤 1 重跑** |
-| 验证闸门 | 4 → 6 | check / test / 前端 build；须等代码稳定后再跑 |
+| 验证闸门 | 4 → 6 | check、**后端测试（步骤 5）**、**前端测试（步骤 6，若触达 ui/）**；须等代码稳定后再跑 |
 | 同步交付 | 7 → 8 | Skill 与文档描述已验证通过的行为，**放最后** |
+
+**通过标准**
+
+| 端 | 何时必跑 | 命令 | 通过标准 |
+|----|----------|------|----------|
+| **后端 clippy** | 改 Rust crate / `src-tauri` / IPC 事件 | `cargo clippy --workspace --all-targets -- -D warnings -D clippy::unwrap_used` | **0 warning**；生产 lib 禁 `.unwrap()` |
+| **后端 check** | 同上 | `cargo check --workspace` | **0 warning** |
+| **后端 test** | 同上 | `.\scripts\run_tests.ps1` | **0 failed**；**0 SLOW / TIMEOUT**（ignored 除外） |
+| **前端** | 改 `ui/` 或 Tauri 命令/事件名 | `cd ui && npm test && npm run build` | **0 failed**；**无 ERROR / DEPRECATED / vitest·esbuild 警告** |
+
+改逻辑须在步骤 2 先补缺失用例，再跑上表命令。仅文档/注释可标「不适用」，但仍须跑与 diff 相关的端。
 
 开发中可随时 `cargo check` 拿快速反馈；收尾清单里的 check/test 必须在阶段一完成后执行。
 
@@ -74,9 +86,9 @@ Agent 根目录无统一 SQLite。API Key **不**写入 per-work DB 或 `setting
 
 1. **主路径** — IPC：`invoke` ↔ `EngineCommand` ↔ `engine_loop.rs`；`Event` ↔ 前端 `listen`。作品切换：`list_works` / `create_work` / `open_work` → `SwitchProjectAndCreateSession` → `config.write().set_active_project` → 新 `db_path` → `session-resumed`；`create_session()` 无 path 参数。Turn：`handle_message_with_events` → compaction（含 DB sync）→ inner loop → `drain_pending_hooks`。API：`get/set_api_config` → 全局 json；`init_llm` 优先级 env > json > offline。
 2. **失败传播** — 单队列串行；空消息、`hook_running`、未答 `AskUserQuestion`、嵌套 fork → `Validation`/`AgentBusy`；`LlmError`、DB、`NeedsUserInput`、`TemplatesNotFound` 等向上传播。锚点：`turn_loop.rs`、`engine.rs`、`engine_loop.rs`。
-3. **不变量** — Engine 单队列；Hook 串行 drain；Read-before-write；Compaction 不改 `messages[0]`，refresh 经 user 消息；Compaction 后 `replace_session_messages`；`invoked_skill_ids` 存 `metadata_json`；Skill 二级加载（Agent 级 `skills/`，project 级 `works/{name}/skills/` 可覆盖）；Fork 仅从 `messages[0]`；scaffold 仅读 `templates/`（无 embed fallback）。
+3. **不变量** — Engine 单队列；Hook 串行 drain；Read-before-write；Compaction：**先** `archive_session_messages` **再** `replace_session_messages`；system **AGENTS/Workspace** metadata 冻结，compact 时 `refresh_system_dynamic_sections`（Index/Memory/Progress/**Skills 摘要**）；Skill 全文 + 摘要经 **`[上下文刷新]` user `(0,1)`**；建会话即 persist `(0,0)` system；`invoked_skill_ids` 存 `metadata_json`；UI hydrate 走 `get_session_transcript`；Fork 仅从 `messages[0]`；scaffold 仅读 `templates/`。
 4. **安全边界** — 文件工具：`resolve_path` + `validate_write_root`；作品名 `validate_work_name`、`ensure_work_under_works`；API Key 掩码、不进 log/emit；DB 参数化、guard 不跨 `.await`；`AppConfig` 为 `Arc<RwLock<_>>`，切换作品时 IPC 不读 stale path。
-5. **交付物** — 缺单元测试本步补写；改 scaffold 须同步 `templates/**/*.md`；`settings.json` / `prompt/` 与行为一致；文档留步骤 8。
+5. **交付物** — 缺测试本步补写：**改 Rust → 步骤 5 补 `#[test]` / integration**；**改 `ui/` → 步骤 6 补 Vitest**；改 scaffold 须同步 `templates/**/*.md`；`settings.json` / `prompt/` 与行为一致；文档留步骤 8。
 6. **Tracing** — 步骤 1.5：`info` 是否克制；失败路径有 `warn`/`error`；深度细节在 `debug`。
 
 输出 3–6 条：`[结论] — 依据：<路径:行号>`（含 Tracing 结论时注明埋点位置或「不适用」）。
@@ -104,12 +116,13 @@ Agent 根目录无统一 SQLite。API Key **不**写入 per-work DB 或 `setting
 
 ### 3.2 安全审查
 
-**原则：`unsafe` 与 `unwrap`/`expect` 原则上禁止新增**；`check.ps1` 对核心 crate 启 `-D clippy::unwrap_used`。路径/API 策略见步骤 2，此处不重复。
+**原则：`unsafe` 与生产路径 `unwrap()` 禁止新增**；各 lib crate 根 `#![deny(clippy::unwrap_used)]` + `#![cfg_attr(test, allow(...))]`，CI/`check.ps1` 另加 `-D clippy::unwrap_used`。`.expect()` 仍仅限编译期不变量（字面量 Regex、`include_str!` 等）；DB/IO/网络/JSON 用 `?`。路径/API 策略见步骤 2，此处不重复。
 
 | 类别 | 检查要点 |
 |------|----------|
 | `unsafe` | 原则上禁止新增；确有必要须 `// SAFETY:` 说明不变量 |
-| `unwrap`/`expect` | 生产路径禁止（test 除外）；DB/IO/网络/JSON 用 `?`；无 `todo!()`/`unimplemented!()` |
+| `unwrap` | **仅** `#[cfg(test)]`、crate 内 `tests/`、`tests/integration/` 允许；生产 lib 一律禁止（独立 test binary 文件顶行 `#![allow(clippy::unwrap_used)]`） |
+| `expect` | 生产业务路径禁止；编译期不变量可局部 `#allow`；无 `todo!()`/`unimplemented!()` |
 | 死锁 / 锁与 await | 持锁不 `.await`；`AppConfig` 用 `tokio::sync::RwLock`；`engine_loop` 内写 config 后尽快释放锁再跑 turn |
 | `RefCell` / 内部可变性 | 禁止嵌套 `borrow_mut`（运行时 panic）；`borrow` 期间勿调用可能再 borrow 同 cell 的回调；并发场景用 `Mutex`/`RwLock` 而非 `RefCell` |
 | `Arc`/`Rc` 循环引用 | 双向强引用须以 `Weak` 打断；`spawn_event_forwarder` 等闭包勿与 `AppHandle`/engine 形成无法 drop 的环；长生命周期 listener 须能随 session/turn 结束释放 |
@@ -143,60 +156,50 @@ Agent 根目录无统一 SQLite。API Key **不**写入 per-work DB 或 `setting
 
 ## 4. 编译检查
 
-优先使用脚本（含 clippy `-D unwrap_used`）：
+**硬性要求：`cargo check` 与 `cargo clippy` 均须 0 warning。** 任一有 warning 视为未通过。
 
 ```powershell
-.\scripts\check.ps1
+.\scripts\check.ps1           # 等价于 cargo check --workspace && clippy（-D warnings -D clippy::unwrap_used）
 ```
 
-Tauri 不可用时：`cargo check --workspace` 或排除 `src-tauri` 的核心 crate 列表。
+单独运行：
 
-## 5. 测试（cargo-nextest）
+```powershell
+cargo check --workspace
+cargo clippy --workspace --all-targets -- -D warnings -D clippy::unwrap_used
+```
 
-**进入本步前**，缺失单元测试应已在步骤 2 补写。
+## 5. 后端测试（Rust / cargo-nextest）
+
+**适用：** 改 `novel-*` crate、`src-tauri/`、IPC 命令或事件。**进入本步前**，缺失用例应已在步骤 2 补写。
 
 ```powershell
 .\scripts\run_tests.ps1
 ```
 
-使用 `cargo nextest run`（非 `cargo test`）运行，配置在 `.config/nextest.toml`：
+**硬性要求：** 使用 `cargo nextest run --workspace`（**非** `cargo test`），须 **0 failed**、**0 SLOW / TIMEOUT**。
 
-- **默认 profile**：单个测试超过 60s 标记 `SLOW`，连续 3 个周期（3min）后 kill
-- **CI profile**：30s 标记 slow，2 周期 kill
+改 turn / tool / state / compaction 等时，**尽可能**覆盖主路径、失败传播与边界（校验拒绝、DB 错误、空输入等）；integration 测放对应 crate 的 `tests/`。无法补测时在汇报中说明。
 
-### 5.1 超时与慢测诊断
+<details><summary>慢测与网络测（遇 SLOW/TIMEOUT 时查阅）</summary>
 
-运行后检查输出中的 `SLOW` 和 `TIMEOUT` 标记：
+- **SLOW [>60s]**：查未 mock 的网络、同步 I/O 阻塞、DashMap/RwLock 死锁
+- **TIMEOUT**：必须修复；用 `cargo nextest run --test <name>` 单独复现
+- Live API：需 `DEEPSEEK_API_KEY`；手动跑 `cargo nextest run --run-ignored all`
 
-| 标记 | 含义 | 处理 |
-|------|------|------|
-| `SLOW [>60s]` | 测试耗时超过 60s，但仍在运行 | 检查是否存在：网络请求未 mock（如 DeepSeek API）、同步 I/O 阻塞 runtime、DashMap/RwLock 读写锁死锁 |
-| `TIMEOUT` | 测试被 kill（超过 3×60s） | **必须修复**——大概率是死锁或无限等待。用 `cargo nextest run --test <name>` 单独复现，检查锁竞争路径 |
+</details>
 
-常见慢测根因：
-- **DashMap 死锁**：`get()` 持有读锁期间调用了需要写锁的操作（如 `insert`、`entry().or_insert()`）。修复：先 copy 值 drop 读锁，再获取写锁
-- **网络请求**：测试内含真实 HTTP 请求（如 WebSearch → DeepSeek API）。修复：标记 `#[ignore = "requires DEEPSEEK_API_KEY and network"]`
-- **同步 I/O 阻塞**：`std::fs` 在 current_thread runtime 上阻塞了调度器。修复：改用 `tokio::fs`
+## 6. 前端测试（Vitest / npm test）
 
-### 5.2 网络测试
-
-Live API 需 `DEEPSEEK_API_KEY`（与 `init_llm` 一致）。网络依赖测试应标记 `#[ignore]`，仅在手动指定时运行：
-
-```powershell
-cargo nextest run --run-ignored all
-```
-
-无法补测时在汇报中说明。
-
-## 6. 前端改动
-
-涉及 `ui/` 或 Tauri 命令/事件：
+**适用：** 改 `ui/` 或 Tauri 命令/事件名。核对 `invoke` / 事件名与 Rust 侧一致；`AppStatus` 含 `activeWorkName`/`projectRoot`。若改 Rust IPC，**回到步骤 1**。
 
 ```bash
-cd ui && npm run build
+cd ui && npm test && npm run build
 ```
 
-核对 `invoke` 命令名、事件名与 Rust 侧一致；`AppStatus` 含 `activeWorkName`/`projectRoot`。若改 Rust IPC，**回到步骤 1**。
+**硬性要求：** `npm test` 须 **0 failed**，且 **无 ERROR / DEPRECATED / vitest·esbuild 警告**（含重复 `case`、弃用 API 等）。有警告视为未通过。
+
+**测试补写（改逻辑时必做）：** 单元测放 `ui/src/**/*.test.ts(x)`；共享 fixture / 跨模块场景放 `ui/src/test/`。改 transcript / 聊天 UI 时，**尽可能**覆盖流式 tool、多段 ReAct、AskUserQuestion、Write 批准、Fork、INTERRUPT、HYDRATE 等关键路径；已有用例可扩展。仅样式/CSS 可标「无新增场景」，但仍须全量 `npm test` 全绿无警告。
 
 ## 7. Agent 级 Skill（`skills/`）
 
@@ -234,9 +237,9 @@ cd ui && npm run build
 - [x] Tracing 埋点：<新增/更新的埋点位置；AuditLogger 事件；或「不适用」>
 - [x] 链路走查：<摘要>
 - [x] Rust 审查：<3.4 汇总行>
-- [x] check.ps1 / cargo check
-- [x] cargo nextest run（N passed, M ignored, 0 SLOW/TIMEOUT，含 integration）
-- [x] 前端：<未改动 / build 通过>
+- [x] cargo check 0 warning / cargo clippy 0 warning
+- [x] 后端测试：<未改动 / nextest N passed, M ignored, 0 SLOW/TIMEOUT>
+- [x] 前端测试：<未改动 / npm test 全绿无警告 + build 通过>
 - [x] Skill / templates：<无变更 / 已更新>
 - [x] 文档已更新：<文件列表>
 ```

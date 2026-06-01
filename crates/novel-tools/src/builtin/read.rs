@@ -1,11 +1,12 @@
 use super::super::{
     add_line_numbers, extract_file_path, file_mtime_secs, read_range_key, ReadCacheEntry,
-    ReadCacheSource, Tool, ToolContext, ToolError, ToolOutput, ValidationError, FILE_UNCHANGED_STUB,
+    ReadCacheSource, Tool, ToolContext, ToolError, ToolOutput, ValidationError,
+    FILE_UNCHANGED_STUB,
 };
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::fs;
+use tokio::io::{AsyncBufReadExt, BufReader};
 
 pub struct ReadTool;
 
@@ -28,9 +29,7 @@ async fn read_fast(
     line_offset: usize,
     limit: Option<usize>,
 ) -> Result<(String, usize, usize), ToolError> {
-    let content = fs::read_to_string(full)
-        .await
-        .map_err(|e| ToolError::Io(e))?;
+    let content = fs::read_to_string(full).await.map_err(ToolError::Io)?;
     let all_lines: Vec<&str> = content.lines().collect();
     let total_lines = all_lines.len();
 
@@ -55,7 +54,7 @@ async fn read_streaming(
     line_offset: usize,
     limit: Option<usize>,
 ) -> Result<(String, usize, usize), ToolError> {
-    let file = fs::File::open(full).await.map_err(|e| ToolError::Io(e))?;
+    let file = fs::File::open(full).await.map_err(ToolError::Io)?;
     let reader = BufReader::new(file);
 
     let end_line = match limit {
@@ -135,10 +134,17 @@ impl Tool for ReadTool {
         let path = extract_file_path(&input)?;
         let full = ctx.resolve_path(&path);
         let offset = input.get("offset").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
-        let limit = input.get("limit").and_then(|v| v.as_u64()).map(|l| l as usize);
+        let limit = input
+            .get("limit")
+            .and_then(|v| v.as_u64())
+            .map(|l| l as usize);
 
         // Offset is 1-indexed; convert to 0-indexed
-        let line_offset = if offset == 0 { 0 } else { offset.saturating_sub(1) };
+        let line_offset = if offset == 0 {
+            0
+        } else {
+            offset.saturating_sub(1)
+        };
 
         // ── Empty file check ──
         match fs::metadata(&full).await {
@@ -184,7 +190,7 @@ impl Tool for ReadTool {
             }
         }
 
-        let metadata = fs::metadata(&full).await.map_err(|e| ToolError::Io(e))?;
+        let metadata = fs::metadata(&full).await.map_err(ToolError::Io)?;
 
         // ── Choose fast vs streaming path ──
         let (content, _line_count, total_lines) = if metadata.len() < FAST_PATH_MAX_SIZE {
@@ -295,7 +301,10 @@ mod tests {
         write_file(tmp.path(), "test.md", &lines.join("\n"));
         let ctx = test_ctx(&tmp);
         let out = ReadTool
-            .call(json!({"file_path": "test.md", "offset": 5, "limit": 3}), &ctx)
+            .call(
+                json!({"file_path": "test.md", "offset": 5, "limit": 3}),
+                &ctx,
+            )
             .await
             .unwrap();
         assert!(out.content.contains("5\tline 5"));
@@ -359,7 +368,10 @@ mod tests {
         write_file(tmp.path(), "big.md", &content);
         let ctx = test_ctx(&tmp);
         let out = ReadTool
-            .call(json!({"file_path": "big.md", "offset": 1, "limit": 5}), &ctx)
+            .call(
+                json!({"file_path": "big.md", "offset": 1, "limit": 5}),
+                &ctx,
+            )
             .await
             .unwrap();
         assert!(out.content.contains("1\t"));
@@ -383,7 +395,9 @@ mod tests {
             .call(json!({"file_path": "dup.md"}), &ctx)
             .await
             .unwrap();
-        assert!(out2.content.contains("has not been changed since last read"));
+        assert!(out2
+            .content
+            .contains("has not been changed since last read"));
     }
 
     #[tokio::test(flavor = "current_thread")]

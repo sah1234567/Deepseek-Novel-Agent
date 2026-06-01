@@ -8,9 +8,7 @@
 
 ### 1.1 初始化
 
-- `init_logging(project_root)` — 统一入口：人类可读 **stderr** + 可选 JSON 文件层
-- `init()` — 等价于 `init_logging(None)`（仅 stderr）
-- `init_with_json_log(project_root)` — 等价于 `init_logging(Some(project_root))`（向后兼容）
+- `init_logging(project_root)` — 统一入口：人类可读 **stderr** + 可选 JSON 文件层（`NOVEL_DEBUG_LOG=1` 或 debug build 时写 `{project_root}/.novel/logs/debug.log`）
 
 **默认 filter**（无 `RUST_LOG` 时）：
 

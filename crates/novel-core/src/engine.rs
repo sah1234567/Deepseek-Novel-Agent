@@ -3,10 +3,13 @@ use crate::{
     ForkedAgentContext, Op, SessionHandle, SystemPromptBuilder, TerminalReason,
 };
 
-use crate::dynamic_context::build_dynamic_context;
+use crate::dynamic_context::{
+    build_dynamic_context, load_frozen_static_from_metadata, persist_frozen_system_metadata,
+    refresh_system_dynamic_context,
+};
 use crate::hooks::default_hook_config;
 use crate::interrupt::AbortController;
-use crate::message_bridge::{repair_tool_use_chain, stored_to_chat};
+use crate::message_bridge::{chat_to_json, repair_tool_use_chain, stored_to_chat};
 
 use novel_config::{load_project_settings, ProjectSettings};
 
@@ -215,9 +218,9 @@ impl AgentEngine {
             &settings.model.model,
         )?;
 
-        let registry = Arc::new(default_registry(config.project_root.clone()));
+        let registry = Arc::new(default_registry());
         let context_manager = ContextManager::new(&settings.model);
-        let (system_prompt, agents_md) =
+        let (system_prompt, agents_md, dynamic) =
             Self::build_initial_prompt(&config, &settings, &session)?;
 
         let messages = vec![ChatMessage {
@@ -228,16 +231,25 @@ impl AgentEngine {
             reasoning_content: None,
         }];
 
+        session
+            .db
+            .insert_message(
+                &session.id,
+                0,
+                0,
+                "system",
+                &chat_to_json(&messages[0]),
+                None,
+            )
+            .map_err(AgentError::from)?;
+        persist_frozen_system_metadata(&session.db, &session.id, &dynamic)
+            .map_err(AgentError::from)?;
+
         let (tx, rx) = mpsc::unbounded_channel();
 
-        let audit = open_audit_logger(
-            &config.project_root,
-            &session.id,
-            &settings.model.model,
-        );
+        let audit = open_audit_logger(&config.project_root, &session.id, &settings.model.model);
 
-        let initial_permission_mode =
-            permission_mode_from_str(&settings.permissions.mode);
+        let initial_permission_mode = permission_mode_from_str(&settings.permissions.mode);
 
         let shared = EngineShared {
             session,
@@ -304,49 +316,63 @@ impl AgentEngine {
             session_id,
         )?;
 
-        let registry = Arc::new(default_registry(config.project_root.clone()));
+        let registry = Arc::new(default_registry());
         let context_manager = ContextManager::new(&settings.model);
         let stored = session.db.get_session_messages(session_id, None)?;
 
         let messages = if stored.is_empty() {
-            let (system_prompt, agents_md) =
+            let (system_prompt, agents_md, dynamic) =
                 Self::build_initial_prompt(&config, &settings, &session)?;
-            (
-                vec![ChatMessage {
-                    role: "system".into(),
-                    content: system_prompt.clone(),
-                    tool_call_id: None,
-                    tool_calls: None,
-                    reasoning_content: None,
-                }],
-                system_prompt,
-                agents_md,
-            )
+            let msgs = vec![ChatMessage {
+                role: "system".into(),
+                content: system_prompt.clone(),
+                tool_call_id: None,
+                tool_calls: None,
+                reasoning_content: None,
+            }];
+            session
+                .db
+                .insert_message(&session.id, 0, 0, "system", &chat_to_json(&msgs[0]), None)
+                .map_err(AgentError::from)?;
+            persist_frozen_system_metadata(&session.db, &session.id, &dynamic)
+                .map_err(AgentError::from)?;
+            (msgs, system_prompt, agents_md)
         } else {
+            session
+                .db
+                .require_frozen_system_metadata(session_id)
+                .map_err(AgentError::from)?;
             let mut sp = stored_to_chat(&stored);
             repair_tool_use_chain(&mut sp);
             let sys = sp
                 .first()
                 .filter(|m| m.role == "system")
                 .map(|m| m.content.clone())
-                .unwrap_or_default();
-            (sp, sys.clone(), String::new())
+                .ok_or_else(|| {
+                    AgentError::Validation(
+                        "session missing system message at (0,0); run scripts/reset-work-databases"
+                            .into(),
+                    )
+                })?;
+            let agents_md = load_frozen_static_from_metadata(&session.db, session_id)
+                .map_err(AgentError::from)?
+                .agents_md;
+            (sp, sys, agents_md)
         };
 
         let (messages, system_prompt, agents_md) = messages;
 
-        let system_prompt = if system_prompt.is_empty() {
-            Self::build_initial_prompt(&config, &settings, &session)
-                .map(|(p, _)| p)
-                .unwrap_or_default()
-        } else {
-            system_prompt
-        };
-
         let turn_number = stored.iter().map(|m| m.turn_number).max().unwrap_or(0) as u32;
         let user_turn_count = stored
             .iter()
-            .filter(|m| m.role == "user")
+            .filter(|m| {
+                m.role == "user"
+                    && !m
+                        .content_json
+                        .get("content")
+                        .and_then(|v| v.as_str())
+                        .is_some_and(|c| c.starts_with("[上下文刷新]"))
+            })
             .map(|m| m.turn_number)
             .max()
             .unwrap_or(0);
@@ -364,14 +390,9 @@ impl AgentEngine {
 
         let (tx, rx) = mpsc::unbounded_channel();
 
-        let audit = open_audit_logger(
-            &config.project_root,
-            &session.id,
-            &settings.model.model,
-        );
+        let audit = open_audit_logger(&config.project_root, &session.id, &settings.model.model);
 
-        let initial_permission_mode =
-            permission_mode_from_str(&settings.permissions.mode);
+        let initial_permission_mode = permission_mode_from_str(&settings.permissions.mode);
 
         let shared = EngineShared {
             session,
@@ -421,13 +442,13 @@ impl AgentEngine {
         config: &EngineConfig,
         _settings: &ProjectSettings,
         session: &SessionHandle,
-    ) -> Result<(String, String), AgentError> {
+    ) -> Result<(String, String, DynamicContext), AgentError> {
         let store = KnowledgeStore::new(&config.project_root);
         let agents = store
             .read_file("AGENTS.md")
             .unwrap_or_else(|_| "默认：第三人称限知，2000-3000字/章".into());
-        let (prompt, _) = Self::assemble_system_prompt(config, session, &agents)?;
-        Ok((prompt, agents))
+        let (prompt, dynamic) = Self::assemble_system_prompt(config, session, &agents)?;
+        Ok((prompt, agents, dynamic))
     }
 
     /// Build system prompt from fresh dynamic context (Progress, Memory, INDEX, Skills).
@@ -447,16 +468,19 @@ impl AgentEngine {
         Ok((prompt, dynamic))
     }
 
-    /// Refresh `messages[0]` and shared system prompt after compaction.
-    pub fn rebuild_system_message(&mut self) -> Result<(), AgentError> {
-        let dynamic = build_dynamic_context(
+    /// Refresh dynamic system sections (Index/Memory/Progress/Skills summaries) while keeping AGENTS + Workspace frozen.
+    pub fn refresh_system_dynamic_sections(&mut self) -> Result<(), AgentError> {
+        let frozen =
+            load_frozen_static_from_metadata(&self.shared.session.db, &self.shared.session.id)
+                .map_err(AgentError::from)?;
+        let ctx = refresh_system_dynamic_context(
             &self.shared.session.project_root,
             &self.shared.session.id,
             &self.shared.session.db,
-            &self.shared.agents_md,
             &self.shared.agent_skills_dir,
+            &frozen,
         );
-        let prompt = SystemPromptBuilder::new().build(&dynamic);
+        let prompt = SystemPromptBuilder::new().build(&ctx);
         self.shared.system_prompt = prompt.clone();
         if let Some(m0) = self.messages.first_mut() {
             if m0.role == "system" {
@@ -594,9 +618,7 @@ impl AgentEngine {
             "hook",
         )?;
         let result = async {
-            let mut child = self
-                .fork(AgentType::KnowledgeAuditor, task)
-                .await?;
+            let mut child = self.fork(AgentType::KnowledgeAuditor, task).await?;
             let saved = self.shared.permission_mode_override.clone();
             if let Ok(mut g) = self.shared.permission_mode_override.lock() {
                 *g = PermissionMode::Auto;
@@ -679,8 +701,12 @@ impl AgentEngine {
                 Op::ApproveTool { tool_call_id } => {
                     self.approve_tool(&tool_call_id, Some(&event_tx)).await?;
                 }
-                Op::DenyTool { tool_call_id, reason } => {
-                    self.deny_tool(&tool_call_id, reason, Some(&event_tx)).await?;
+                Op::DenyTool {
+                    tool_call_id,
+                    reason,
+                } => {
+                    self.deny_tool(&tool_call_id, reason, Some(&event_tx))
+                        .await?;
                 }
                 Op::ResumeSession { session_id } => {
                     if session_id != self.shared.session.id {
@@ -689,7 +715,10 @@ impl AgentEngine {
                         ));
                     }
                 }
-                Op::ForkSubAgent { agent_type, task_prompt } => {
+                Op::ForkSubAgent {
+                    agent_type,
+                    task_prompt,
+                } => {
                     let mut child = self.fork(agent_type, task_prompt).await?;
                     let fork_run_id = crate::fork_transcript::create_fork_run(
                         &self.shared.session.db,
@@ -788,7 +817,10 @@ mod tests {
         let (op_tx, op_rx) = mpsc::unbounded_channel();
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         op_tx
-            .send(Op::SendMessage { content: "你好".into(), model: None })
+            .send(Op::SendMessage {
+                content: "你好".into(),
+                model: None,
+            })
             .unwrap();
         drop(op_tx);
         let handle = tokio::spawn(async move { engine.run(op_rx, event_tx).await });

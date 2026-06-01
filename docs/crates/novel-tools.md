@@ -25,11 +25,9 @@
 
 ### 1.2 ToolRegistry
 
-`default_registry(project_root)` 注册 **23** 个工具：
+`default_registry()` 注册 **23** 个工具（无参数；`project_root` 由 `ToolContext` 提供）：
 
-**9 个通用：** Read, Write, Edit, **Tail**, Grep, Glob, Bash, WebSearch, InvokeSkill
-
-**2 个交互：** TodoWrite, AskUserQuestion
+**11 个 builtin：** Read, Write, Edit, **Tail**, Grep, Glob, Bash, WebSearch, InvokeSkill, TodoWrite, AskUserQuestion
 
 **12 个 Novel 专属：**
 CharacterSearch, PlotGraph, PlotGrid, ForeshadowTracker, Stats, Corkboard, CharacterRotate, **ForkSubAgent**, ImpactAnalysis, KnowledgeDerive, TrackingQuery, RelationQuery

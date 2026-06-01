@@ -16,7 +16,9 @@ pub const SCAFFOLD_DIRS: &[&str] = &[
 ];
 
 /// Load template files from `{agent_root}/templates/`. Errors if missing or empty.
-pub fn load_scaffold_templates(templates_dir: &Path) -> Result<Vec<(String, String)>, KnowledgeError> {
+pub fn load_scaffold_templates(
+    templates_dir: &Path,
+) -> Result<Vec<(String, String)>, KnowledgeError> {
     if !templates_dir.is_dir() {
         return Err(KnowledgeError::TemplatesNotFound(
             templates_dir.display().to_string(),

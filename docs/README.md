@@ -28,13 +28,13 @@
 | 改 Agent 循环 / 流式 Tool / Subagent | [novel-core](crates/novel-core.md) §1.2 · [novel-tools](crates/novel-tools.md) · [FRAMEWORK §2.3](../FRAMEWORK.md#23-fork-子-agent) |
 | 改知识库 / 脚手架 | [novel-knowledge](crates/novel-knowledge.md) · `templates/` 目录 |
 | 改 Skill / Prompt | [novel-skills](crates/novel-skills.md) · [prompt/system.md](../prompt/system.md) |
-| 改持久化 / 会话列表 | [novel-state](crates/novel-state.md)（`total_turns` / `api_call_count` / `last_active_at`） |
+| 改持久化 / 会话列表 / Token | [novel-state](crates/novel-state.md)（`accumulate_session_tokens` / `context_tokens` / `total_turns` / `api_call_count` / `last_active_at`） |
 
 ## 运行时资产（非 crate 代码）
 
 | 路径 | 说明 |
 |------|------|
-| [prompt/](../prompt/) | System / 子 Agent 提示词（`include_str!` 嵌入）；含 `agents/general_purpose.md` |
+| [prompt/](../prompt/) | System / 子 Agent 提示词（`include_str!` 嵌入）；含 `agents/general_purpose.md`、`compaction-summary-trailing.md`（压缩摘要 trailing user） |
 | [skills/](../skills/) | Workflow + 流派 Skill（Agent 级；`works/{名}/skills/` 可覆盖同 id） |
 | [templates/](../templates/) | 新建作品脚手架 Markdown（运行时读盘，必填） |
 | [works/](../works/) | 用户作品实例（gitignore） |
@@ -48,7 +48,7 @@ Claude Code 文件夹格式：`skills/<id>/SKILL.md` + 可选 `references/`。
 - **References** → Read 渐进打开  
 - **作品覆盖** → `load_skills_merged(works/{名}/skills, agent/skills)`  
 
-压缩 refresh 重注入已 Invoke 的全文。详见 [novel-skills.md](crates/novel-skills.md)。
+压缩后 Skill 全文与摘要合并为 `[上下文刷新]` user；Memory/INDEX/Progress 经 system 动态段刷新。详见 [novel-compaction.md](crates/novel-compaction.md)。
 
 ## Agent 行为概要（prompt 层）
 
@@ -67,15 +67,19 @@ Claude Code 文件夹格式：`skills/<id>/SKILL.md` + 可选 `references/`。
 |------|------|
 | StatusBar 作品 | `list_works` 下拉 + 新建作品；切换作品会 **新建 session**（不自动恢复上次会话） |
 | StatusBar 会话 | `list_sessions` 下拉 + `resume_session` 切换；`+` → `create_session`；标签显示 **对话轮数** + **最后 LLM 活跃时间** |
-| StatusBar Token | 本轮三分类 + 会话累计；中断后 drain 估算 |
+| StatusBar Todo | TodoWrite 持久化项的下拉列表（非独立 TodoPanel）；全部 completed/cancelled 后自动隐藏 |
+| StatusBar Token | 本轮三分类 + 会话累计 + 当前上下文；`get_app_status` 5s 轮询 + `turn-complete` 刷新 |
 | 设置 · 会话列表 | 同 `list_sessions`；元数据含 **对话 N 轮 · API M 次** |
-| 权限模式 | normal / plan / auto / unattended |
-| 流式 Tool | `ToolUseCard`：pending 批准、running、结构化 input |
-| AskUserQuestion | 问答面板；turn 暂停至 `answer_question` |
-| Subagent | StatusBar chip + `SubAgentOverlay`（分段气泡，无 task 顶栏） |
-| 压缩进度 | CompactionBanner |
+| 权限 / 模型 | normal / plan / auto / unattended；flash/pro 切换；**turn 进行中禁用** |
+| **Transcript FSM** | `ui/src/transcript/`：`dispatchTranscriptEvent` 管理 Turn / LlmSegment / openSegment；Tauri 事件经 `mapEvents` 适配 |
+| **SegmentGroup 渲染** | `TranscriptView` 唯一入口；`segmentRender.tsx` 成组 Agent + Tool 气泡；主聊天、AskUserQuestion、SubAgent overlay 共用 |
+| **SubAgentForkCard** | ForkSubAgent 工具卡与 Hook 卡；**进入** 打开 `SubAgentOverlay`（`TranscriptView mode=fork`） |
+| 流式 Tool | `ToolCall.status=streaming-args` 流式累积参数；`ToolUseCard` 显示 pending / running / done |
+| AskUserQuestion | 问答面板插在 `pauseAfterSegmentId` 对应段的全部 tools 之后 |
+| **CompactionDivider / ContextRefreshBubble** | archive 区分隔线；`[上下文刷新]` 单气泡（Skill + 摘要两节） |
+| 压缩进度 | `compaction-progress` → **CompactionBanner**（ChatPanel viewport 顶部，已接入） |
 
-**会话术语：** 见 [novel-state §1.5](crates/novel-state.md#15-sessionsummary)（`total_turns` vs `api_call_count` vs `last_active_at`）。
+**会话术语：** 见 [novel-state §1.4](crates/novel-state.md#14-sessionsummary)（`total_turns` vs `api_call_count` vs `context_tokens` vs `last_active_at`）。
 
 ## Subagent 双轨模型
 
@@ -92,17 +96,52 @@ Claude Code 文件夹格式：`skills/<id>/SKILL.md` + 可选 `references/`。
 ```
 start → input_delta → input_complete → (pending | running) → progress/result
 assistant-segment-complete → 主聊天或 fork overlay 分段 finalize
-turn-complete → 若 pending 工具/问答则前端不 hydrate
+turn-complete → StatusBar token refresh；若 pending 工具/问答则前端不 hydrate
+session-resumed / turn-complete → useAgent hydrate（get_session_transcript）
 ```
 
-详见 [novel-server §1.8](crates/novel-server.md#18-前端事件eventsrs) 与 [novel-core §1.10](crates/novel-core.md#110-流式-tool-调度streamingtooldispatch)。
+详见 [novel-server §1.9](crates/novel-server.md#19-前端事件eventsrs) 与 [novel-core §1.10](crates/novel-core.md#110-流式-tool-调度streamingtooldispatch)。
 
-## CI / CD（GitHub Actions）
+## CI / CD
+
+### 本地（与 GitHub 门禁一致）
+
+```powershell
+.\scripts\ci-windows.ps1   # Windows：与 GitHub rust-windows job 相同（推荐）
+.\scripts\ci-local.ps1     # Windows → ci-windows-gate；Linux/macOS → ci-pr-gate
+.\scripts\verify_all.ps1   # ci-local.ps1 别名
+.\scripts\run_tests.ps1    # 仅后端 nextest --profile ci
+```
+
+| 脚本 | 对应 GitHub job |
+|------|-----------------|
+| `ci-gate-core.sh` | 共享步骤（frontend + rust + tauri + audit） |
+| `ci-windows-gate.sh` | **rust-windows**（Windows 全量；本地 Windows 与 GHA 同一入口） |
+| `ci-pr-gate.sh` | Ubuntu PR jobs 合并编排（frontend / rust / tauri / audit） |
+| `ci-frontend.sh` | frontend（Vitest 无警告 + build） |
+| `ci-rust-static.sh` | rust（rustfmt + check） |
+| `ci-clippy.sh` | rust（clippy） |
+| `ci-rust-test.sh` | rust + rust-matrix（nextest `--profile ci`） |
+| `ci-tauri.sh` | tauri-compile / Windows gate 内 Tauri 编译 |
+| `ci-security-audit.sh` | security-audit（cargo-audit 0.22.1） |
+
+### GitHub Actions
 
 | Workflow | 触发 | 说明 |
 |----------|------|------|
-| [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) | push/PR → main | fmt + clippy + nextest + 前端 build/test；Ubuntu Tauri 编译冒烟；**无需 API Key** |
+| [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) | push/PR → main | Ubuntu PR gate + **Windows 全量 gate**（`ci-windows-gate.sh`）；push 额外 macOS nextest；**无需 API Key** |
 | [`.github/workflows/release.yml`](../.github/workflows/release.yml) | tag `v*` / 手动 | 质量门禁后三平台 Tauri 打包（需 `src-tauri/icons/icon.ico`） |
 | [`.github/workflows/deps-audit.yml`](../.github/workflows/deps-audit.yml) | 每周 / 手动 | `cargo udeps`（不阻塞 PR） |
 
-PR 仅跑 Ubuntu 全量 Rust 检查；push 到 main 额外跑 Windows/macOS nextest 矩阵。
+PR 跑 Ubuntu 分 job 门禁 + **Windows 全量 gate**（`rust-windows`，与本地 `ci-windows.ps1` 同一脚本）；**push 到 main** 额外跑 macOS nextest（`rust-matrix`）。
+
+## 清理作品会话库
+
+删除 `works/**/.novel-agent/state.db*`（保留正文、知识库与 settings）：
+
+```powershell
+.\scripts\reset-work-databases.ps1   # Windows
+./scripts/reset-work-databases.sh  # Git Bash / CI
+```
+
+详见 [README §清理作品会话库](../README.md#清理作品会话库)。

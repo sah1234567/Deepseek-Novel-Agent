@@ -41,14 +41,23 @@ pub async fn verify_web_search_endpoint(api_key: &str, model: &str) -> Result<()
         }],
         "stream": false,
     });
-    let text = post_json(&url, api_key, AuthStyle::AnthropicApiKey, &body, "web_search").await?;
+    let text = post_json(
+        &url,
+        api_key,
+        AuthStyle::AnthropicApiKey,
+        &body,
+        "web_search",
+    )
+    .await?;
     let json: Value = serde_json::from_str(&text)
         .map_err(|e| LlmError::Api(format!("web_search response not JSON: {e}")))?;
     let has_search_result = json
         .get("content")
         .and_then(|c| c.as_array())
         .is_some_and(|blocks| {
-            blocks.iter().any(|b| b.get("type").and_then(|t| t.as_str()) == Some("web_search_tool_result"))
+            blocks
+                .iter()
+                .any(|b| b.get("type").and_then(|t| t.as_str()) == Some("web_search_tool_result"))
         });
     if !has_search_result {
         return Err(LlmError::Api(
@@ -80,10 +89,9 @@ async fn post_json(
         .json(body);
     req = match auth {
         AuthStyle::Bearer => req.header("Authorization", format!("Bearer {api_key}")),
-        AuthStyle::AnthropicApiKey => {
-            req.header("x-api-key", api_key)
-                .header("anthropic-version", "2023-06-01")
-        }
+        AuthStyle::AnthropicApiKey => req
+            .header("x-api-key", api_key)
+            .header("anthropic-version", "2023-06-01"),
     };
     let resp = req.send().await.map_err(|e| LlmError::Api(e.to_string()))?;
     let status = resp.status();

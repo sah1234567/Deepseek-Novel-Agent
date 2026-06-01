@@ -51,46 +51,49 @@ function TodoDropdown({
   onToggle: () => void;
   onCycle: (id: string, next: string) => void;
 }) {
-  const activeTodos = todos.filter(
-    (t) => t.status !== "completed" && t.status !== "cancelled"
-  );
-  const activeCount = activeTodos.length;
+  const incompleteCount = todos.filter(
+    (t) => t.status === "pending" || t.status === "in_progress",
+  ).length;
+  const allFinished =
+    todos.length > 0 &&
+    todos.every((t) => t.status === "completed" || t.status === "cancelled");
+
+  if (todos.length === 0 || allFinished) {
+    return null;
+  }
+
   return (
     <div className="todo-dropdown-wrapper">
       <button
         type="button"
-        className={`todo-dropdown-btn${activeCount > 0 ? " has-active" : ""}${open ? " is-open" : ""}`}
+        className={`todo-dropdown-btn${incompleteCount > 0 ? " has-active" : ""}${open ? " is-open" : ""}`}
         onClick={onToggle}
         title="当前待办事项"
       >
-        待办事项{activeCount > 0 ? ` ${activeCount}` : ""}
+        待办事项{incompleteCount > 0 ? ` ${incompleteCount}` : ""}
       </button>
       {open && (
         <div className="todo-dropdown">
-          {activeCount === 0 ? (
-            <p className="todo-dropdown-empty">暂无待办</p>
-          ) : (
-            <ul className="todo-dropdown-list">
-              {activeTodos.map((todo) => (
-                <li key={todo.id} className={`todo-dropdown-item todo-dropdown-${todo.status}`}>
-                  <button
-                    type="button"
-                    className="todo-dropdown-status"
-                    title="点击切换状态"
-                    onClick={() =>
-                      onCycle(todo.id, STATUS_CYCLE[todo.status] ?? "pending")
-                    }
-                  >
-                    <span className="todo-dropdown-icon">
-                      {STATUS_ICON[todo.status] ?? "○"}
-                    </span>
-                    {STATUS_LABEL[todo.status] ?? todo.status}
-                  </button>
-                  <span className="todo-dropdown-content">{todo.content}</span>
-                </li>
-              ))}
-            </ul>
-          )}
+          <ul className="todo-dropdown-list">
+            {todos.map((todo) => (
+              <li key={todo.id} className={`todo-dropdown-item todo-dropdown-${todo.status}`}>
+                <button
+                  type="button"
+                  className="todo-dropdown-status"
+                  title="点击切换状态"
+                  onClick={() =>
+                    onCycle(todo.id, STATUS_CYCLE[todo.status] ?? "pending")
+                  }
+                >
+                  <span className="todo-dropdown-icon">
+                    {STATUS_ICON[todo.status] ?? "○"}
+                  </span>
+                  {STATUS_LABEL[todo.status] ?? todo.status}
+                </button>
+                <span className="todo-dropdown-content">{todo.content}</span>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
     </div>
@@ -193,7 +196,22 @@ export function StatusBar({
     ];
   }, [sessions, status?.sessionId, status?.turnNumber]);
 
-  const turnNumber = status?.turnNumber ?? 0;
+  const currentSessionLabel = useMemo(() => {
+    const current = sessionOptions.find((s) => s.id === status?.sessionId);
+    if (current) return sessionOptionLabel(current);
+    if (!status?.sessionId) return "";
+    return sessionOptionLabel({
+      id: status.sessionId,
+      title: null,
+      status: "active",
+      model: "",
+      last_active_at: "",
+      created_at: "",
+      total_turns: status.turnNumber ?? 0,
+      api_call_count: 0,
+    });
+  }, [sessionOptions, status?.sessionId, status?.turnNumber]);
+
   const sessionHit = status?.sessionCacheHit ?? 0;
   const sessionMiss = status?.sessionCacheMiss ?? 0;
   const sessionComp = status?.sessionCompletion ?? 0;
@@ -273,9 +291,10 @@ export function StatusBar({
         <label className="session-control">
           <span className="session-control-label">会话</span>
           <select
-            className="session-select"
+            className="session-select session-select-session"
             value={status?.sessionId ?? ""}
             disabled={!status?.sessionId || sessionBusy || isStreaming}
+            title={currentSessionLabel || undefined}
             onChange={(e) => {
               if (sessionBusy || isStreaming) return;
               void handleSessionChange(e.target.value);
@@ -291,7 +310,7 @@ export function StatusBar({
                   model: "",
                   last_active_at: "",
                   created_at: "",
-                  total_turns: turnNumber,
+                  total_turns: status?.turnNumber ?? 0,
                   api_call_count: 0,
                 })}
               </option>

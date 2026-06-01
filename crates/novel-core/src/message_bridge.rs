@@ -204,7 +204,7 @@ pub fn to_llm_messages(messages: &[ChatMessage]) -> Vec<LlmChatMessage> {
 pub fn stored_to_chat(stored: &[StoredMessage]) -> Vec<ChatMessage> {
     stored
         .iter()
-        .filter_map(|s| {
+        .map(|s| {
             let content = s
                 .content_json
                 .get("content")
@@ -230,13 +230,13 @@ pub fn stored_to_chat(stored: &[StoredMessage]) -> Vec<ChatMessage> {
                 .get("tool_calls")
                 .and_then(|v| serde_json::from_value::<Vec<ToolCallRecord>>(v.clone()).ok())
                 .filter(|tcs| !tcs.is_empty());
-            Some(ChatMessage {
+            ChatMessage {
                 role: s.role.clone(),
                 content,
                 tool_call_id,
                 tool_calls,
                 reasoning_content,
-            })
+            }
         })
         .collect()
 }
@@ -247,11 +247,10 @@ pub fn chat_to_json(msg: &ChatMessage) -> Value {
         obj["tool_call_id"] = Value::String(id.clone());
     }
     if let Some(tcs) = &msg.tool_calls {
-        obj["tool_calls"] = serde_json::to_value(tcs)
-            .unwrap_or_else(|e| {
-                tracing::warn!(%e, "failed to serialize tool_calls to JSON");
-                Value::Null
-            });
+        obj["tool_calls"] = serde_json::to_value(tcs).unwrap_or_else(|e| {
+            tracing::warn!(%e, "failed to serialize tool_calls to JSON");
+            Value::Null
+        });
     }
     if let Some(rc) = &msg.reasoning_content {
         if !rc.is_empty() {

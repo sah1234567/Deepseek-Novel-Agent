@@ -127,7 +127,11 @@ pub fn format_read_dedup_hint_from_input(tool_name: &str, input: &Value) -> Opti
         &path,
         read_offset,
         if tool_name == "Read" { limit } else { None },
-        if tool_name == "Tail" { Some(tail_lines.unwrap_or(80)) } else { None },
+        if tool_name == "Tail" {
+            Some(tail_lines.unwrap_or(80))
+        } else {
+            None
+        },
     ))
 }
 
@@ -151,7 +155,10 @@ pub fn add_line_numbers(content: &str, start_line: usize) -> String {
         .join("\n")
 }
 
-pub fn read_range_key(offset: Option<usize>, limit: Option<usize>) -> (Option<usize>, Option<usize>) {
+pub fn read_range_key(
+    offset: Option<usize>,
+    limit: Option<usize>,
+) -> (Option<usize>, Option<usize>) {
     if limit.is_some() {
         (offset, limit)
     } else if offset.is_some_and(|o| o <= 1) {
@@ -230,7 +237,11 @@ mod tests {
 
     #[test]
     fn dedup_eligibility_by_source() {
-        assert!(entry(ReadCacheSource::Read, None, None).source.is_dedup_eligible());
-        assert!(!entry(ReadCacheSource::WriteRefresh, None, None).source.is_dedup_eligible());
+        assert!(entry(ReadCacheSource::Read, None, None)
+            .source
+            .is_dedup_eligible());
+        assert!(!entry(ReadCacheSource::WriteRefresh, None, None)
+            .source
+            .is_dedup_eligible());
     }
 }

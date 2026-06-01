@@ -125,11 +125,7 @@ impl Tool for CharacterRotateTool {
             for ch in &appearances {
                 *chapter_counts.entry(*ch).or_insert(0) += 1;
             }
-            let since = if max_chapter > last {
-                max_chapter - last
-            } else {
-                0
-            };
+            let since = max_chapter.saturating_sub(last);
             per_character.push(CharacterRotation {
                 name: name.clone(),
                 last_chapter: if last > 0 {
@@ -157,8 +153,7 @@ impl Tool for CharacterRotateTool {
             .into_iter()
             .map(|(ch, count)| (format!("Ch{ch}"), count))
             .collect();
-        per_chapter_character_count
-            .sort_by(|a, b| parse_chapter_num(&a.0).cmp(&parse_chapter_num(&b.0)));
+        per_chapter_character_count.sort_by_key(|a| parse_chapter_num(&a.0));
 
         let result = CharacterRotateResult {
             per_character,
@@ -166,7 +161,8 @@ impl Tool for CharacterRotateTool {
             ensemble_warnings: Vec::new(),
         };
         Ok(ToolOutput {
-            content: serde_json::to_string_pretty(&result).map_err(|e| ToolError::Execution(format!("json serialize: {e}")))?,
+            content: serde_json::to_string_pretty(&result)
+                .map_err(|e| ToolError::Execution(format!("json serialize: {e}")))?,
             is_error: false,
         })
     }

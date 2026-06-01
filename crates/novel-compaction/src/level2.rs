@@ -92,7 +92,11 @@ pub fn apply_level2_knowledge(
     Ok(report)
 }
 
-fn compress_file(store: &KnowledgeStore, rel: &str, tail_rows: usize) -> Result<usize, CompactionError> {
+fn compress_file(
+    store: &KnowledgeStore,
+    rel: &str,
+    tail_rows: usize,
+) -> Result<usize, CompactionError> {
     let content = store
         .read_file(rel)
         .map_err(|e| CompactionError::Tokenization(e.to_string()))?;
@@ -152,7 +156,10 @@ status: alive
         std::fs::write(chars_dir.join("测试角色.md"), card).unwrap();
 
         let report = apply_level2_knowledge(tmp.path(), 3).unwrap();
-        assert!(report.files_compressed > 0, "should have compressed at least 1 file");
+        assert!(
+            report.files_compressed > 0,
+            "should have compressed at least 1 file"
+        );
         assert!(report.total_rows_merged > 0, "should have merged some rows");
 
         let compressed = std::fs::read_to_string(chars_dir.join("测试角色.md")).unwrap();

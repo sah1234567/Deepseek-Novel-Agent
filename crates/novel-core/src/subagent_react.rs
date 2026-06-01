@@ -53,9 +53,7 @@ impl SubagentLoopPhase {
             Self::Reacting => None,
             Self::ReportOnly { grace_left: 0 } => None,
             Self::ReportOnly { grace_left: 1 } => Some(Self::ReportOnly { grace_left: 0 }),
-            Self::ReportOnly { grace_left: n } => Some(Self::ReportOnly {
-                grace_left: n - 1,
-            }),
+            Self::ReportOnly { grace_left: n } => Some(Self::ReportOnly { grace_left: n - 1 }),
         }
     }
 }

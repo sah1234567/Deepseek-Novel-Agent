@@ -231,7 +231,7 @@ Workflow Skill（`novel-planning` / `chapter-writing` / `revision` / `post-chapt
 |------|------|---------------------|
 | KnowledgeAuditor | 知识库更新遗漏 + 设定一致性深度审计 | 简短：章节路径、审计侧重 |
 | ChapterCraftAnalyzer | 对话质量、叙事节奏、情感轨迹 | `分析 chapters/chapter-NNN.md`；含 POV/主角名 |
-| GeneralPurpose | 自定义任务，可 Write 全目录 | **task = 完整执行指令** |
+| GeneralPurpose | 自定义任务，可 Write 全目录 | **task = 完整执行指令**；要求结论写在返回正文，**勿**让子 Agent 另建说明文件 |
 
 **收到报告时：**
 

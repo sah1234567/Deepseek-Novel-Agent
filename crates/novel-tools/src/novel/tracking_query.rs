@@ -61,10 +61,7 @@ fn extract_current_state(rows: &[String]) -> Option<String> {
     rows.last().map(|r| r.to_string())
 }
 
-fn filter_by_chapter_range(
-    rows: &[String],
-    range: (u32, u32),
-) -> Vec<TrackingEntry> {
+fn filter_by_chapter_range(rows: &[String], range: (u32, u32)) -> Vec<TrackingEntry> {
     rows.iter()
         .filter_map(|row| {
             let ch = parse_chapter_num(row);
@@ -174,8 +171,9 @@ impl Tool for TrackingQueryTool {
                 (entries, state)
             }
             "range" => {
-                let range = parse_chapter_range(&input)
-                    .ok_or_else(|| ToolError::Execution("chapter_range required for range operation".into()))?;
+                let range = parse_chapter_range(&input).ok_or_else(|| {
+                    ToolError::Execution("chapter_range required for range operation".into())
+                })?;
                 (filter_by_chapter_range(&rows, range), None)
             }
             "search" => {
@@ -235,10 +233,7 @@ mod tests {
             ..ToolContext::new(tmp.path().to_path_buf())
         };
         let out = tool
-            .call(
-                json!({"file": "scene", "operation": "current"}),
-                &ctx,
-            )
+            .call(json!({"file": "scene", "operation": "current"}), &ctx)
             .await
             .unwrap();
         assert!(out.content.contains("坍塌"));
@@ -318,10 +313,7 @@ mod tests {
             ..ToolContext::new(tmp.path().to_path_buf())
         };
         let out = tool
-            .call(
-                json!({"file": "scene", "operation": "current"}),
-                &ctx,
-            )
+            .call(json!({"file": "scene", "operation": "current"}), &ctx)
             .await
             .unwrap();
         assert!(out.content.contains("\"entries\": []"));

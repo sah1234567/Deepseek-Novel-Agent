@@ -71,7 +71,9 @@ impl ToolContext {
     pub fn resolve_deepseek_api_key(&self) -> Option<String> {
         match &self.global_api_config_path {
             Some(path) => novel_config::resolve_agent_api_key(path),
-            None => std::env::var("DEEPSEEK_API_KEY").ok().filter(|k| !k.is_empty()),
+            None => std::env::var("DEEPSEEK_API_KEY")
+                .ok()
+                .filter(|k| !k.is_empty()),
         }
     }
 
@@ -82,10 +84,11 @@ impl ToolContext {
                 return Some(format!("deny_rules: {rule}"));
             }
             if let Some(path) = target_path {
-                if rule.starts_with("Write(") && (tool_name == "Write" || tool_name == "Edit") {
-                    if path_matches_rule(rule, path) {
-                        return Some(format!("deny_rules: {rule}"));
-                    }
+                if rule.starts_with("Write(")
+                    && (tool_name == "Write" || tool_name == "Edit")
+                    && path_matches_rule(rule, path)
+                {
+                    return Some(format!("deny_rules: {rule}"));
                 }
             }
         }
@@ -129,9 +132,9 @@ impl ToolContext {
         self.always_allow.iter().any(|n| n == tool_name)
     }
 
-    pub fn store_read_cache(&self, path: &PathBuf, entry: ReadCacheEntry) {
+    pub fn store_read_cache(&self, path: &Path, entry: ReadCacheEntry) {
         if let Some(cache) = &self.read_file_cache {
-            cache.insert(path.clone(), entry);
+            cache.insert(path.to_path_buf(), entry);
         }
     }
 
@@ -173,7 +176,11 @@ impl ToolContext {
     }
 
     /// Edit only: old_string must lie in the cached Read/Tail slice (full read always OK).
-    pub fn require_edit_in_read_slice(&self, full: &PathBuf, old_string: &str) -> Result<(), ToolError> {
+    pub fn require_edit_in_read_slice(
+        &self,
+        full: &PathBuf,
+        old_string: &str,
+    ) -> Result<(), ToolError> {
         let Some(entry) = self.read_cache_entry(full) else {
             return Ok(());
         };
@@ -224,7 +231,7 @@ impl ToolContext {
     }
 
     /// After Edit/Write, refresh cache with new file content (full read semantics).
-    pub fn refresh_cache_after_write(&self, path: &PathBuf, raw_content: &str, mtime_secs: u64) {
+    pub fn refresh_cache_after_write(&self, path: &Path, raw_content: &str, mtime_secs: u64) {
         let total_lines = if raw_content.is_empty() {
             0
         } else {
@@ -270,9 +277,7 @@ impl ToolContext {
                 parent
                     .canonicalize()
                     .ok()
-                    .and_then(|p| {
-                        path.file_name().map(|name| p.join(name))
-                    })
+                    .and_then(|p| path.file_name().map(|name| p.join(name)))
                     .unwrap_or_else(|| path.to_path_buf())
             } else {
                 path.to_path_buf()
@@ -311,7 +316,7 @@ impl ToolContext {
         }
         // Also check if the file name itself is protected (e.g. writing to root of project)
         if let Some(name) = relative.file_name().and_then(|n| n.to_str()) {
-            if Self::PROTECTED_PATHS.iter().any(|p| *p == name) {
+            if Self::PROTECTED_PATHS.contains(&name) {
                 return Err(ToolError::PermissionDenied(format!(
                     "Write denied: {} is a protected path",
                     path.display()

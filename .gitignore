@@ -7,6 +7,9 @@ ui/node_modules/
 ui/dist/
 *.tsbuildinfo
 
+# ── Tauri 生成文件 ────────────────────────────────────────────
+src-tauri/gen/schemas/
+
 # ── 用户作品与本地状态（勿提交）──────────────────────────────
 works/*
 !works/.gitkeep

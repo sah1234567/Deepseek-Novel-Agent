@@ -80,10 +80,7 @@ pub async fn init_novel_project(state: State<'_, AppState>, app: AppHandle) -> R
 }
 
 #[tauri::command]
-pub async fn create_session(
-    state: State<'_, AppState>,
-    app: AppHandle,
-) -> Result<String, String> {
+pub async fn create_session(state: State<'_, AppState>, app: AppHandle) -> Result<String, String> {
     let ctx = state.command_context(app);
     novel_server::tauri::create_session(&ctx).await
 }
@@ -125,6 +122,16 @@ pub async fn resume_session(
 ) -> Result<String, String> {
     let ctx = state.command_context(app);
     novel_server::tauri::resume_session(&ctx, session_id).await
+}
+
+#[tauri::command]
+pub async fn get_session_transcript(
+    state: State<'_, AppState>,
+    app: AppHandle,
+    session_id: Option<String>,
+) -> Result<novel_server::tauri::SessionTranscript, String> {
+    let ctx = state.command_context(app);
+    novel_server::tauri::get_session_transcript(&ctx, session_id).await
 }
 
 #[tauri::command]

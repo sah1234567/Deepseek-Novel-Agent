@@ -2,7 +2,7 @@ export function extractSearchRoot(input: unknown): string | null {
   if (!input || typeof input !== "object") return null;
   const obj = input as Record<string, unknown>;
   if (typeof obj.search_root === "string" && obj.search_root.trim()) return obj.search_root;
-  // legacy SQLite messages
+  // Older persisted tool args may use `path` instead of `search_root` (Grep/Glob hydrate).
   if (typeof obj.path === "string" && obj.path.trim()) return obj.path;
   return null;
 }
@@ -43,6 +43,9 @@ export function formatToolSummary(name: string, input: unknown): string {
     }
     if (name === "AskUserQuestion" && Array.isArray(obj.questions)) {
       return obj.questions.length + " 题";
+    }
+    if (name === "ForkSubAgent" && typeof obj.agent_type === "string") {
+      return obj.agent_type;
     }
     if (name === "Bash" && typeof obj.command === "string") {
       return obj.command.length > 60 ? obj.command.slice(0, 60) + "…" : obj.command;
@@ -107,6 +110,7 @@ export function formatToolInput(name: string, input: unknown): string {
       return "因果图遍历: " + dir + ", 深度 " + depth;
     }
     case "InvokeSkill": {
+      // Accept snake_case (schema) and legacy camelCase from older payloads.
       const id = typeof obj.skill_id === "string" ? obj.skill_id
                : typeof obj.skillId === "string" ? obj.skillId : "?";
       return "加载 Skill: " + id;
@@ -143,6 +147,15 @@ export function formatToolInput(name: string, input: unknown): string {
       if (ch) return `字数统计: 第${ch}章`;
       return "字数统计";
     }
+    case "ForkSubAgent": {
+      const agent = typeof obj.agent_type === "string" ? obj.agent_type : "?";
+      const task = typeof obj.task === "string" ? obj.task.trim() : "";
+      if (task) {
+        const preview = task.length > 120 ? task.slice(0, 120) + "…" : task;
+        return `启动 ${agent}: ${preview}`;
+      }
+      return `启动 ${agent}`;
+    }
     case "CharacterRotate":
       return "人物出场轮值检查";
     case "Corkboard":
@@ -154,12 +167,4 @@ export function formatToolInput(name: string, input: unknown): string {
     default:
       return "";
   }
-}
-
-export const TODO_STATUS_CYCLE = ["pending", "in_progress", "completed"] as const;
-
-export function nextTodoStatus(current: string): string {
-  const idx = TODO_STATUS_CYCLE.indexOf(current as (typeof TODO_STATUS_CYCLE)[number]);
-  if (idx === -1 || idx === TODO_STATUS_CYCLE.length - 1) return TODO_STATUS_CYCLE[0];
-  return TODO_STATUS_CYCLE[idx + 1];
 }

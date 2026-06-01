@@ -10,10 +10,10 @@ pub enum StateError {
     Json(#[from] serde_json::Error),
     #[error("Session not found: {0}")]
     SessionNotFound(String),
-    #[error("Checkpoint not found: {0}")]
-    CheckpointNotFound(String),
     #[error("Fork run not found: {0}")]
     ForkRunNotFound(String),
     #[error("Database corrupted")]
     DatabaseCorrupted,
+    #[error("{0}")]
+    Validation(String),
 }

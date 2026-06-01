@@ -1,4 +1,6 @@
-use super::super::{blocking, optional_search_root, require_str_any, Tool, ToolContext, ToolError, ToolOutput};
+use super::super::{
+    blocking, optional_search_root, require_str_any, Tool, ToolContext, ToolError, ToolOutput,
+};
 use async_trait::async_trait;
 use grep_regex::RegexMatcher;
 use grep_searcher::sinks::UTF8;
@@ -66,10 +68,7 @@ fn grep_sync_rg(
             Ok(true)
         });
 
-        if searcher
-            .search_path(&matcher, path, &mut sink)
-            .is_err()
-        {
+        if searcher.search_path(&matcher, path, &mut sink).is_err() {
             continue;
         }
         if truncated {

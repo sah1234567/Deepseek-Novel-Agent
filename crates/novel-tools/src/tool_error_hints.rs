@@ -19,7 +19,11 @@ pub fn enhance_tool_error_for_llm(
     }
 }
 
-fn hint_for_execution(tool_name: &str, msg: &str, _tool_input: Option<&Value>) -> Option<&'static str> {
+fn hint_for_execution(
+    tool_name: &str,
+    msg: &str,
+    _tool_input: Option<&Value>,
+) -> Option<&'static str> {
     if msg.contains("Read economy:") {
         return Some("Use Grep to locate line numbers, then Read with offset+limit or Tail for file-end segments.");
     }
@@ -31,7 +35,9 @@ fn hint_for_execution(tool_name: &str, msg: &str, _tool_input: Option<&Value>) -
             return Some("Read or Tail the file again, then retry Edit.");
         }
         if msg.contains("only read a portion") || msg.contains("not in the read slice") {
-            return Some("Re-Read with offset/limit covering old_string (Grep first for line numbers).");
+            return Some(
+                "Re-Read with offset/limit covering old_string (Grep first for line numbers).",
+            );
         }
         if msg.contains("line number prefix") {
             return Some("Remove \"{n}\\t\" prefixes from old_string; match raw file text only.");
@@ -58,7 +64,8 @@ mod tests {
 
     #[test]
     fn edit_not_read_hint() {
-        let err = ToolError::Execution("Read foo.md before editing (read-before-write policy)".into());
+        let err =
+            ToolError::Execution("Read foo.md before editing (read-before-write policy)".into());
         let s = enhance_tool_error_for_llm("Edit", &err, None);
         assert!(s.contains("Next steps:"));
         assert!(s.contains("Read or Tail"));
