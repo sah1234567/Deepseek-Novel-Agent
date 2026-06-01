@@ -8,5 +8,7 @@ cd "$ROOT"
 echo "=== rustfmt ==="
 cargo fmt --all -- --check
 
+bash "$ROOT/scripts/ci-ui-dist.sh"
+
 echo "=== cargo check --workspace ==="
 cargo check --workspace

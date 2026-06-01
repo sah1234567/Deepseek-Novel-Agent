@@ -53,6 +53,12 @@ jobs:
           workspaces: .
           cache-all-crates: true
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
       # workspace includes src-tauri; check/clippy/nextest need GTK/WebKit dev libs on Linux.
       - name: Install system dependencies (Linux)
         run: |
@@ -122,6 +128,12 @@ jobs:
         with:
           workspaces: .
           cache-all-crates: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
 
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'

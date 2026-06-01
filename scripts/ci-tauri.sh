@@ -4,10 +4,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-echo "=== Build frontend for Tauri ==="
-cd "$ROOT/ui"
-npm ci
-npm run build
+bash "$ROOT/scripts/ci-ui-dist.sh"
 
 # GitHub ubuntu-latest only; skip on local Windows/macOS and non-CI Linux.
 if [ "${GITHUB_ACTIONS:-}" = "true" ] && [ "$(uname -s)" = "Linux" ]; then
