@@ -10,6 +10,8 @@ export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
 export CARGO_TERM_COLOR="${CARGO_TERM_COLOR:-always}"
 export RUST_BACKTRACE="${RUST_BACKTRACE:-1}"
 
+bash "$ROOT/scripts/ci-check-node.sh"
+
 job_banner() {
   echo ""
   echo "========================================"

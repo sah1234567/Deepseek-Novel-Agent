@@ -56,7 +56,7 @@ novel_agent/
 
 ## 快速开始
 
-**前置：** [Rust](https://rustup.rs)、[Node.js](https://nodejs.org)、Tauri 系统依赖（Windows 需 WebView2）。Agent 根目录下须有 `templates/` 与 `skills/`。
+**前置：** [Rust](https://rustup.rs)、**Node.js 24**（`ui/.nvmrc`）、Tauri 系统依赖（Windows 需 WebView2）。Agent 根目录下须有 `templates/` 与 `skills/`。请将 Node 24 置于 User PATH 首位（高于 Cursor 自带 Node 22）。
 
 ```bash
 cd novel_agent
@@ -89,11 +89,10 @@ cargo tauri build
 
 ```powershell
 .\scripts\ci-windows.ps1  # Windows：与 GitHub rust-windows 相同（推荐）
-.\scripts\ci-local.ps1      # Windows → ci-windows-gate；其他 OS → ci-pr-gate
-.\scripts\run_tests.ps1     # 仅后端 nextest（--profile ci）
+.\scripts\ci-local.ps1    # 跨平台本地 CI 入口
 ```
 
-前端：`cd ui && npm test && npm run build`。详见 [docs/README.md](docs/README.md) CI 节。
+详见 [scripts/README.md](scripts/README.md) 与 [docs/README.md](docs/README.md) CI 节。
 
 ---
 

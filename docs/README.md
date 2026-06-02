@@ -104,45 +104,34 @@ session-resumed / turn-complete → useAgent hydrate（get_session_transcript）
 
 ## CI / CD
 
-### 本地（与 GitHub 门禁一致）
+**Node.js 24**（`ui/.nvmrc`）— 本地与 GitHub 均由 `scripts/ci-check-node.sh` 在 `npm` 前校验；GHA 另设 `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24` 与 `setup-node` + `node-version-file: ui/.nvmrc`。
+
+### 本地
 
 ```powershell
-.\scripts\ci-windows.ps1   # Windows：与 GitHub rust-windows job 相同（推荐）
-.\scripts\ci-local.ps1     # Windows → ci-windows-gate；Linux/macOS → ci-pr-gate
-.\scripts\verify_all.ps1   # ci-local.ps1 别名
-.\scripts\run_tests.ps1    # 仅后端 nextest --profile ci
+.\scripts\ci-windows.ps1   # Windows（= GitHub rust-windows）
+.\scripts\ci-local.ps1     # 自动选 Windows / Linux / macOS gate
 ```
 
-Windows 上若直接 `bash scripts/ci-tauri-check.sh`，请用 **Git Bash**（`Program Files\Git\bin\bash.exe`），不要用 WSL 的 `C:\Windows\System32\bash.exe`——后者 PATH 里没有 Windows 版 `cargo`，会报 `cargo: command not found`。
+```bash
+bash scripts/ci-pr-gate.sh      # Linux / macOS 全量
+bash scripts/ci-rust-gate.sh    # 仅 Rust + Tauri
+bash scripts/ci-rust-test.sh    # 仅 nextest
+```
 
-`ci-windows.ps1` 最后一步 `cargo audit` 需访问 GitHub 拉取 RustSec 漏洞库；网络不通时会失败（与 Tauri/Rust 编译无关）。可修复网络后重跑，或本地临时跳过：`$env:SKIP_SECURITY_AUDIT='1'; .\scripts\ci-windows.ps1`。若曾成功拉取过，脚本会自动尝试 `--no-fetch` 使用 `~/.cargo/advisory-db` 缓存。
+Windows 请用 **Git Bash**（勿用 WSL `bash`）。`cargo audit` 需访问 GitHub；可 `SKIP_SECURITY_AUDIT=1` 跳过。
 
-| 脚本 | 说明 |
-|------|------|
-| **`ci-rust-gate.sh`** | **三平台 Rust 统一门禁**：fmt + check + clippy + nextest + Tauri（`ci-rust-gate`） |
-| `ci-gate-core.sh` | 本地/Linux 全量：frontend + `ci-rust-gate` + audit |
-| `ci-windows-gate.sh` | Windows 全量：frontend + `ci-rust-gate` + audit（= GHA `rust-windows`） |
-| `ci-pr-gate.sh` | 非 Windows 本地入口 → `ci-gate-core` |
-| `ci-rust-test.sh` | nextest（`concurrent_writes` 压测 + 全 workspace；含 `ci-nextest-env.sh`） |
-| `ci-linux-tauri-deps.sh` | 仅 GHA Ubuntu：WebKit/GTK apt（由 `ci-rust-gate` 调用） |
-| `ci-security-audit.sh` | `cargo audit`（Ubuntu 独立 job；Win/mac 在 `rust-*` job 内） |
+完整脚本表见 **[scripts/README.md](../scripts/README.md)**。
 
-### GitHub Actions（Rust 三平台对齐）
+### GitHub Actions
 
-| Job | 平台 | Rust 步骤 | 额外 |
-|-----|------|-----------|------|
-| **rust** | Ubuntu | `ci-rust-gate.sh` | `frontend` 独立 job；`security-audit` 独立 job |
-| **rust-windows** | Windows | `ci-rust-gate.sh` | 同 job 内 `ci-frontend` + `ci-security-audit` |
-| **rust-macos** | macOS | `ci-rust-gate.sh` | 同 job 内 `ci-security-audit` |
+| Job | Runner | 脚本 |
+|-----|--------|------|
+| Frontend | ubuntu | `ci-frontend.sh` |
+| Rust (Ubuntu / Windows / macOS) | 三平台 | `ci-rust-gate.sh`（相同） |
+| Security audit | ubuntu (+ Win/mac job 内) | `ci-security-audit.sh` |
 
-三平台 `ci-rust-gate.sh` 相同：rustfmt → check → clippy → nextest（`NEXTEST_TEST_THREADS` + `concurrent_writes`×10）→ Tauri check + **cargo build**。
-
-| Workflow | 触发 | 说明 |
-|----------|------|------|
-| [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) | push/PR | 上表三 job + frontend + audit |
-| [`.github/workflows/release.yml`](../.github/workflows/release.yml) | tag `v*` | gate 含 `ci-rust-gate.sh`，再三平台打包 |
-
-本地：`.\scripts\ci-windows.ps1`（Win）或 `bash scripts/ci-pr-gate.sh`（Linux/mac）。仅测 Rust：`bash scripts/ci-rust-gate.sh`（Git Bash，勿用 WSL）。`.\scripts\run_tests.ps1` = `ci-rust-test.sh`。
+Workflow：[ci.yml](../.github/workflows/ci.yml) · Release：[release.yml](../.github/workflows/release.yml)
 
 ## 清理作品会话库
 

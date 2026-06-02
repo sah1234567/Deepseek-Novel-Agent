@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Frontend CI gate: npm test (fail on toolchain warnings) + build.
-# Aligns with post-change-checklist step 6 and verify_all.ps1 frontend section.
+# Aligns with post-change-checklist step 6 (Node 24+ via ci-check-node.sh).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+bash "$ROOT/scripts/ci-check-node.sh"
 cd "$ROOT/ui"
 
 npm ci

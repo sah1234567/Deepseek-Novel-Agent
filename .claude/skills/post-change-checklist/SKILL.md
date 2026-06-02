@@ -1,35 +1,48 @@
 ---
 name: post-change-checklist
 description: >-
-  Novel Agent 代码修改后的必做收尾清单：代码清理、Tracing 埋点、链路走查、Rust 审查、
-  cargo check + cargo clippy（0 warning）、后端 cargo-nextest 与前端 Vitest（npm test 全绿无警告）+ build、Skill 与文档同步。
-  在 novel_agent 内完成任何改动后自动执行。
+  Novel Agent 修改后收尾：清理、Tracing、链路走查、Rust 审查；再按 diff 范围**分别**跑后端 / Tauri 壳 / 前端验证（对应 scripts/ci-*.sh，未触达可跳过）；
+  可选 cargo audit；Skill 与文档同步。在 novel_agent 内完成改动后自动执行。
 ---
 
 # 修改后收尾清单
 
-在 **novel_agent** 内完成代码或配置改动后，按顺序执行，全部通过后汇报。
+在 **novel_agent** 内完成改动后：**先**完成代码稳定（步骤 1→3），**再**按本次 diff 判定要跑哪几条验证（步骤 4–7 可跳过未触达部分）。全部**已执行**项通过后汇报。
+
+**环境：** 与 GitHub CI 相同脚本，见 [`scripts/README.md`](../../../scripts/README.md)。Windows 用 **Git Bash**（`.\scripts\ci-windows.ps1` 或 `bash scripts/…`），勿用 WSL `bash`。Node **24**（`ui/.nvmrc`；`ci-check-node.sh` 在 npm 步骤前校验）。
 
 **阶段划分**
 
 | 阶段 | 步骤 | 说明 |
 |------|------|------|
-| 代码稳定 | 1 → 3 | 清理、**Tracing 埋点**、链路走查、Rust 审查；**任一步改了代码，须从步骤 1 重跑** |
-| 验证闸门 | 4 → 6 | check、**后端测试（步骤 5）**、**前端测试（步骤 6，若触达 ui/）**；须等代码稳定后再跑 |
-| 同步交付 | 7 → 8 | Skill 与文档描述已验证通过的行为，**放最后** |
+| 代码稳定 | 1 → 3 | 清理、Tracing、链路走查、Rust 审查；**任一步改代码须从步骤 1 重跑** |
+| 验证闸门 | **4 → 7** | **按范围择一或多条**：后端 → Tauri 壳 → 前端 →（可选）audit；**未触达的整条跳过** |
+| 同步交付 | 8 → 9 | Skill / 文档，**放最后** |
 
-**通过标准**
+## 0. 判定本次要跑哪几条验证（必做）
 
-| 端 | 何时必跑 | 命令 | 通过标准 |
-|----|----------|------|----------|
-| **后端 clippy** | 改 Rust crate / `src-tauri` / IPC 事件 | `cargo clippy --workspace --all-targets -- -D warnings -D clippy::unwrap_used` | **0 warning**；生产 lib 禁 `.unwrap()` |
-| **后端 check** | 同上 | `cargo check --workspace` | **0 warning** |
-| **后端 test** | 同上 | `.\scripts\run_tests.ps1` | **0 failed**；**0 SLOW / TIMEOUT**（ignored 除外） |
-| **前端** | 改 `ui/` 或 Tauri 命令/事件名 | `cd ui && npm test && npm run build` | **0 failed**；**无 ERROR / DEPRECATED / vitest·esbuild 警告** |
+根据 **git diff 路径**（或等效文件列表）勾选；**只跑勾中的条**，其余在汇报中标「未触达，跳过」。
 
-改逻辑须在步骤 2 先补缺失用例，再跑上表命令。仅文档/注释可标「不适用」，但仍须跑与 diff 相关的端。
+| 范围 | 典型路径（命中任一即勾选） | 脚本（按序执行） | 通过标准 |
+|------|---------------------------|------------------|----------|
+| **A. 后端** | `crates/**`、`tests/integration/**`；改 `Cargo.toml` / `Cargo.lock`（workspace 依赖） | ① `bash scripts/ci-rust-static.sh`（**fmt + check**）<br>② `bash scripts/ci-clippy.sh`（**clippy**）<br>③ `bash scripts/ci-rust-test.sh`（**nextest**） | fmt 无 diff；check/clippy **0 warning**；nextest **0 failed**、**0 SLOW/TIMEOUT**（ignored 除外） |
+| **B. Tauri 壳** | `src-tauri/**`；`novel-server/src/tauri/**` 仅当需编过 `novel-agent` 二进制 | `bash scripts/ci-tauri.sh`（**check + build** `novel-agent`；内含 `ci-tauri-check` + `ui/dist`） | Tauri 壳编译通过 |
+| **C. 前端** | `ui/**` | `bash scripts/ci-frontend.sh`（**npm test + build**） | **0 failed**；无 ERROR / DEPRECATED / vitest·esbuild 警告 |
+| **D. 依赖 audit**（可选） | 改 `Cargo.toml` / `Cargo.lock`；发 PR 前与 CI 对齐 | `bash scripts/ci-security-audit.sh` | audit 通过；网络失败见脚本提示或 `SKIP_SECURITY_AUDIT=1` |
 
-开发中可随时 `cargo check` 拿快速反馈；收尾清单里的 check/test 必须在阶段一完成后执行。
+**组合规则（避免多跑）：**
+
+- **只改 `crates/novel-core/`** → 仅 **A**；不跑 B/C。
+- **只改 `ui/src/`** → 仅 **C**；不跑 A/B（除非同时改了 `src-tauri` 或 crates）。
+- **只改 `src-tauri/tauri.conf.json`** → 仅 **B**（会拉 `ui/dist` 并编壳）；不跑 A 的 nextest，除非也改了 crates。
+- **IPC：同时改 `ui/` 事件名 + `novel-server/.../tauri/`** → **C + B**；若 `novel-server` 或 `crates` 有逻辑改动再加 **A**。
+- **改 workspace 依赖（根或某 crate 的 `Cargo.toml`）** → **A**；建议加 **D**。
+
+**全量 CI（可选）：** 发 PR 前可跑 `.\scripts\ci-windows.ps1` 或 `bash scripts/ci-pr-gate.sh`（= A+B+C+D + 前端已含在 gate 内），等价 GitHub；日常收尾仍推荐按上表**只跑触达范围**。
+
+改逻辑须在步骤 2 先补缺失用例，再跑对应验证。仅文档/注释：验证 4–7 均可标「不适用」。
+
+开发中可单独 `cargo check -p <crate>` 快速反馈；**收尾通过标准以勾选项的脚本为准**。
 
 **数据归属（走查锚点）**
 
@@ -88,14 +101,14 @@ Agent 根目录无统一 SQLite。API Key **不**写入 per-work DB 或 `setting
 2. **失败传播** — 单队列串行；空消息、`hook_running`、未答 `AskUserQuestion`、嵌套 fork → `Validation`/`AgentBusy`；`LlmError`、DB、`NeedsUserInput`、`TemplatesNotFound` 等向上传播。锚点：`turn_loop.rs`、`engine.rs`、`engine_loop.rs`。
 3. **不变量** — Engine 单队列；Hook 串行 drain；Read-before-write；Compaction：**先** `archive_session_messages` **再** `replace_session_messages`；system **AGENTS/Workspace** metadata 冻结，compact 时 `refresh_system_dynamic_sections`（Index/Memory/Progress/**Skills 摘要**）；Skill 全文 + 摘要经 **`[上下文刷新]` user `(0,1)`**；建会话即 persist `(0,0)` system；`invoked_skill_ids` 存 `metadata_json`；UI hydrate 走 `get_session_transcript`；Fork 仅从 `messages[0]`；scaffold 仅读 `templates/`。
 4. **安全边界** — 文件工具：`resolve_path` + `validate_write_root`；作品名 `validate_work_name`、`ensure_work_under_works`；API Key 掩码、不进 log/emit；DB 参数化、guard 不跨 `.await`；`AppConfig` 为 `Arc<RwLock<_>>`，切换作品时 IPC 不读 stale path。
-5. **交付物** — 缺测试本步补写：**改 Rust → 步骤 5 补 `#[test]` / integration**；**改 `ui/` → 步骤 6 补 Vitest**；改 scaffold 须同步 `templates/**/*.md`；`settings.json` / `prompt/` 与行为一致；文档留步骤 8。
+5. **交付物** — 缺测试本步补写：**改 crates → 步骤 4（A）补 `#[test]` / integration**；**改 `ui/` → 步骤 6（C）补 Vitest**；**改 Tauri 壳 → 步骤 5（B）** 确认能 `ci-tauri`；改 scaffold 须同步 `templates/**/*.md`；文档留步骤 9。
 6. **Tracing** — 步骤 1.5：`info` 是否克制；失败路径有 `warn`/`error`；深度细节在 `debug`。
 
 输出 3–6 条：`[结论] — 依据：<路径:行号>`（含 Tracing 结论时注明埋点位置或「不适用」）。
 
 ## 3. Rust 审查
 
-对本次 diff 逐项检查，**每项须有证据或明确排除**，不是空打勾。步骤 2 负责**项目链路与安全边界**；本节负责**通用 Rust 编码质量与安全**。发现问题**先修再进入步骤 4**；修完则**回到步骤 1**。
+对本次 diff 逐项检查，**每项须有证据或明确排除**，不是空打勾。步骤 2 负责**项目链路与安全边界**；本节负责**通用 Rust 编码质量与安全**。发现问题**先修再进入步骤 4–7**；修完则**回到步骤 1**。
 
 ### 3.1 编码规范（反模式）
 
@@ -116,7 +129,7 @@ Agent 根目录无统一 SQLite。API Key **不**写入 per-work DB 或 `setting
 
 ### 3.2 安全审查
 
-**原则：`unsafe` 与生产路径 `unwrap()` 禁止新增**；各 lib crate 根 `#![deny(clippy::unwrap_used)]` + `#![cfg_attr(test, allow(...))]`，CI/`check.ps1` 另加 `-D clippy::unwrap_used`。`.expect()` 仍仅限编译期不变量（字面量 Regex、`include_str!` 等）；DB/IO/网络/JSON 用 `?`。路径/API 策略见步骤 2，此处不重复。
+**原则：`unsafe` 与生产路径 `unwrap()` 禁止新增**；各 lib crate 根 `#![deny(clippy::unwrap_used)]` + `#![cfg_attr(test, allow(...))]`，CI / `ci-rust-gate.sh` 另加 `-D clippy::unwrap_used`。`.expect()` 仍仅限编译期不变量（字面量 Regex、`include_str!` 等）；DB/IO/网络/JSON 用 `?`。路径/API 策略见步骤 2，此处不重复。
 
 | 类别 | 检查要点 |
 |------|----------|
@@ -152,66 +165,77 @@ Agent 根目录无统一 SQLite。API Key **不**写入 per-work DB 或 `setting
 反模式: 通过（或 N 处已修） / unsafe: N / unwrap: 允许 N·需修 N / 并发·I/O·边界: 通过（或：<具体风险>）
 ```
 
-任一项「需修」则**不得进入步骤 4**，修完后从步骤 1 重跑。
+任一项「需修」则**不得进入步骤 4–7**，修完后从步骤 1 重跑。
 
-## 4. 编译检查
+## 4. 后端验证（范围 A）
 
-**硬性要求：`cargo check` 与 `cargo clippy` 均须 0 warning。** 任一有 warning 视为未通过。
+**何时跑：** 步骤 0 勾选 **A**。**未勾选则整节跳过**（汇报写「后端：未触达」）。
 
-```powershell
-.\scripts\check.ps1           # 等价于 cargo check --workspace && clippy（-D warnings -D clippy::unwrap_used）
+**顺序（与 CI 一致，勿省略）：**
+
+```bash
+bash scripts/ci-rust-static.sh   # cargo fmt --check + cargo check --workspace
+bash scripts/ci-clippy.sh        # cargo clippy --workspace --all-targets …
+bash scripts/ci-rust-test.sh     # cargo nextest run --workspace --profile ci
 ```
 
-单独运行：
+**硬性要求：** check / clippy **0 warning**（`-D warnings -D clippy::unwrap_used`）；nextest **非** `cargo test`，须 **0 failed**、**0 SLOW / TIMEOUT**。
 
-```powershell
-cargo check --workspace
-cargo clippy --workspace --all-targets -- -D warnings -D clippy::unwrap_used
-```
-
-## 5. 后端测试（Rust / cargo-nextest）
-
-**适用：** 改 `novel-*` crate、`src-tauri/`、IPC 命令或事件。**进入本步前**，缺失用例应已在步骤 2 补写。
-
-```powershell
-.\scripts\run_tests.ps1
-```
-
-**硬性要求：** 使用 `cargo nextest run --workspace`（**非** `cargo test`），须 **0 failed**、**0 SLOW / TIMEOUT**。
-
-改 turn / tool / state / compaction 等时，**尽可能**覆盖主路径、失败传播与边界（校验拒绝、DB 错误、空输入等）；integration 测放对应 crate 的 `tests/`。无法补测时在汇报中说明。
+改 turn / tool / state / compaction 等时尽可能覆盖主路径与失败传播；integration 放对应 crate 的 `tests/`。无法补测时在汇报说明。
 
 <details><summary>慢测与网络测（遇 SLOW/TIMEOUT 时查阅）</summary>
 
 - **SLOW [>60s]**：查未 mock 的网络、同步 I/O 阻塞、DashMap/RwLock 死锁
-- **TIMEOUT**：必须修复；用 `cargo nextest run --test <name>` 单独复现
-- Live API：需 `DEEPSEEK_API_KEY`；手动跑 `cargo nextest run --run-ignored all`
+- **TIMEOUT**：必须修复；`cargo nextest run --test <name>` 单独复现
+- Live API：需 `DEEPSEEK_API_KEY`；`cargo nextest run --run-ignored all`
 
 </details>
 
-## 6. 前端测试（Vitest / npm test）
+## 5. Tauri 壳验证（范围 B）
 
-**适用：** 改 `ui/` 或 Tauri 命令/事件名。核对 `invoke` / 事件名与 Rust 侧一致；`AppStatus` 含 `activeWorkName`/`projectRoot`。若改 Rust IPC，**回到步骤 1**。
+**何时跑：** 步骤 0 勾选 **B**。**未勾选则跳过**（仅改 `crates/` 且未动 `src-tauri` / Tauri IPC 时通常不跑）。
 
 ```bash
-cd ui && npm test && npm run build
+bash scripts/ci-tauri.sh
 ```
 
-**硬性要求：** `npm test` 须 **0 failed**，且 **无 ERROR / DEPRECATED / vitest·esbuild 警告**（含重复 `case`、弃用 API 等）。有警告视为未通过。
+含 Linux 依赖检查（本机可忽略失败时看脚本）、`ci-tauri-check`（`cargo check -p novel-agent`）、`ui` 构建产物与 **Tauri build**。只改 `tauri.conf.json` / 图标 / capabilities 时仍跑本条即可，**不必**跑步骤 4 的 nextest，除非步骤 0 也勾了 A。
 
-**测试补写（改逻辑时必做）：** 单元测放 `ui/src/**/*.test.ts(x)`；共享 fixture / 跨模块场景放 `ui/src/test/`。改 transcript / 聊天 UI 时，**尽可能**覆盖流式 tool、多段 ReAct、AskUserQuestion、Write 批准、Fork、INTERRUPT、HYDRATE 等关键路径；已有用例可扩展。仅样式/CSS 可标「无新增场景」，但仍须全量 `npm test` 全绿无警告。
+## 6. 前端验证（范围 C）
 
-## 7. Agent 级 Skill（`skills/`）
+**何时跑：** 步骤 0 勾选 **C**。**未勾选则跳过**。
+
+```bash
+bash scripts/ci-frontend.sh
+```
+
+等价 `ci-check-node.sh` + `ui` 下 `npm ci` / `npm test` / `npm run build`（以脚本为准）。核对 `invoke` / 事件名与 Rust 侧一致；`AppStatus` 含 `activeWorkName`/`projectRoot`。若改 IPC 契约，通常 **C + B**（及可能 **A**），并**回到步骤 1**。
+
+**硬性要求：** **0 failed**；无 ERROR / DEPRECATED / vitest·esbuild 警告。
+
+**测试补写：** 单元测 `ui/src/**/*.test.ts(x)`；fixture `ui/src/test/`。改 transcript / 聊天 UI 时尽可能覆盖流式 tool、ReAct、AskUserQuestion、Write 批准、Fork、INTERRUPT、HYDRATE 等。仅样式可标「无新增场景」，仍须 `npm test` 全绿。
+
+## 7. 依赖安全 audit（范围 D，可选）
+
+**何时跑：** 步骤 0 勾选 **D** 或发 PR 前与 `deps-audit` workflow 对齐。
+
+```bash
+bash scripts/ci-security-audit.sh
+```
+
+本地 GitHub 访问失败时可 `SKIP_SECURITY_AUDIT=1`（与 `ci-windows.ps1` 一致）；**发 PR 仍以 CI 为准**。
+
+## 8. Agent 级 Skill（`skills/`）
 
 涉及运行时 `skills/` 时（验证通过后再改文案）：
 
 - [ ] `SKILL.md` frontmatter + body
 - [ ] `references/*.md` 与 body 链接
-- [ ] 脚手架**不**创建 `{work}/skills/`；步骤 8 更新 `docs/crates/novel-skills.md`
+- [ ] 脚手架**不**创建 `{work}/skills/`；步骤 9 更新 `docs/crates/novel-skills.md`
 
 `.claude/skills/` 为开发工作流，与运行时 `skills/` 分离。
 
-## 8. 文档同步
+## 9. 文档同步
 
 **最后执行**——描述已通过 check/test/build 的行为。
 
@@ -228,18 +252,20 @@ cd ui && npm test && npm run build
 
 确认：无 `NOVEL_API_KEY`、`create_session(path)` 等过时描述。
 
-## 9. 汇报模板
+## 10. 汇报模板
 
 ```markdown
 ## 收尾结果
 
-- [x] 代码清理：<已移除项 / 用户要求保留>
-- [x] Tracing 埋点：<新增/更新的埋点位置；AuditLogger 事件；或「不适用」>
+- [x] 代码清理：<…>
+- [x] Tracing 埋点：<… / 不适用>
 - [x] 链路走查：<摘要>
 - [x] Rust 审查：<3.4 汇总行>
-- [x] cargo check 0 warning / cargo clippy 0 warning
-- [x] 后端测试：<未改动 / nextest N passed, M ignored, 0 SLOW/TIMEOUT>
-- [x] 前端测试：<未改动 / npm test 全绿无警告 + build 通过>
+- [x] 验证范围（步骤 0）：A / B / C / D — <勾选说明>
+- [x] 后端（A）：<未触达跳过 / ci-rust-static + ci-clippy + ci-rust-test 通过>
+- [x] Tauri 壳（B）：<未触达跳过 / ci-tauri 通过>
+- [x] 前端（C）：<未触达跳过 / ci-frontend 通过>
+- [x] audit（D）：<未跑 / 通过 / SKIP_SECURITY_AUDIT>
 - [x] Skill / templates：<无变更 / 已更新>
 - [x] 文档已更新：<文件列表>
 ```

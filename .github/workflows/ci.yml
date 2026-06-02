@@ -17,8 +17,10 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  # 与 scripts/verify_all.ps1 一致，降低 Windows/macOS linker OOM
+  # 与本地 ci-windows.ps1 / ci-rust-gate 一致，降低 Windows/macOS linker OOM
   CARGO_BUILD_JOBS: 1
+  # actions/checkout、setup-node 等 Action 运行时使用 Node 24（见 GitHub 2025-09 Node 20 弃用说明）
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   # ── 前端：Vitest + build（与 post-change-checklist 步骤 6 一致）──
@@ -30,7 +32,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version-file: ui/.nvmrc
           cache: npm
           cache-dependency-path: ui/package-lock.json
 
@@ -55,7 +57,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version-file: ui/.nvmrc
           cache: npm
           cache-dependency-path: ui/package-lock.json
 
@@ -83,7 +85,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version-file: ui/.nvmrc
           cache: npm
           cache-dependency-path: ui/package-lock.json
 
@@ -120,7 +122,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version-file: ui/.nvmrc
           cache: npm
           cache-dependency-path: ui/package-lock.json
 

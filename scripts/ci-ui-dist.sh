@@ -4,6 +4,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+bash "$ROOT/scripts/ci-check-node.sh"
 cd "$ROOT/ui"
 
 if [ -f dist/index.html ] && [ "${CI_UI_DIST_FORCE:-}" != "1" ]; then
