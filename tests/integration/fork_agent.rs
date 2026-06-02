@@ -62,7 +62,7 @@ async fn fork_from_system_only_deepseek_cache() {
 }
 
 #[tokio::test]
-async fn nested_fork_rejected_when_is_forked_child() {
+async fn nested_fork_rejected_when_sub_agent_running() {
     let tmp = TempDir::new().unwrap();
     std::fs::create_dir_all(tmp.path().join("novels/demo")).unwrap();
     let cfg = EngineConfig {
@@ -76,8 +76,10 @@ async fn nested_fork_rejected_when_is_forked_child() {
     let mut engine = AgentEngine::new(cfg).unwrap();
     engine.handle_message("hi").await.unwrap();
 
-    // Mark engine as forked child
-    engine.is_forked_child = true;
+    engine
+        .shared
+        .sub_agent_count
+        .store(1, std::sync::atomic::Ordering::SeqCst);
     let result = engine
         .fork(AgentType::KnowledgeAuditor, "写第2章".into())
         .await;

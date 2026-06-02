@@ -1,5 +1,5 @@
-//! PostToolUse hook matchers (settings opt-in). Matching rules enqueue **KnowledgeAuditor subagent**
-//! tasks into `pending_hook_tasks` → `drain_pending_hooks`.
+//! PostToolUse hook matchers (settings opt-in). Matching rules enqueue **KnowledgeAuditor** work on
+//! `EngineShared.subagent_queue` (`parent_tool_call_id: None`); drained by `drain_subagent_jobs`.
 
 use novel_config::{HookConfig, HookMatcher};
 use novel_tools::{normalize_rel_path, optional_file_path, ToolRegistry};

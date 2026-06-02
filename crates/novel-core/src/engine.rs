@@ -1,6 +1,6 @@
 use crate::{
-    AgentError, AgentType, ChatMessage, ContextManager, DynamicContext, Event, ForkError,
-    ForkedAgentContext, Op, SessionHandle, SystemPromptBuilder, TerminalReason,
+    AgentError, AgentType, ChatMessage, ContextManager, DynamicContext, Event, ForkedAgentContext,
+    Op, SessionHandle, SystemPromptBuilder, TerminalReason,
 };
 
 use crate::dynamic_context::{
@@ -18,8 +18,9 @@ use novel_knowledge::KnowledgeStore;
 use novel_deepseek::ChatClient;
 use novel_logging::{AuditLogger, LogEvent};
 
+use crate::session_llm::{new_session_llm, write_session_llm, SessionLlm, SessionLlmSnapshot};
 use novel_tools::{
-    default_registry, ForkQueue, PermissionMode, ReadCacheEntry, ToolCallSpec, ToolContext,
+    default_registry, PermissionMode, ReadCacheEntry, SubagentWorkQueue, ToolCallSpec, ToolContext,
     ToolRegistry,
 };
 
@@ -39,6 +40,7 @@ use serde::Serialize;
 pub struct EngineStatus {
     pub session_id: String,
     pub permission_mode: String,
+    /// True while `drain_subagent_jobs` is active (PostToolUse hook batch and/or tool forks).
     pub hook_running: bool,
     pub pending_user_question: bool,
     pub turn_number: u32,
@@ -86,7 +88,9 @@ pub struct EngineShared {
     pub abort_controller: Arc<AbortController>,
     pub permission_mode_override: Arc<Mutex<PermissionMode>>,
     pub read_file_cache: Arc<DashMap<PathBuf, ReadCacheEntry>>,
-    pub fork_queue: ForkQueue,
+    pub subagent_queue: SubagentWorkQueue,
+    pub session_llm: SessionLlm,
+    pub drain_in_progress: Arc<std::sync::atomic::AtomicBool>,
     pub agents_md: String,
     pub agent_skills_dir: PathBuf,
     pub global_config_path: PathBuf,
@@ -144,32 +148,37 @@ pub struct AgentEngine {
     pub shared: EngineShared,
 
     pub messages: Vec<ChatMessage>,
-    pub is_forked_child: bool,
     pub is_streaming: bool,
     pub turn_number: u32,
     pub(crate) pending_tools: HashMap<String, ToolCallSpec>,
-    pub(crate) hook_running: bool,
     pub(crate) pending_user_question: Option<String>,
     pub(crate) last_turn_usage: Option<novel_deepseek::TokenUsage>,
     pub(crate) last_context_tokens: usize,
     pub(crate) has_interruptible_tool_in_progress: bool,
-    pub(crate) active_sub_agent: Option<AgentType>,
-    /// Model actually used for the last API call (may differ from settings due to frontend override).
-    pub(crate) last_api_model: String,
+    /// Main-session LLM client; built via `session_llm::build_chat_client` / `init_llm`.
     pub(crate) llm: Option<ChatClient>,
     pub(crate) invoked_skill_ids: Vec<String>,
     pub(crate) read_skill_reference_paths: Vec<String>,
-    /// PostToolUse auto-trigger: KnowledgeAuditor subagent task prompts (drain via `drain_pending_hooks`).
-    pub(crate) pending_hook_tasks: Vec<String>,
     pub(crate) last_chapter_written: Option<String>,
     pub(crate) compaction_fail_count: u32,
     /// Monotonic `(turn_number, sequence)` counter for the active user turn.
     /// User message is `0`; assistant/tool messages use `1, 2, 3…` in chat order.
     pub(crate) turn_message_seq: i32,
+}
 
-    /// Channel for receiving subagent results; drained synchronously into parent session.
-    pub subagent_result_rx: mpsc::UnboundedReceiver<(AgentType, String)>,
-    pub subagent_result_tx: mpsc::UnboundedSender<(AgentType, String)>,
+impl AgentEngine {
+    /// Copy `self.llm` model/thinking into `EngineShared.session_llm` for subagent drain.
+    pub(crate) fn sync_session_llm_from_llm(&self) {
+        if let Some(ref client) = self.llm {
+            write_session_llm(
+                &self.shared,
+                SessionLlmSnapshot {
+                    model: client.model.clone(),
+                    thinking_enabled: client.thinking_enabled,
+                },
+            );
+        }
+    }
 }
 
 impl AgentEngine {
@@ -207,7 +216,6 @@ impl AgentEngine {
         abort_controller: Arc<AbortController>,
     ) -> Result<Self, AgentError> {
         let mut settings = load_project_settings(&config.settings_path).unwrap_or_default();
-        let default_model = settings.model.model.clone();
         if settings.hooks.post_tool_use.is_empty() {
             settings.hooks = default_hook_config();
         }
@@ -245,12 +253,11 @@ impl AgentEngine {
         persist_frozen_system_metadata(&session.db, &session.id, &dynamic)
             .map_err(AgentError::from)?;
 
-        let (tx, rx) = mpsc::unbounded_channel();
-
         let audit = open_audit_logger(&config.project_root, &session.id, &settings.model.model);
 
         let initial_permission_mode = permission_mode_from_str(&settings.permissions.mode);
 
+        let session_llm = new_session_llm(&settings);
         let shared = EngineShared {
             session,
             settings: Arc::new(settings),
@@ -259,7 +266,9 @@ impl AgentEngine {
             abort_controller,
             permission_mode_override: Arc::new(Mutex::new(initial_permission_mode)),
             read_file_cache: Arc::new(DashMap::new()),
-            fork_queue: Arc::new(Mutex::new(Vec::new())),
+            subagent_queue: Arc::new(Mutex::new(Vec::new())),
+            session_llm,
+            drain_in_progress: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             agents_md,
             agent_skills_dir: config.skills_dir.clone(),
             global_config_path: config.global_config_path.clone(),
@@ -272,26 +281,19 @@ impl AgentEngine {
         Ok(Self {
             shared,
             messages,
-            is_forked_child: false,
             is_streaming: false,
             turn_number: 0,
             pending_tools: HashMap::new(),
-            hook_running: false,
             pending_user_question: None,
             last_turn_usage: None,
             last_context_tokens: 0,
             has_interruptible_tool_in_progress: false,
-            active_sub_agent: None,
-            last_api_model: default_model,
             llm: None,
             invoked_skill_ids: Vec::new(),
             read_skill_reference_paths: Vec::new(),
-            pending_hook_tasks: Vec::new(),
             last_chapter_written: None,
             compaction_fail_count: 0,
             turn_message_seq: 0,
-            subagent_result_rx: rx,
-            subagent_result_tx: tx,
         })
     }
 
@@ -305,7 +307,6 @@ impl AgentEngine {
         abort_controller: Arc<AbortController>,
     ) -> Result<Self, AgentError> {
         let mut settings = load_project_settings(&config.settings_path).unwrap_or_default();
-        let default_model = settings.model.model.clone();
         if settings.hooks.post_tool_use.is_empty() {
             settings.hooks = default_hook_config();
         }
@@ -388,12 +389,11 @@ impl AgentEngine {
             .get_read_skill_reference_paths(session_id)
             .unwrap_or_default();
 
-        let (tx, rx) = mpsc::unbounded_channel();
-
         let audit = open_audit_logger(&config.project_root, &session.id, &settings.model.model);
 
         let initial_permission_mode = permission_mode_from_str(&settings.permissions.mode);
 
+        let session_llm = new_session_llm(&settings);
         let shared = EngineShared {
             session,
             settings: Arc::new(settings),
@@ -402,7 +402,9 @@ impl AgentEngine {
             abort_controller,
             permission_mode_override: Arc::new(Mutex::new(initial_permission_mode)),
             read_file_cache: Arc::new(DashMap::new()),
-            fork_queue: Arc::new(Mutex::new(Vec::new())),
+            subagent_queue: Arc::new(Mutex::new(Vec::new())),
+            session_llm,
+            drain_in_progress: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             agents_md,
             agent_skills_dir: config.skills_dir.clone(),
             global_config_path: config.global_config_path.clone(),
@@ -415,26 +417,19 @@ impl AgentEngine {
         Ok(Self {
             shared,
             messages,
-            is_forked_child: false,
             is_streaming: false,
             turn_number,
             pending_tools: HashMap::new(),
-            hook_running: false,
             pending_user_question: None,
             last_turn_usage: None,
             last_context_tokens: 0,
             has_interruptible_tool_in_progress: false,
-            active_sub_agent: None,
-            last_api_model: default_model,
             llm: None,
             invoked_skill_ids,
             read_skill_reference_paths,
-            pending_hook_tasks: Vec::new(),
             last_chapter_written: None,
             compaction_fail_count: 0,
             turn_message_seq: 0,
-            subagent_result_rx: rx,
-            subagent_result_tx: tx,
         })
     }
 
@@ -496,7 +491,7 @@ impl AgentEngine {
         EngineStatus {
             session_id: self.shared.session.id.clone(),
             permission_mode: permission_mode_label(&mode).to_string(),
-            hook_running: self.hook_running,
+            hook_running: self.shared.drain_in_progress.load(Ordering::SeqCst),
             pending_user_question: self.pending_user_question.is_some(),
             turn_number: self.turn_number,
             project_initialized: self.shared.session.project_root.join("AGENTS.md").is_file(),
@@ -514,7 +509,8 @@ impl AgentEngine {
         self.handle_message_with_events(content, None, None).await
     }
 
-    // ── Fork ──────────────────────────────────────────────────
+    // ── Fork context builder (tests / direct API) ─────────────
+    // Execution of subagents is only via `subagent_queue` → `drain_subagent_jobs` → `run_subagent_job`.
 
     pub async fn fork(
         &self,
@@ -531,41 +527,11 @@ impl AgentEngine {
             tracing::warn!("fork rejected: agent busy (streaming)");
             return Err(AgentError::AgentBusy);
         }
-        if self.is_forked_child {
-            tracing::warn!("fork rejected: nested fork prohibited");
+        if self.shared.sub_agent_count.load(Ordering::SeqCst) > 0 {
             return Err(AgentError::NestedForkProhibited);
         }
-        if self.shared.sub_agent_count.load(Ordering::SeqCst) > 0 {
-            // Still block nested forks from the main agent context
-            if self.active_sub_agent.is_some() {
-                return Err(AgentError::NestedForkProhibited);
-            }
-        }
 
-        let store = KnowledgeStore::new(&self.shared.session.project_root);
-        let mut snapshots = HashMap::new();
-        if let Ok(index) = store.read_file("knowledge/INDEX.md") {
-            snapshots.insert(PathBuf::from("knowledge/INDEX.md"), index);
-        }
-
-        ForkedAgentContext::fork(
-            self.messages
-                .first()
-                .ok_or(AgentError::Validation("no system message".into()))?,
-            self.shared.session.id.clone(),
-            agent_type,
-            task_prompt,
-            agent_type.max_react_loops_for(&self.shared.settings.agent),
-            snapshots,
-            self.is_forked_child,
-        )
-        .map_err(|e| {
-            if e == ForkError::InvalidMaxReactLoops(0) {
-                AgentError::NestedForkProhibited
-            } else {
-                AgentError::Fork(e)
-            }
-        })
+        crate::subagent::build_fork_child(&self.shared, agent_type, task_prompt)
     }
 
     // ── Tool context ──────────────────────────────────────────
@@ -583,77 +549,11 @@ impl AgentEngine {
             permission_mode_override: Some(Arc::clone(&self.shared.permission_mode_override)),
             read_file_cache: Some(Arc::clone(&self.shared.read_file_cache)),
             allow_fork: self.shared.sub_agent_count.load(Ordering::SeqCst) == 0,
-            fork_queue: Some(Arc::clone(&self.shared.fork_queue)),
+            subagent_queue: Some(Arc::clone(&self.shared.subagent_queue)),
             current_tool_call_id: None,
             skills_dir: Some(self.shared.agent_skills_dir.clone()),
             global_api_config_path: Some(self.shared.global_config_path.clone()),
         }
-    }
-
-    /// PostToolUse auto-trigger: runs KnowledgeAuditor subagent synchronously.
-    /// Does not inject report into parent `messages` (avoids polluting main LLM context).
-    pub async fn run_knowledge_auditor_hook(
-        &mut self,
-        task: String,
-        event_tx: Option<&mpsc::UnboundedSender<Event>>,
-    ) -> Result<(), AgentError> {
-        if self.hook_running {
-            tracing::debug!("knowledge_auditor_hook skipped: hook already running");
-            return Ok(());
-        }
-        let trigger_preview: String = task.chars().take(120).collect();
-        tracing::debug!(
-            session_id = %self.shared.session.id,
-            trigger_preview = %trigger_preview,
-            "knowledge_auditor_hook_start"
-        );
-        self.audit_log(LogEvent::KnowledgeAuditorHookForked {
-            session_id: self.shared.session.id.clone(),
-            trigger_tool: trigger_preview,
-        });
-        self.hook_running = true;
-        let fork_run_id = crate::fork_transcript::create_fork_run(
-            &self.shared.session.db,
-            &self.shared.session.id,
-            self.turn_number as i32,
-            "KnowledgeAuditor",
-            &task,
-            "hook",
-        )?;
-        let result = async {
-            let mut child = self.fork(AgentType::KnowledgeAuditor, task).await?;
-            let saved = self.shared.permission_mode_override.clone();
-            if let Ok(mut g) = self.shared.permission_mode_override.lock() {
-                *g = PermissionMode::Auto;
-            }
-            let out = self
-                .run_forked_agent(&mut child, &fork_run_id, event_tx)
-                .await;
-            if let Ok(mut g) = saved.lock() {
-                *g = PermissionMode::Normal;
-            }
-            out.map(|_| ())
-        }
-        .await;
-        self.hook_running = false;
-        let status = if result.is_ok() { "complete" } else { "failed" };
-        let _ = crate::fork_transcript::finish_fork_run(
-            &self.shared.session.db,
-            &fork_run_id,
-            status,
-            None,
-        );
-        match &result {
-            Ok(()) => tracing::debug!(
-                session_id = %self.shared.session.id,
-                "knowledge_auditor_hook_complete"
-            ),
-            Err(e) => {
-                tracing::warn!(error = %e, "knowledge_auditor_hook_failed");
-                self.audit_error(e.to_string(), true);
-            }
-        }
-        result
     }
 
     pub fn tool_context_dont_ask(&self) -> ToolContext {
@@ -718,25 +618,6 @@ impl AgentEngine {
                         ));
                     }
                 }
-                Op::ForkSubAgent {
-                    agent_type,
-                    task_prompt,
-                } => {
-                    let mut child = self.fork(agent_type, task_prompt).await?;
-                    let fork_run_id = crate::fork_transcript::create_fork_run(
-                        &self.shared.session.db,
-                        &self.shared.session.id,
-                        self.turn_number as i32,
-                        &agent_type.to_string(),
-                        &child.fork.task_message.content,
-                        "tool",
-                    )?;
-                    let output = self
-                        .run_forked_agent(&mut child, &fork_run_id, Some(&event_tx))
-                        .await?;
-                    self.run_post_fork_pipeline(agent_type, &output, Some(&fork_run_id))
-                        .await?;
-                }
             }
         }
         Ok(TerminalReason::Completed)
@@ -746,6 +627,7 @@ impl AgentEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ForkError;
     use rstest::rstest;
     use tempfile::TempDir;
 
@@ -774,8 +656,7 @@ mod tests {
     async fn nested_fork_prohibited_when_sub_agent_running() {
         let tmp = TempDir::new().unwrap();
         std::fs::create_dir_all(tmp.path().join("skills")).unwrap();
-        let mut engine = AgentEngine::new(test_config(&tmp)).unwrap();
-        engine.active_sub_agent = Some(AgentType::KnowledgeAuditor);
+        let engine = AgentEngine::new(test_config(&tmp)).unwrap();
         engine.shared.sub_agent_count.store(1, Ordering::SeqCst);
         let err = engine
             .fork(AgentType::ChapterCraftAnalyzer, "分析第31章".into())

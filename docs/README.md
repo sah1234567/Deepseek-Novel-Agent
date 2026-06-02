@@ -109,7 +109,7 @@ session-resumed / turn-complete → useAgent hydrate（get_session_transcript）
 ### 本地
 
 ```powershell
-.\scripts\ci-windows.ps1   # Windows（= GitHub rust-windows）
+.\scripts\ci-windows.ps1   # Windows 本地全量（GHA rust-windows + 本地 audit，见下表）
 .\scripts\ci-local.ps1     # 自动选 Windows / Linux / macOS gate
 ```
 
@@ -125,11 +125,15 @@ Windows 请用 **Git Bash**（勿用 WSL `bash`）。`cargo audit` 需访问 Git
 
 ### GitHub Actions
 
+一次 PR 的**门禁覆盖**（不必每个 runner 重复三项）：Ubuntu `frontend`（Vitest + build）+ 三平台 `ci-rust-gate.sh` + Ubuntu `security-audit`（`cargo audit`）。`rust-windows` 额外跑前端以对齐本地 `ci-windows.ps1`；**macOS rust job 不跑 Vitest 不是漏测**（前端已由 Ubuntu `frontend` 挡住）。
+
 | Job | Runner | 脚本 |
 |-----|--------|------|
 | Frontend | ubuntu | `ci-frontend.sh` |
-| Rust (Ubuntu / Windows / macOS) | 三平台 | `ci-rust-gate.sh`（相同） |
-| Security audit | ubuntu (+ Win/mac job 内) | `ci-security-audit.sh` |
+| Rust (Ubuntu) | ubuntu | `ci-rust-gate.sh` |
+| Rust (Windows) | windows | `ci-frontend.sh` + `ci-rust-gate.sh` |
+| Rust (macOS) | macos | `ci-rust-gate.sh` |
+| Security audit | ubuntu | `ci-security-audit.sh`（仅此 job；Win/mac 不重复） |
 
 Workflow：[ci.yml](../.github/workflows/ci.yml) · Release：[release.yml](../.github/workflows/release.yml)
 

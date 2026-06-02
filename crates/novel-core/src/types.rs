@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// Same enum as `novel_deepseek::StreamEvent` deltas; re-exported for `Event` / Tauri IPC.
+pub use novel_deepseek::ContentBlockKind;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ToolCallRecord {
     pub id: String,
@@ -35,10 +38,6 @@ pub enum Op {
     DenyTool {
         tool_call_id: String,
         reason: Option<String>,
-    },
-    ForkSubAgent {
-        agent_type: crate::AgentType,
-        task_prompt: String,
     },
     ResumeSession {
         session_id: String,
@@ -169,13 +168,6 @@ pub enum CompactionAction {
     Failed {
         reason: String,
     },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ContentBlockKind {
-    Text,
-    Thinking,
-    ToolCall,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

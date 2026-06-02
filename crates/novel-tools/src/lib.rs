@@ -23,7 +23,9 @@ mod tests_extra;
 pub use abort::{abort_channel, AbortSignal, AbortWatch, InterruptBehavior, REJECT_MESSAGE};
 pub use blocking::{create_dir_all, read_to_string, run_blocking, write};
 pub use builtin::AskUserQuestionPayload;
-pub use context::{ForkQueue, ForkQueueEntry, PermissionMode, PermissionResult, ToolContext};
+pub use context::{
+    PendingSubagentWork, PermissionMode, PermissionResult, SubagentWorkQueue, ToolContext,
+};
 pub use error::{optional_str_any, require_str, require_str_any, ToolError, ValidationError};
 pub use executor::{StreamingToolExecutor, ToolCallSpec, ToolExecutor};
 pub use paths::{
@@ -38,6 +40,7 @@ pub use registry::ToolRegistry;
 pub use tool_result_format::{
     format_tool_result_for_llm, FormattedToolResult, ToolResultSpec, NEEDS_USER_INPUT_STUB,
 };
+pub use tool_result_middleware::format_interrupted_tool_result;
 pub use trait_def::{Tool, ToolOutput};
 
 /// Built-in + novel tool registry (project path lives on `ToolContext`, not here).

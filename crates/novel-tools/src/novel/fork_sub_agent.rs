@@ -74,17 +74,17 @@ impl Tool for ForkSubAgentTool {
             .clone()
             .ok_or_else(|| ToolError::Internal("fork queue missing tool_call_id".into()))?;
         let queue = ctx
-            .fork_queue
+            .subagent_queue
             .as_ref()
-            .ok_or_else(|| ToolError::Internal("fork queue not configured on engine".into()))?;
+            .ok_or_else(|| ToolError::Internal("subagent queue not configured on engine".into()))?;
         let mut guard = queue
             .lock()
-            .map_err(|_| ToolError::Internal("fork queue lock poisoned".into()))?;
+            .map_err(|_| ToolError::Internal("subagent queue lock poisoned".into()))?;
         let agent_label = agent_type.clone();
-        guard.push(crate::ForkQueueEntry {
+        guard.push(crate::PendingSubagentWork {
             agent_type,
             task: task.to_string(),
-            parent_tool_call_id,
+            parent_tool_call_id: Some(parent_tool_call_id),
         });
         let label = input
             .get("description")
@@ -132,7 +132,7 @@ mod tests {
         let ctx = ToolContext {
             permission_mode: PermissionMode::Auto,
             allow_fork: true,
-            fork_queue: Some(Arc::clone(&queue)),
+            subagent_queue: Some(Arc::clone(&queue)),
             current_tool_call_id: Some("tc-1".into()),
             ..ToolContext::new(std::path::PathBuf::from("."))
         };
@@ -145,7 +145,7 @@ mod tests {
         let guard = queue.lock().unwrap();
         assert_eq!(guard.len(), 1);
         assert_eq!(guard[0].agent_type, "KnowledgeAuditor");
-        assert_eq!(guard[0].parent_tool_call_id, "tc-1");
+        assert_eq!(guard[0].parent_tool_call_id.as_deref(), Some("tc-1"));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -155,7 +155,7 @@ mod tests {
         let ctx = ToolContext {
             permission_mode: PermissionMode::Auto,
             allow_fork: true,
-            fork_queue: Some(Arc::clone(&queue)),
+            subagent_queue: Some(Arc::clone(&queue)),
             ..ToolContext::new(std::path::PathBuf::from("."))
         };
         let err = tool

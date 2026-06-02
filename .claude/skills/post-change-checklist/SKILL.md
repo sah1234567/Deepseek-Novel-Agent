@@ -27,8 +27,8 @@ description: >-
 |------|---------------------------|------------------|----------|
 | **A. 后端** | `crates/**`、`tests/integration/**`；改 `Cargo.toml` / `Cargo.lock`（workspace 依赖） | ① `bash scripts/ci-rust-static.sh`（**fmt + check**）<br>② `bash scripts/ci-clippy.sh`（**clippy**）<br>③ `bash scripts/ci-rust-test.sh`（**nextest**） | fmt 无 diff；check/clippy **0 warning**；nextest **0 failed**、**0 SLOW/TIMEOUT**（ignored 除外） |
 | **B. Tauri 壳** | `src-tauri/**`；`novel-server/src/tauri/**` 仅当需编过 `novel-agent` 二进制 | `bash scripts/ci-tauri.sh`（**check + build** `novel-agent`；内含 `ci-tauri-check` + `ui/dist`） | Tauri 壳编译通过 |
-| **C. 前端** | `ui/**` | `bash scripts/ci-frontend.sh`（**npm test + build**） | **0 failed**；无 ERROR / DEPRECATED / vitest·esbuild 警告 |
-| **D. 依赖 audit**（可选） | 改 `Cargo.toml` / `Cargo.lock`；发 PR 前与 CI 对齐 | `bash scripts/ci-security-audit.sh` | audit 通过；网络失败见脚本提示或 `SKIP_SECURITY_AUDIT=1` |
+| **C. 前端** | `ui/**` | `bash scripts/ci-frontend.sh`（**npm audit critical + test + build**） | **0 failed**；`npm audit` 无 critical；无 ERROR / DEPRECATED / vitest·esbuild 警告 |
+| **D. 依赖 audit**（可选） | 改 `Cargo.toml` / `Cargo.lock`；发 PR 前与 CI 对齐 | `bash scripts/ci-security-audit.sh` | `cargo audit --deny warnings` 通过（Tauri 传递依赖见 `.cargo/audit.toml`）；网络失败见脚本提示或 `SKIP_SECURITY_AUDIT=1` |
 
 **组合规则（避免多跑）：**
 
@@ -97,8 +97,8 @@ Agent 根目录无统一 SQLite。API Key **不**写入 per-work DB 或 `setting
 
 按范围核对：
 
-1. **主路径** — IPC：`invoke` ↔ `EngineCommand` ↔ `engine_loop.rs`；`Event` ↔ 前端 `listen`。作品切换：`list_works` / `create_work` / `open_work` → `SwitchProjectAndCreateSession` → `config.write().set_active_project` → 新 `db_path` → `session-resumed`；`create_session()` 无 path 参数。Turn：`handle_message_with_events` → compaction（含 DB sync）→ inner loop → `drain_pending_hooks`。API：`get/set_api_config` → 全局 json；`init_llm` 优先级 env > json > offline。
-2. **失败传播** — 单队列串行；空消息、`hook_running`、未答 `AskUserQuestion`、嵌套 fork → `Validation`/`AgentBusy`；`LlmError`、DB、`NeedsUserInput`、`TemplatesNotFound` 等向上传播。锚点：`turn_loop.rs`、`engine.rs`、`engine_loop.rs`。
+1. **主路径** — IPC：`invoke` ↔ `EngineCommand` ↔ `engine_loop.rs`；`Event` ↔ 前端 `listen`。作品切换：`list_works` / `create_work` / `open_work` → `SwitchProjectAndCreateSession` → `config.write().set_active_project` → 新 `db_path` → `session-resumed`；`create_session()` 无 path 参数。Turn：`handle_message_with_events` → compaction（含 DB sync）→ inner loop → `drain_subagent_jobs`。API：`get/set_api_config` → 全局 json；`session_llm::build_chat_client`（`resolve_agent_api_key` env > json + `from_api_key_or_env`）；无 client 时 offline。
+2. **失败传播** — 单队列串行；空消息、`drain_in_progress`（子 Agent drain）、未答 `AskUserQuestion`、嵌套 fork → `Validation`/`AgentBusy`；`LlmError`、DB、`NeedsUserInput`、`TemplatesNotFound` 等向上传播。锚点：`turn_loop.rs`、`engine.rs`、`engine_loop.rs`。
 3. **不变量** — Engine 单队列；Hook 串行 drain；Read-before-write；Compaction：**先** `archive_session_messages` **再** `replace_session_messages`；system **AGENTS/Workspace** metadata 冻结，compact 时 `refresh_system_dynamic_sections`（Index/Memory/Progress/**Skills 摘要**）；Skill 全文 + 摘要经 **`[上下文刷新]` user `(0,1)`**；建会话即 persist `(0,0)` system；`invoked_skill_ids` 存 `metadata_json`；UI hydrate 走 `get_session_transcript`；Fork 仅从 `messages[0]`；scaffold 仅读 `templates/`。
 4. **安全边界** — 文件工具：`resolve_path` + `validate_write_root`；作品名 `validate_work_name`、`ensure_work_under_works`；API Key 掩码、不进 log/emit；DB 参数化、guard 不跨 `.await`；`AppConfig` 为 `Arc<RwLock<_>>`，切换作品时 IPC 不读 stale path。
 5. **交付物** — 缺测试本步补写：**改 crates → 步骤 4（A）补 `#[test]` / integration**；**改 `ui/` → 步骤 6（C）补 Vitest**；**改 Tauri 壳 → 步骤 5（B）** 确认能 `ci-tauri`；改 scaffold 须同步 `templates/**/*.md`；文档留步骤 9。
@@ -153,7 +153,7 @@ Agent 根目录无统一 SQLite。API Key **不**写入 per-work DB 或 `setting
 |------|------|
 | `engine_loop.rs` | 单队列串行；`SwitchProjectAndCreateSession` 后旧 engine drop；`reply.send` 不 panic |
 | `AppConfig` + IPC | 读 `config.read().await`，切换 `write()`；持锁期间不调用长耗时 turn |
-| `turn_loop.rs` | `init_llm` 读 env/json；compaction 后 DB sync 与内存 messages 一致；续跑 `continue_turn_loop` 恢复 `inner_turn`；关键路径有 tracing（步骤 1.5） |
+| `turn_loop.rs` | `build_chat_client` / per-turn override 重建；`init_llm` 惰性；compaction 后 DB sync 与内存 messages 一致；续跑 `continue_turn_loop` 恢复 `inner_turn`；关键路径有 tracing（步骤 1.5） |
 | `novel-logging` / `engine_loop.rs` | `init_logging`；IPC `info!`；会话 `agent.jsonl` 与 stderr 分工见 `novel-logging.md` |
 | `scaffold` / `novel-state` | `TemplatesNotFound` 勿静默；`metadata_json` 与 message 写入同一 session |
 
@@ -223,7 +223,7 @@ bash scripts/ci-frontend.sh
 bash scripts/ci-security-audit.sh
 ```
 
-本地 GitHub 访问失败时可 `SKIP_SECURITY_AUDIT=1`（与 `ci-windows.ps1` 一致）；**发 PR 仍以 CI 为准**。
+本地 GitHub 访问失败时可 `SKIP_SECURITY_AUDIT=1`（与 `ci-windows.ps1` 一致）；**发 PR 仍以 CI 为准**。新增 ignore 须写入 `.cargo/audit.toml` 并注明 Tauri 升级复查点。
 
 ## 8. Agent 级 Skill（`skills/`）
 

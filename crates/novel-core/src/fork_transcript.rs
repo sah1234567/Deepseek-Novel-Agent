@@ -1,7 +1,7 @@
 //! Sub-agent transcript persistence (`fork_runs` / `fork_messages`).
 //!
 //! Isolated from parent session `messages`: never merged into `self.messages` or main LLM prompts.
-//! Both fork paths (ForkSubAgent tool + PostToolUse auto-trigger) write here for UI replay.
+//! ForkSubAgent tool jobs and PostToolUse hook jobs share this transcript store (UI replay only).
 
 use crate::message_bridge::chat_to_json;
 use crate::{AgentError, ChatMessage};

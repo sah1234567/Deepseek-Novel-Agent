@@ -1,4 +1,9 @@
 # PR / push 门禁：无需 DEEPSEEK_API_KEY（live 测试均为 #[ignore]）
+#
+# PR 覆盖（按能力分 job，非每个 runner 跑全三项）：
+#   - 前端：Ubuntu `frontend` + Windows `rust-windows`（与本地 ci-windows.ps1 对齐）；macOS 不重复 Vitest（非漏测）
+#   - Rust/Tauri：三平台均 `ci-rust-gate.sh`
+#   - cargo audit：仅 Ubuntu `security-audit`（同一份 Cargo.lock，避免 Win/mac 重复扫描）
 name: CI
 
 on:
@@ -101,10 +106,6 @@ jobs:
         shell: bash
         run: bash scripts/ci-rust-gate.sh
 
-      - name: Security audit
-        shell: bash
-        run: bash scripts/ci-security-audit.sh
-
   rust-macos:
     name: Rust (macOS)
     runs-on: macos-latest
@@ -133,10 +134,7 @@ jobs:
       - name: Rust gate (ci-rust-gate.sh)
         run: bash scripts/ci-rust-gate.sh
 
-      - name: Security audit
-        run: bash scripts/ci-security-audit.sh
-
-  # ── 依赖安全审计（Ubuntu；Windows/mac 已在各自 rust-* job 内执行）──
+  # ── 依赖安全审计（仅 Ubuntu；Cargo.lock 与 OS 无关）────────────────
   security-audit:
     name: Security audit (Ubuntu)
     runs-on: ubuntu-latest

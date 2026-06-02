@@ -93,10 +93,11 @@ install_audit_windows_binary() {
 }
 
 run_cargo_audit() {
+  # Fail on any advisory not listed in .cargo/audit.toml (transitive Tauri GTK/unic ignores).
   if [ "${1:-}" = "--no-fetch" ]; then
-    cargo audit --no-fetch
+    cargo audit --no-fetch --deny warnings
   else
-    cargo audit
+    cargo audit --deny warnings
   fi
 }
 
@@ -114,6 +115,7 @@ Options:
   2. If you already have ~/.cargo/advisory-db, script will retry with --no-fetch
   3. Local only — skip this step: SKIP_SECURITY_AUDIT=1 .\scripts\ci-windows.ps1
   4. Pre-fetch once when online: cargo audit   (then CI can use cached DB)
+  5. Refresh DB when online: AUDIT_FORCE_FETCH=1 bash scripts/ci-security-audit.sh
 EOF
 }
 
@@ -136,21 +138,46 @@ if ! audit_version_ok; then
   exit 1
 fi
 
+run_cargo_audit_cached() {
+  echo "=== cargo audit (cached advisory-db, --no-fetch) ==="
+  echo "note: skipping GitHub fetch (local ~/.cargo/advisory-db). Set AUDIT_FORCE_FETCH=1 to refresh." >&2
+  if run_cargo_audit --no-fetch; then
+    return 0
+  fi
+  return 1
+}
+
+try_cargo_audit_fetch() {
+  # 1) Respect user proxy / default git (needed in some regions).
+  if run_cargo_audit; then
+    return 0
+  fi
+
+  echo "=== cargo audit: retry without proxy (stale proxy workaround) ==="
+  if run_without_proxy run_cargo_audit; then
+    return 0
+  fi
+  return 1
+}
+
 echo "=== cargo audit ==="
 
-# 1) Respect user proxy / default git (needed in some regions).
-if run_cargo_audit; then
+# Prefer cache when present (avoids scary `error:` from cargo-audit when github.com is unreachable).
+# GHA/first-time machines without cache still fetch below. Force refresh: AUDIT_FORCE_FETCH=1
+if audit_db_cached && [ "${AUDIT_FORCE_FETCH:-}" != "1" ]; then
+  if run_cargo_audit_cached; then
+    exit 0
+  fi
+  echo "warning: cached advisory-db audit failed; will try fetching a fresh database" >&2
+fi
+
+if try_cargo_audit_fetch; then
   exit 0
 fi
 
-echo "=== cargo audit: retry without proxy (stale proxy workaround) ==="
-if run_without_proxy run_cargo_audit; then
-  exit 0
-fi
-
-# 2) Offline-ish: use cached advisory DB if present.
+# Offline fallback after fetch failed (cargo-audit prints `error:` for git fetch — expected here).
 if audit_db_cached; then
-  echo "=== cargo audit: using cached advisory-db (--no-fetch) ==="
+  echo "=== cargo audit: fetch failed; falling back to cached advisory-db (--no-fetch) ===" >&2
   if run_cargo_audit --no-fetch; then
     echo "warning: advisory-db was not updated (network); audit used local cache" >&2
     exit 0

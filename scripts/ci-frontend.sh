@@ -9,6 +9,9 @@ cd "$ROOT/ui"
 
 npm ci
 
+echo "=== npm audit (critical) ==="
+npm audit --audit-level=critical
+
 echo "=== npm test ==="
 npm test 2>&1 | tee /tmp/vitest.log
 if grep -qE '\bDEPRECATED\b|duplicate case in| is deprecated|Warning \((vitest|vite|esbuild)' /tmp/vitest.log; then

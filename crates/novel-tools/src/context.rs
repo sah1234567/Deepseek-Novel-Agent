@@ -19,16 +19,16 @@ pub enum PermissionResult {
     Ask { tool_name: String, summary: String },
 }
 
-/// One `ForkSubAgent` tool invocation queued for `drain_pending_forks`.
+/// Pending subagent work: tool fork (`parent_tool_call_id` Some) or PostToolUse hook (None).
 #[derive(Debug, Clone)]
-pub struct ForkQueueEntry {
+pub struct PendingSubagentWork {
     pub agent_type: String,
     pub task: String,
-    pub parent_tool_call_id: String,
+    pub parent_tool_call_id: Option<String>,
 }
 
-/// Queued fork requests from main-session `ForkSubAgent` tool calls.
-pub type ForkQueue = Arc<Mutex<Vec<ForkQueueEntry>>>;
+/// Queued subagent jobs from `ForkSubAgent` tool and hook enqueue paths.
+pub type SubagentWorkQueue = Arc<Mutex<Vec<PendingSubagentWork>>>;
 
 #[derive(Clone)]
 pub struct ToolContext {
@@ -44,8 +44,8 @@ pub struct ToolContext {
     pub read_file_cache: Option<Arc<dashmap::DashMap<PathBuf, ReadCacheEntry>>>,
     /// Main session only; false while any sub-agent inner loop runs (blocks nested fork).
     pub allow_fork: bool,
-    /// Engine fork queue; present only on main-session tool context.
-    pub fork_queue: Option<ForkQueue>,
+    /// Engine subagent work queue; present only on main-session tool context.
+    pub subagent_queue: Option<SubagentWorkQueue>,
     /// Set by the executor for the in-flight tool call (ForkSubAgent enqueue).
     pub current_tool_call_id: Option<String>,
     /// Agent skills directory for resolving skill paths (e.g. `skills/plagiarism/`).
@@ -71,7 +71,7 @@ impl ToolContext {
             permission_mode_override: None,
             read_file_cache: None,
             allow_fork: false,
-            fork_queue: None,
+            subagent_queue: None,
             current_tool_call_id: None,
             skills_dir: None,
             global_api_config_path: None,

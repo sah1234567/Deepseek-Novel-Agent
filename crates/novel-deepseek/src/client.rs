@@ -111,6 +111,33 @@ impl ChatClient {
         Ok(Self::deepseek(&api_key, model, &chat_api_base(), true))
     }
 
+    /// Explicit API key wins; otherwise [`Self::from_env`] (`DEEPSEEK_API_KEY` + embedded base).
+    pub fn from_api_key_or_env(
+        api_key: Option<&str>,
+        api_base: &str,
+        model: &str,
+        thinking_enabled: bool,
+    ) -> Option<Self> {
+        api_key
+            .map(|key| Self::deepseek(key, model, api_base, thinking_enabled))
+            .or_else(|| Self::from_env(model).ok())
+    }
+
+    /// Non-streaming `max_tokens=1` probe for prompt token breakdown after stream cancel.
+    pub async fn measure_prompt_usage(
+        &self,
+        messages: &[LlmChatMessage],
+        tools: &[(String, String, Value)],
+        initial: Option<TokenUsage>,
+    ) -> Option<TokenUsage> {
+        let oai = Self::to_openai_messages(messages);
+        let tool_defs = Self::build_tools(tools);
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.drain_usage_background(&oai, &tool_defs, initial, tx, 1)
+            .await;
+        rx.await.ok().flatten()
+    }
+
     // ── Message / tool conversion ─────────────────────────────
 
     pub fn to_openai_messages(messages: &[LlmChatMessage]) -> Vec<Value> {
@@ -680,6 +707,32 @@ fn tool_to_json(name: &str, desc: &str, schema: &Value) -> Value {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn from_api_key_or_env_uses_explicit_key_and_snap() {
+        let client = ChatClient::from_api_key_or_env(
+            Some("test-key"),
+            "https://api.example.com/v1",
+            "deepseek-chat",
+            false,
+        )
+        .expect("explicit key");
+        assert_eq!(client.api_key, "test-key");
+        assert_eq!(client.model, "deepseek-chat");
+        assert_eq!(client.api_base, "https://api.example.com/v1");
+        assert!(!client.thinking_enabled);
+    }
+
+    #[test]
+    fn from_api_key_or_env_none_without_env_returns_none() {
+        let saved = std::env::var("DEEPSEEK_API_KEY").ok();
+        std::env::remove_var("DEEPSEEK_API_KEY");
+        let result = ChatClient::from_api_key_or_env(None, "https://api.example.com/v1", "m", true);
+        if let Some(key) = saved {
+            std::env::set_var("DEEPSEEK_API_KEY", key);
+        }
+        assert!(result.is_none());
+    }
 
     #[test]
     fn offline_complete_echoes_user() {

@@ -19,6 +19,7 @@ import {
   mergeForkRunOnOpen,
 } from "../fork";
 import type { TranscriptMachine } from "../transcript/types";
+import { shouldShowTurnError } from "../constants/interrupt";
 
 export interface ArchivedEpoch {
   epoch: number;
@@ -117,6 +118,7 @@ interface TurnComplete {
   turnCompTokens?: number;
   phase?: string;
   message?: string;
+  wasInterrupted?: boolean;
 }
 
 interface AppStatusSnapshot {
@@ -293,12 +295,16 @@ export function useAgent(onTurnComplete?: () => void) {
         const p = event.payload;
         if (p.phase === "error") {
           dispatchMain({ type: "INTERRUPT" });
-          const msg = p.message ?? "Agent 出错";
-          const isApiAbort =
-            msg.includes("Request was aborted") || msg.includes("aborted");
-          if (!isApiAbort) {
-            setQuestionError(msg);
+          if (shouldShowTurnError(p)) {
+            setQuestionError(p.message ?? "Agent 出错");
           }
+          setIsStreaming(false);
+          setHasInterruptibleToolInProgress(false);
+          drainMessageQueue();
+          return;
+        }
+        if (p.wasInterrupted === true) {
+          dispatchMain({ type: "INTERRUPT" });
           setIsStreaming(false);
           setHasInterruptibleToolInProgress(false);
           drainMessageQueue();

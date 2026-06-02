@@ -47,7 +47,7 @@ CharacterSearch, PlotGraph, PlotGrid, ForeshadowTracker, Stats, Corkboard, Chara
 
 **PermissionResult：** Allow / Deny / Ask
 
-**ToolContext** 为每个工具调用提供：权限配置（mode/deny_rules/always_allow）、项目路径、会话 DB（TodoWrite 读写）、权限模式覆盖（前端下拉切换）、Read 文件缓存（用于同文件同 range 去重与 Edit 一致性校验）、Skills 目录、fork 控制（`allow_fork` / `fork_queue`）。压缩后缓存清空，避免 dedup 指向已摘要的历史 tool_result。
+**ToolContext** 为每个工具调用提供：权限配置（mode/deny_rules/always_allow）、项目路径、会话 DB（TodoWrite 读写）、权限模式覆盖（前端下拉切换）、Read 文件缓存（用于同文件同 range 去重与 Edit 一致性校验）、Skills 目录、fork 控制（`allow_fork` / `subagent_queue`）。压缩后缓存清空，避免 dedup 指向已摘要的历史 tool_result。
 
 **写路径约束：** 仅 `validate_write_root`（作品 sandbox 内 + 非受保护路径）。无 `allow_chapter_write` / 章节专禁。
 
@@ -88,7 +88,7 @@ SSE 流开始前创建，Allow 权限的工具在 arguments JSON 完整时即可
 | KnowledgeDerive | 知识库派生快照建议；支持 `compressLogs` 操作（调用 L2 压缩演化日志） |
 | TrackingQuery | 追踪表查询（场景/道具/势力/时间线/战力/功法），支持 current/range/search 三种操作 |
 | RelationQuery | 角色关系与称呼查询，支持双向关系、历史演变、目标过滤 |
-| **ForkSubAgent** | 主会话委派子 Agent；入队 `fork_queue`，`drain_pending_forks` 同步 join 后 inject **一条**报告摘要；完整 transcript 在 `fork_messages`（与 PostToolUse KnowledgeAuditor hook 并列，触发路径不同） |
+| **ForkSubAgent** | 主会话委派子 Agent；入队 `subagent_queue`，`drain_subagent_jobs` spawn/join 后 inject **一条**报告摘要；完整 transcript 在 `fork_messages`（与 PostToolUse KnowledgeAuditor hook 并列，触发路径不同） |
 
 ### 1.8 ForkSubAgent
 

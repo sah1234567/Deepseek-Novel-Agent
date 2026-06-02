@@ -53,6 +53,11 @@ static READ_DEDUP_HINT: ReadDedupHintMiddleware = ReadDedupHintMiddleware;
 
 static SUCCESS_CHAIN: &[&dyn ToolResultMiddleware] = &[&WRITE_EDIT_FACT, &READ_DEDUP_HINT];
 
+/// LLM-visible tool_result text when a tool_use was interrupted before completion.
+pub fn format_interrupted_tool_result(tool_name: &str, _tool_call_id: &str) -> String {
+    format!("[fact] 工具未完成：用户已中断会话，{tool_name} 无结果。")
+}
+
 /// Collect append-only lines from all success middleware (in registration order).
 pub(crate) fn append_middleware_lines(ctx: &MiddlewareCtx<'_>) -> Vec<String> {
     let mut lines = Vec::new();

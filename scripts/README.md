@@ -2,11 +2,13 @@
 
 本地与 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) 共用同一套 bash 脚本。**Node.js 固定 24**（`ui/.nvmrc` + `ci-check-node.sh`）。
 
+**GHA PR 覆盖：** Ubuntu `frontend` + 三平台 `ci-rust-gate.sh` + Ubuntu `security-audit`。macOS runner 不重复 Vitest（非漏测）；`cargo audit` 不在 Win/mac job 重复（同 `Cargo.lock`）。
+
 ## 本地入口（PowerShell）
 
 | 命令 | 等同 GitHub |
 |------|-------------|
-| `.\scripts\ci-windows.ps1` | `rust-windows`（frontend + Rust gate + audit） |
+| `.\scripts\ci-windows.ps1` | GHA `rust-windows`（frontend + Rust）+ 本地另含 `ci-security-audit`（GHA audit 仅 Ubuntu `security-audit` job） |
 | `.\scripts\ci-local.ps1` | Windows → 上表；Linux/macOS → `ci-pr-gate` |
 
 需 **Git for Windows** 的 `bash.exe`（勿用 WSL，否则找不到 Windows 版 `cargo`）。
@@ -14,7 +16,7 @@
 ## 本地入口（Bash）
 
 ```bash
-bash scripts/ci-pr-gate.sh      # 全量（≈ Ubuntu PR jobs 合并）
+bash scripts/ci-pr-gate.sh      # 全量（≈ Ubuntu 三 job + Win 前端复测；见 ci.yml 顶注释）
 bash scripts/ci-rust-gate.sh    # Rust + Tauri（CI 用；日常改单域不必全跑）
 bash scripts/ci-frontend.sh     # 仅 Vitest + build
 bash scripts/ci-tauri.sh        # 仅 Tauri 壳 check + build
@@ -30,13 +32,15 @@ bash scripts/ci-security-audit.sh
 | `ui/` | `ci-frontend.sh` |
 | `Cargo.lock` / 发 PR | 上表相关项 + 可选 `ci-security-audit.sh` |
 
+`ci-security-audit.sh`：若已有 `~/.cargo/advisory-db` 则默认 **不** 连 GitHub（避免大陆网络下 `cargo audit` 打印 `error:` 后仍用缓存通过）。需刷新库：`AUDIT_FORCE_FETCH=1 bash scripts/ci-security-audit.sh`。
+
 
 ## 脚本一览
 
 | 脚本 | 用途 |
 |------|------|
 | `ci-check-node.sh` | 强制 Node ≥24（npm 步骤前调用） |
-| `ci-frontend.sh` | `npm ci` + test + build |
+| `ci-frontend.sh` | `npm ci` + `npm audit --audit-level=critical` + test + build |
 | `ci-ui-dist.sh` | 构建 `ui/dist`（Tauri 编译前） |
 | `ci-tauri-icons.sh` | 占位 `icon.png` / `icon.ico` |
 | `ci-rust-static.sh` | rustfmt + `cargo check --workspace` |
@@ -47,7 +51,7 @@ bash scripts/ci-security-audit.sh
 | `ci-tauri.sh` | check + `cargo build` novel-agent |
 | `ci-linux-tauri-deps.sh` | GHA Ubuntu：WebKit/GTK apt |
 | `ci-rust-gate.sh` | 上述 Rust/Tauri 子步骤组合 |
-| `ci-security-audit.sh` | `cargo audit` |
+| `ci-security-audit.sh` | `cargo audit --deny warnings`（传递依赖见 `.cargo/audit.toml`） |
 | `ci-gate-core.sh` | frontend + rust-gate + audit |
 | `ci-pr-gate.sh` | → `ci-gate-core` |
 | `ci-windows-gate.sh` | → `ci-gate-core` |

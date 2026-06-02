@@ -13,17 +13,18 @@
 `ChatClient` 是唯一的 LLM 调用入口，使用 **reqwest** 直连 DeepSeek OpenAI 兼容 API（SSE）。所有 LLM 调用走流式 `/chat/completions`。
 
 **创建方式：**
-- `ChatClient::deepseek(api_key, model, api_base)` — 显式指定 Key、模型与 Base URL
-- `ChatClient::from_env(model)` — 从环境变量 `DEEPSEEK_API_KEY` 读取 API Key
+- `ChatClient::deepseek(api_key, model, api_base, thinking_enabled)` — 显式指定 Key、模型与 Base URL
+- `ChatClient::from_env(model)` — 从环境变量 `DEEPSEEK_API_KEY` 读取 API Key（embedded base，`thinking_enabled: true`）
+- `ChatClient::from_api_key_or_env(api_key, api_base, model, thinking)` — 有 key 用 `deepseek`，否则 `from_env`
 
-**Engine 初始化（`novel-core::turn_loop::init_llm`）：**
+**Engine 主会话客户端（`novel-core::session_llm::build_chat_client` + `turn_loop::init_llm`）：**
 
-| 优先级 | 来源 |
-|--------|------|
-| 1 | 环境变量 `DEEPSEEK_API_KEY` |
-| 2 | `{agent_root}/.novel-agent/api_config.json` |
-| 3 | `ChatClient::from_env(model)` |
-| 4 | 无 Key → `llm = None`，走 `offline_complete` mock |
+| 步骤 | 来源 |
+|------|------|
+| Key 解析 | `novel_config::resolve_agent_api_key`：env `DEEPSEEK_API_KEY` > `api_config.json` |
+| Base | `novel_config::resolve_agent_api_base` |
+| 构造 | `ChatClient::from_api_key_or_env`；快照来自 `EngineShared.session_llm`（含 StatusBar model override） |
+| 无客户端 | `llm = None` → `offline_complete` mock |
 
 **核心方法：**
 - `create_stream` — 流式 LLM 调用，返回 `StreamOutcome::Complete` 或 `Cancelled`；支持 on_event/on_tool_call 回调
@@ -65,5 +66,5 @@
 | `StreamEvent::MessageStop` | 流结束 |
 | `StreamEvent::StreamError` | 可重试解析错误 |
 
-`ContentBlockKind`：Text · Thinking · ToolCall（engine 侧 mostly Text/Thinking）。
+`ContentBlockKind`：Text · Thinking · ToolCall；`novel-core::Event` 复用本 enum（流式 delta / 子 Agent overlay）。
 

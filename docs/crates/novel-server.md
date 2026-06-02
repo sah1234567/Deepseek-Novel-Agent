@@ -148,7 +148,7 @@ invoke("approve_tool", { toolCallId });
 
 ### 1.10 API 配置
 
-`get_api_config` / `set_api_config` 读写 `{agent_root}/.novel-agent/api_config.json`（Key 脱敏）。Engine `init_llm` 优先级：`DEEPSEEK_API_KEY` 环境变量 > json 文件 > 离线 mock。旧版 per-work `state.db` 内 `api_config` 表已移除。
+`get_api_config` / `set_api_config` 读写 `{agent_root}/.novel-agent/api_config.json`（Key 脱敏）。主会话 LLM 客户端经 `novel-core::session_llm::build_chat_client`（Key：`DEEPSEEK_API_KEY` env > json；构造：`ChatClient::from_api_key_or_env`）；无 Key 时 `llm = None` → 离线 mock。旧版 per-work `state.db` 内 `api_config` 表已移除。
 
 ### 1.11 前端构建衔接
 

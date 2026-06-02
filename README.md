@@ -88,7 +88,7 @@ cargo tauri build
 **测试与 CI：**
 
 ```powershell
-.\scripts\ci-windows.ps1  # Windows：与 GitHub rust-windows 相同（推荐）
+.\scripts\ci-windows.ps1  # Windows 本地全量（含 audit；GHA 见 docs/README.md CI 矩阵）
 .\scripts\ci-local.ps1    # 跨平台本地 CI 入口
 ```
 

@@ -14,10 +14,13 @@ mod fork;
 pub mod fork_transcript;
 mod hooks;
 mod interrupt;
+mod interrupt_finalize;
 mod message_bridge;
 mod messages;
 mod prompt_loader;
 mod session;
+mod session_llm;
+mod subagent;
 mod subagent_overflow;
 mod subagent_react;
 mod system_prompt;
@@ -41,6 +44,8 @@ pub use interrupt::{AbortController, InterruptReason, ERROR_MESSAGE_USER_ABORT};
 pub use messages::yield_missing_tool_result_blocks;
 pub use prompt_loader::{format_fork_task, load_agent_prompt};
 pub use session::SessionHandle;
+pub use session_llm::SessionLlmSnapshot;
+pub use subagent::{build_fork_child, SubagentJob, SubagentJobKind};
 pub use subagent_overflow::{
     build_partial_report, task_preview_120, OVERFLOW_KIND_INPUT_REJECTED,
     OVERFLOW_KIND_OUTPUT_TRUNCATED,
@@ -49,7 +54,6 @@ pub use system_prompt::{system_static_sha256, DynamicContext, StaticPrompt, Syst
 pub use turn::{
     TurnContext, MSG_SEQ_APPROVE, MSG_SEQ_CONTINUE, MSG_SEQ_DENY, MSG_SEQ_TOOL_BASE, MSG_SEQ_USER,
 };
-pub use turn_loop::run_subagent_async;
 pub use types::{
     ChatMessage, CompactionAction, ContentBlockKind, Event, Op, TerminalReason, ToolCallRecord,
 };
