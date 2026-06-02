@@ -20,17 +20,8 @@ job_banner() {
 job_banner "frontend (Vitest + build)"
 bash "$ROOT/scripts/ci-frontend.sh"
 
-job_banner "rust — static (rustfmt + check)"
-bash "$ROOT/scripts/ci-rust-static.sh"
-
-job_banner "rust — clippy"
-bash "$ROOT/scripts/ci-clippy.sh"
-
-job_banner "rust — nextest (CI profile)"
-bash "$ROOT/scripts/ci-rust-test.sh"
-
-job_banner "tauri-compile"
-bash "$ROOT/scripts/ci-tauri.sh"
+job_banner "rust (fmt + check + clippy + nextest + tauri)"
+bash "$ROOT/scripts/ci-rust-gate.sh"
 
 job_banner "security-audit"
 bash "$ROOT/scripts/ci-security-audit.sh"

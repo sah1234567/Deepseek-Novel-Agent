@@ -1,19 +1,12 @@
 #!/usr/bin/env bash
-# Tauri compile smoke: frontend build + cargo build novel-agent (matches ci.yml tauri-compile job).
+# Tauri shell smoke: check + cargo build novel-agent (all platforms; Linux CI installs WebKit deps).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 bash "$ROOT/scripts/ci-tauri-check.sh"
 
-# GitHub ubuntu-latest only; skip on local Windows/macOS and non-CI Linux.
-if [ "${GITHUB_ACTIONS:-}" = "true" ] && [ "$(uname -s)" = "Linux" ]; then
-  echo "=== Install Linux Tauri deps ==="
-  sudo apt-get update
-  sudo apt-get install -y \
-    libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev \
-    libssl-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev
-fi
+bash "$ROOT/scripts/ci-linux-tauri-deps.sh"
 
 echo "=== cargo build novel-agent (src-tauri) ==="
 cd "$ROOT"

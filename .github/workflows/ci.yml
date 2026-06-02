@@ -37,7 +37,7 @@ jobs:
       - name: npm test (no warnings) + build
         run: bash scripts/ci-frontend.sh
 
-  # ── Rust 静态检查 + 单元/集成测试（Ubuntu，最快反馈）────────
+  # ── Rust 门禁（三平台同一 scripts/ci-rust-gate.sh）────────────────
   rust:
     name: Rust (Ubuntu)
     runs-on: ubuntu-latest
@@ -59,29 +59,15 @@ jobs:
           cache: npm
           cache-dependency-path: ui/package-lock.json
 
-      # workspace includes src-tauri; check/clippy/nextest need GTK/WebKit dev libs on Linux.
-      - name: Install system dependencies (Linux)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
-
-      - name: rustfmt + cargo check
-        run: bash scripts/ci-rust-static.sh
-
-      - name: clippy (workspace, deny warnings + unwrap_used)
-        run: bash scripts/ci-clippy.sh
-
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest
 
-      - name: nextest (workspace, CI profile)
-        run: bash scripts/ci-rust-test.sh
+      - name: Rust gate (ci-rust-gate.sh)
+        run: bash scripts/ci-rust-gate.sh
 
-  # ── Windows 全量门禁（与 scripts/ci-windows-gate.sh / 本地 ci-windows.ps1 一致）──
   rust-windows:
-    name: Rust (Windows gate)
+    name: Rust (Windows)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -105,59 +91,27 @@ jobs:
         with:
           tool: cargo-nextest
 
-      - name: Windows CI gate (ci-windows-gate.sh)
+      - name: Frontend (Vitest + build)
         shell: bash
-        run: bash scripts/ci-windows-gate.sh
+        run: bash scripts/ci-frontend.sh
 
-  # ── 跨平台 nextest（仅 main/master push；Windows 已由 rust-windows 覆盖）──────
-  rust-matrix:
-    name: Rust (${{ matrix.os }})
-    if: github.event_name == 'push'
-    needs: [rust, frontend]
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: .
-          cache-all-crates: true
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: ui/package-lock.json
-
-      - name: Install system dependencies (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
-
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest
-
-      - name: nextest (workspace, CI profile)
+      - name: Rust gate (ci-rust-gate.sh)
         shell: bash
-        run: bash scripts/ci-rust-test.sh
+        run: bash scripts/ci-rust-gate.sh
 
-  # ── Tauri 壳：macOS 编译冒烟（PR/push；novel-agent 无 test，nextest 不会编壳）──
-  tauri-macos:
-    name: Tauri shell (macOS)
+      - name: Security audit
+        shell: bash
+        run: bash scripts/ci-security-audit.sh
+
+  rust-macos:
+    name: Rust (macOS)
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -170,36 +124,19 @@ jobs:
           cache: npm
           cache-dependency-path: ui/package-lock.json
 
-      - name: Tauri shell compile check
-        run: bash scripts/ci-tauri-check.sh
-
-  # ── Tauri 壳编译冒烟（Linux cargo build；需 ui/dist + icons）────
-  tauri-compile:
-    name: Tauri compile smoke
-    needs: [rust, frontend]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
         with:
-          workspaces: .
-          cache-all-crates: true
+          tool: cargo-nextest
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: ui/package-lock.json
+      - name: Rust gate (ci-rust-gate.sh)
+        run: bash scripts/ci-rust-gate.sh
 
-      - name: Tauri compile smoke
-        run: bash scripts/ci-tauri.sh
+      - name: Security audit
+        run: bash scripts/ci-security-audit.sh
 
-  # ── 依赖安全审计 ───────────────────────────────────────────
+  # ── 依赖安全审计（Ubuntu；Windows/mac 已在各自 rust-* job 内执行）──
   security-audit:
-    name: Security audit
+    name: Security audit (Ubuntu)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -46,18 +46,12 @@ jobs:
       - name: Frontend (Vitest + build)
         run: bash scripts/ci-frontend.sh
 
-      - name: rustfmt + cargo check
-        run: bash scripts/ci-rust-static.sh
-
-      - name: clippy (workspace, deny warnings + unwrap_used)
-        run: bash scripts/ci-clippy.sh
-
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest
 
-      - name: Tests (nextest, CI profile)
-        run: bash scripts/ci-rust-test.sh
+      - name: Rust gate (ci-rust-gate.sh)
+        run: bash scripts/ci-rust-gate.sh
 
   build-tauri:
     name: Tauri bundle (${{ matrix.os }})

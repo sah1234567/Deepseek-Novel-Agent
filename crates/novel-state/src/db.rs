@@ -1,8 +1,9 @@
 use crate::{message::StoredMessage, session::Session, StateError};
 use chrono::Utc;
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::params;
+use rusqlite::{params, TransactionBehavior};
 use std::path::Path;
+use std::time::Duration;
 use uuid::Uuid;
 
 type Pool = r2d2::Pool<SqliteConnectionManager>;
@@ -117,7 +118,15 @@ impl Database {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(StateError::from)?;
         }
-        let manager = SqliteConnectionManager::file(path);
+        let manager = SqliteConnectionManager::file(path).with_init(|c| {
+            c.busy_timeout(Duration::from_secs(5))?;
+            c.execute_batch(
+                "PRAGMA journal_mode=WAL;
+                 PRAGMA synchronous=NORMAL;
+                 PRAGMA busy_timeout=5000;",
+            )?;
+            Ok(())
+        });
         let pool = Pool::builder().max_size(8).build(manager)?;
         let db = Self { pool };
         db.migrate()?;
@@ -334,8 +343,9 @@ impl Database {
         completion: i64,
         last_model: &str,
     ) -> Result<(), StateError> {
-        let conn = self.pool.get()?;
-        let n = conn.execute(
+        let mut conn = self.pool.get()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let n = tx.execute(
             "UPDATE sessions SET
                 cache_hit_tokens = cache_hit_tokens + ?1,
                 cache_miss_tokens = cache_miss_tokens + ?2,
@@ -357,6 +367,7 @@ impl Database {
         if n == 0 {
             return Err(StateError::SessionNotFound(session_id.into()));
         }
+        tx.commit()?;
         Ok(())
     }
 
@@ -875,9 +886,24 @@ mod tests {
     use std::sync::Arc;
     use tempfile::TempDir;
 
-    fn test_db() -> Database {
+    /// Holds `TempDir` for the whole test — dropping it early deletes the DB under concurrency.
+    struct TestDb {
+        _dir: TempDir,
+        db: Database,
+    }
+
+    impl std::ops::Deref for TestDb {
+        type Target = Database;
+
+        fn deref(&self) -> &Self::Target {
+            &self.db
+        }
+    }
+
+    fn test_db() -> TestDb {
         let tmp = TempDir::new().unwrap();
-        Database::open(tmp.path().join("test.db")).unwrap()
+        let db = Database::open(tmp.path().join("test.db")).unwrap();
+        TestDb { _dir: tmp, db }
     }
 
     #[rstest]
@@ -1177,7 +1203,8 @@ mod tests {
 
     #[test]
     fn concurrent_writes() {
-        let db = Arc::new(test_db());
+        let guard = test_db();
+        let db = Arc::new(guard.db.clone());
         let sid = db.create_session("/proj", "deepseek-chat").unwrap();
         let mut handles = vec![];
         for _ in 0..10 {
@@ -1185,11 +1212,11 @@ mod tests {
             let sid = sid.clone();
             handles.push(std::thread::spawn(move || {
                 db.accumulate_session_tokens(&sid, 1, 0, 0, "deepseek-v4-pro")
-                    .unwrap();
+                    .expect("concurrent accumulate_session_tokens");
             }));
         }
         for h in handles {
-            h.join().unwrap();
+            h.join().expect("worker thread panicked");
         }
         let s = db.get_session(&sid).unwrap().unwrap();
         // Tokens replace (race ??? last write wins), API calls still increment

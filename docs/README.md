@@ -117,29 +117,32 @@ Windows 上若直接 `bash scripts/ci-tauri-check.sh`，请用 **Git Bash**（`P
 
 `ci-windows.ps1` 最后一步 `cargo audit` 需访问 GitHub 拉取 RustSec 漏洞库；网络不通时会失败（与 Tauri/Rust 编译无关）。可修复网络后重跑，或本地临时跳过：`$env:SKIP_SECURITY_AUDIT='1'; .\scripts\ci-windows.ps1`。若曾成功拉取过，脚本会自动尝试 `--no-fetch` 使用 `~/.cargo/advisory-db` 缓存。
 
-| 脚本 | 对应 GitHub job |
-|------|-----------------|
-| `ci-gate-core.sh` | 共享步骤（frontend + rust + tauri + audit） |
-| `ci-windows-gate.sh` | **rust-windows**（Windows 全量；本地 Windows 与 GHA 同一入口） |
-| `ci-pr-gate.sh` | Ubuntu PR jobs 合并编排（frontend / rust / tauri / audit） |
-| `ci-frontend.sh` | frontend（Vitest 无警告 + build） |
-| `ci-rust-static.sh` | rust（rustfmt + check） |
-| `ci-clippy.sh` | rust（clippy） |
-| `ci-rust-test.sh` | rust + rust-matrix（nextest `--profile ci`） |
-| `ci-tauri-check.sh` | **tauri-macos**；`cargo check` novel-agent（ui/dist + icons） |
-| `ci-tauri-icons.sh` | 占位 `icon.png` / `icon.ico`（各 Rust/Tauri 脚本调用） |
-| `ci-tauri.sh` | tauri-compile（Linux `cargo build` novel-agent） |
-| `ci-security-audit.sh` | security-audit（cargo-audit 0.22.1） |
+| 脚本 | 说明 |
+|------|------|
+| **`ci-rust-gate.sh`** | **三平台 Rust 统一门禁**：fmt + check + clippy + nextest + Tauri（`ci-rust-gate`） |
+| `ci-gate-core.sh` | 本地/Linux 全量：frontend + `ci-rust-gate` + audit |
+| `ci-windows-gate.sh` | Windows 全量：frontend + `ci-rust-gate` + audit（= GHA `rust-windows`） |
+| `ci-pr-gate.sh` | 非 Windows 本地入口 → `ci-gate-core` |
+| `ci-rust-test.sh` | nextest（`concurrent_writes` 压测 + 全 workspace；含 `ci-nextest-env.sh`） |
+| `ci-linux-tauri-deps.sh` | 仅 GHA Ubuntu：WebKit/GTK apt（由 `ci-rust-gate` 调用） |
+| `ci-security-audit.sh` | `cargo audit`（Ubuntu 独立 job；Win/mac 在 `rust-*` job 内） |
 
-### GitHub Actions
+### GitHub Actions（Rust 三平台对齐）
+
+| Job | 平台 | Rust 步骤 | 额外 |
+|-----|------|-----------|------|
+| **rust** | Ubuntu | `ci-rust-gate.sh` | `frontend` 独立 job；`security-audit` 独立 job |
+| **rust-windows** | Windows | `ci-rust-gate.sh` | 同 job 内 `ci-frontend` + `ci-security-audit` |
+| **rust-macos** | macOS | `ci-rust-gate.sh` | 同 job 内 `ci-security-audit` |
+
+三平台 `ci-rust-gate.sh` 相同：rustfmt → check → clippy → nextest（`NEXTEST_TEST_THREADS` + `concurrent_writes`×10）→ Tauri check + **cargo build**。
 
 | Workflow | 触发 | 说明 |
 |----------|------|------|
-| [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) | push/PR → main | Ubuntu PR gate + **Windows 全量 gate** + **macOS Tauri compile**（`ci-tauri-check.sh`）；push 额外 macOS nextest；**无需 API Key** |
-| [`.github/workflows/release.yml`](../.github/workflows/release.yml) | tag `v*` / 手动 | 质量门禁后三平台 Tauri 打包（需 `src-tauri/icons/icon.ico`） |
-| [`.github/workflows/deps-audit.yml`](../.github/workflows/deps-audit.yml) | 每周 / 手动 | `cargo udeps`（不阻塞 PR） |
+| [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) | push/PR | 上表三 job + frontend + audit |
+| [`.github/workflows/release.yml`](../.github/workflows/release.yml) | tag `v*` | gate 含 `ci-rust-gate.sh`，再三平台打包 |
 
-PR 跑 Ubuntu 分 job 门禁 + **Windows 全量 gate**（`rust-windows`）+ **macOS Tauri 壳 check**（`tauri-macos`）；**push 到 main** 额外跑 macOS/Ubuntu nextest（`rust-matrix`）。
+本地：`.\scripts\ci-windows.ps1`（Win）或 `bash scripts/ci-pr-gate.sh`（Linux/mac）。仅测 Rust：`bash scripts/ci-rust-gate.sh`（Git Bash，勿用 WSL）。`.\scripts\run_tests.ps1` = `ci-rust-test.sh`。
 
 ## 清理作品会话库
 

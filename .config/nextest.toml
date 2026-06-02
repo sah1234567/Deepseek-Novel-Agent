@@ -5,6 +5,8 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 [profile.ci]
 # CI: stricter — 30s slow, terminate after 2 periods
 slow-timeout = { period = "30s", terminate-after = 2 }
+# Match GHA runner parallelism; overridden by NEXTEST_TEST_THREADS in ci-nextest-env.sh
+test-threads = "num-cpus"
 
 [profile.default.junit]
 path = "target/nextest/ci/junit.xml"
