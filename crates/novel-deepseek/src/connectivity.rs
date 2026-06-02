@@ -103,3 +103,29 @@ async fn post_json(
     }
     Ok(text)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn post_json_returns_200_on_success() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(header("Authorization", "Bearer test-key"))
+            .and(header("Content-Type", "application/json"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"ok":true}"#))
+            .mount(&mock_server)
+            .await;
+
+        let url = format!("{}/chat/completions", mock_server.uri());
+        let body = serde_json::json!({ "model": "test" });
+        let text = post_json(&url, "test-key", AuthStyle::Bearer, &body, "chat")
+            .await
+            .expect("post_json should succeed");
+        assert_eq!(text, r#"{"ok":true}"#);
+    }
+}

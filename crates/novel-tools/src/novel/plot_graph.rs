@@ -62,3 +62,38 @@ impl Tool for PlotGraphTool {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{PermissionMode, ToolContext};
+    use tempfile::TempDir;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn plot_graph_traverses_causality_file() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("knowledge/plot")).unwrap();
+        std::fs::write(
+            tmp.path().join("knowledge/plot/因果链.md"),
+            "| 章节 | 因 | 关系 | 果 | 描述 |\n\
+             |------|-----|------|-----|------|\n\
+             | Ch5 | E05 | 导致 | E06 | 误入禁地 |\n\
+             | Ch5 | E06 | 触发 | E07 | 发现石碑 |\n",
+        )
+        .unwrap();
+        let ctx = ToolContext {
+            permission_mode: PermissionMode::Auto,
+            project_root: tmp.path().to_path_buf(),
+            ..ToolContext::new(tmp.path().to_path_buf())
+        };
+        let out = PlotGraphTool
+            .call(
+                json!({"event": "E05", "direction": "forward", "depth": 2}),
+                &ctx,
+            )
+            .await
+            .unwrap();
+        assert!(out.content.contains("forward:"));
+        assert!(out.content.contains("E06"));
+    }
+}

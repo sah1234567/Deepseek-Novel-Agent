@@ -141,7 +141,7 @@ fn count_chapter_files(chapters_dir: &Path) -> u32 {
         .unwrap_or(0)
 }
 
-fn outline_chapter_count(project_root: &Path) -> Option<u32> {
+pub(crate) fn outline_chapter_count(project_root: &Path) -> Option<u32> {
     let outline = project_root.join("knowledge/plot/大纲.md");
     let content = std::fs::read_to_string(outline).ok()?;
     let mut max_ch = 0u32;
@@ -215,7 +215,7 @@ pub fn load_progress(project_root: &Path, session_id: &str, db: &Database) -> St
     lines.join("\n")
 }
 
-fn current_structure_unit(project_root: &Path) -> String {
+pub(crate) fn current_structure_unit(project_root: &Path) -> String {
     let outline = project_root.join("knowledge/plot/大纲.md");
     let content = match std::fs::read_to_string(outline) {
         Ok(c) => c,
@@ -519,6 +519,43 @@ mod tests {
     fn load_memory_empty_when_missing() {
         let tmp = TempDir::new().expect("tmp");
         assert!(load_memory(tmp.path(), 4096).is_empty());
+    }
+
+    #[test]
+    fn load_memory_reads_index_and_body() {
+        let tmp = TempDir::new().expect("tmp");
+        let mem = tmp.path().join("memory");
+        std::fs::create_dir_all(&mem).expect("dir");
+        std::fs::write(mem.join("MEMORY.md"), "[hero]\n").expect("w");
+        std::fs::write(mem.join("hero.md"), "bio").expect("w");
+        let out = load_memory(tmp.path(), 4096);
+        assert!(out.contains("hero"));
+        assert!(out.contains("bio"));
+    }
+
+    #[test]
+    fn outline_chapter_count_from_table() {
+        let tmp = TempDir::new().expect("tmp");
+        std::fs::create_dir_all(tmp.path().join("knowledge/plot")).expect("dir");
+        std::fs::write(
+            tmp.path().join("knowledge/plot/大纲.md"),
+            "| 章 | 标题 |\n|----|------|\n| 1 | a |\n| 3 | b |\n",
+        )
+        .expect("w");
+        assert_eq!(outline_chapter_count(tmp.path()), Some(3));
+    }
+
+    #[test]
+    fn current_structure_unit_reads_last_heading() {
+        let tmp = TempDir::new().expect("tmp");
+        std::fs::create_dir_all(tmp.path().join("knowledge/plot")).expect("dir");
+        std::fs::write(
+            tmp.path().join("knowledge/plot/大纲.md"),
+            "# 总纲\n## 第一卷\ncontent\n## 第二卷\n",
+        )
+        .expect("w");
+        let unit = current_structure_unit(tmp.path());
+        assert!(unit.contains("第二卷"));
     }
 
     #[test]

@@ -2,8 +2,7 @@ use crate::message_format::format_for_summary;
 use crate::message_types::CompactionMessage;
 use crate::react_cycles::CONTEXT_REFRESH_USER_PREFIX;
 use crate::retain_policy::RetainPolicy;
-use crate::{apply_level1_on_compaction_messages, estimate_tokens, CompactionError};
-use std::path::Path;
+use crate::{estimate_tokens, CompactionError};
 
 /// Rule-based fallback when LLM summarization fails or is unavailable.
 pub fn rule_based_summary(messages: &[CompactionMessage], max_chars: usize) -> String {
@@ -40,18 +39,10 @@ pub struct SessionRebuildInput<'a> {
     /// Deduped invoked skill IDs; skill section omitted when empty.
     pub invoked_skill_ids: &'a [String],
     pub retain: &'a RetainPolicy,
-    pub project_root: &'a Path,
 }
 
 /// Assemble post-compaction session: system → [上下文刷新] user → retained react.
 pub fn rebuild_session_messages(input: SessionRebuildInput<'_>) -> Vec<CompactionMessage> {
-    let mut retain: Vec<CompactionMessage> = input.to_retain.to_vec();
-    apply_level1_on_compaction_messages(
-        &mut retain,
-        input.project_root,
-        input.retain.recent_chapters_full,
-    );
-
     let skill_block = if input.invoked_skill_ids.is_empty() {
         String::new()
     } else {
@@ -62,45 +53,58 @@ pub fn rebuild_session_messages(input: SessionRebuildInput<'_>) -> Vec<Compactio
         &skill_block,
         input.summary_text,
     ));
-    out.extend(retain);
+    out.extend(input.to_retain.iter().cloned());
     out
 }
 
-/// Level 4 fallback: drop oldest retained turns until under budget.
-#[allow(clippy::too_many_arguments)]
-pub fn apply_level4_compaction(
-    system: CompactionMessage,
-    summary_text: &str,
-    mut retain: Vec<CompactionMessage>,
-    skill_bodies: &str,
-    invoked_skill_ids: &[String],
-    retain_policy: &RetainPolicy,
-    project_root: &Path,
-    window: usize,
+/// Inputs for [`rebuild_session_under_budget`].
+pub struct SessionBudgetRebuildInput<'a> {
+    pub system: CompactionMessage,
+    pub summary_text: &'a str,
+    pub retain: Vec<CompactionMessage>,
+    pub skill_bodies: &'a str,
+    pub invoked_skill_ids: &'a [String],
+    pub retain_policy: &'a RetainPolicy,
+    pub window: usize,
+    pub compaction_threshold: f32,
+}
+
+/// Rebuild session messages; drop oldest retained turns until estimated tokens are under budget.
+///
+/// Budget ratio is `compaction_threshold * 0.5` (e.g. default 0.8 → stop trimming below 40% of window).
+pub fn rebuild_session_under_budget(
+    input: SessionBudgetRebuildInput<'_>,
 ) -> Result<Vec<CompactionMessage>, CompactionError> {
-    let mut turns = retain_policy.recent_react_turns;
+    let budget_ratio = input.compaction_threshold * 0.5;
+    let mut retain = input.retain;
+    let mut turns = input.retain_policy.recent_react_turns;
     loop {
-        let input = SessionRebuildInput {
-            system: system.clone(),
+        let rebuild = SessionRebuildInput {
+            system: input.system.clone(),
             to_summarize: &[],
             to_retain: &retain,
-            summary_text,
-            skill_bodies,
-            invoked_skill_ids,
-            retain: retain_policy,
-            project_root,
+            summary_text: input.summary_text,
+            skill_bodies: input.skill_bodies,
+            invoked_skill_ids: input.invoked_skill_ids,
+            retain: input.retain_policy,
         };
-        let rebuilt = rebuild_session_messages(input);
+        let rebuilt = rebuild_session_messages(rebuild);
         let tokens: usize = rebuilt.iter().map(|m| estimate_tokens(&m.content)).sum();
-        if (tokens as f32 / window as f32) < 0.8 {
-            if tokens > window {
-                return Err(CompactionError::ContextTooLarge { tokens, window });
+        if (tokens as f32 / input.window as f32) < budget_ratio {
+            if tokens > input.window {
+                return Err(CompactionError::ContextTooLarge {
+                    tokens,
+                    window: input.window,
+                });
             }
             return Ok(rebuilt);
         }
         if turns == 0 {
-            if tokens > window {
-                return Err(CompactionError::ContextTooLarge { tokens, window });
+            if tokens > input.window {
+                return Err(CompactionError::ContextTooLarge {
+                    tokens,
+                    window: input.window,
+                });
             }
             return Ok(rebuilt);
         }
@@ -150,7 +154,6 @@ mod tests {
             skill_bodies: "### x\nbody",
             invoked_skill_ids: &skill_ids,
             retain: &RetainPolicy::default(),
-            project_root: Path::new("."),
         });
         assert_eq!(out.len(), 3);
         assert_eq!(out[0].role, "system");
@@ -177,7 +180,6 @@ mod tests {
             skill_bodies,
             invoked_skill_ids: &skill_ids,
             retain: &RetainPolicy::default(),
-            project_root: Path::new("."),
         });
         assert!(out[1].content.contains("apocalypse/references/zombie.md"));
     }
@@ -197,7 +199,6 @@ mod tests {
             skill_bodies: "",
             invoked_skill_ids: &[],
             retain: &RetainPolicy::default(),
-            project_root: Path::new("."),
         });
         assert_eq!(out.len(), 2);
         assert!(out[1].content.starts_with(CONTEXT_REFRESH_USER_PREFIX));

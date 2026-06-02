@@ -906,6 +906,30 @@ mod tests {
         TestDb { _dir: tmp, db }
     }
 
+    #[test]
+    fn upsert_session_todos_replace_and_merge() {
+        let db = test_db();
+        let sid = db.create_session("/tmp/proj", "deepseek-chat").unwrap();
+        let t1 = crate::SessionTodo {
+            id: "1".into(),
+            content: "a".into(),
+            status: "pending".into(),
+        };
+        db.upsert_session_todos(&sid, std::slice::from_ref(&t1), false)
+            .unwrap();
+        assert_eq!(db.list_session_todos(&sid).unwrap().len(), 1);
+        let t2 = crate::SessionTodo {
+            id: "2".into(),
+            content: "b".into(),
+            status: "done".into(),
+        };
+        db.upsert_session_todos(&sid, &[t2], true).unwrap();
+        let listed = db.list_session_todos(&sid).unwrap();
+        assert_eq!(listed.len(), 2);
+        db.upsert_session_todos(&sid, &[], false).unwrap();
+        assert!(db.list_session_todos(&sid).unwrap().is_empty());
+    }
+
     #[rstest]
     #[test]
     fn migration_creates_tables() {

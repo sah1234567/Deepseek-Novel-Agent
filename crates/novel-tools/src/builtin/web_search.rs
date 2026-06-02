@@ -22,6 +22,14 @@ pub struct WebSearchTool;
 /// Cached search results under `.websearch/` (Agent runtime cache, not novel canon).
 const CACHE_DIR: &str = ".websearch";
 
+pub(crate) fn compose_search_query(query: &str, aspect: &str, genre: &str) -> String {
+    if genre.is_empty() {
+        format!("{query} {aspect}")
+    } else {
+        format!("{genre} {query} {aspect}")
+    }
+}
+
 async fn perform_search(ctx: &ToolContext, query: &str) -> Result<Vec<SearchSource>, ToolError> {
     let api_key = ctx.resolve_deepseek_api_key().ok_or_else(|| {
         ToolError::Execution(
@@ -85,11 +93,7 @@ impl Tool for WebSearchTool {
             .and_then(|v| v.as_str())
             .unwrap_or("research");
         let genre = input.get("genre").and_then(|v| v.as_str()).unwrap_or("");
-        let search_query = if genre.is_empty() {
-            format!("{query} {aspect}")
-        } else {
-            format!("{genre} {query} {aspect}")
-        };
+        let search_query = compose_search_query(&query, aspect, genre);
 
         let sources = perform_search(ctx, &search_query).await?;
         let summary = if sources.is_empty() {
@@ -156,6 +160,13 @@ mod tests {
     use serde_json::json;
     use std::sync::Arc;
     use tempfile::TempDir;
+
+    #[test]
+    fn compose_search_query_includes_genre() {
+        let q = compose_search_query("趋势", "research", "xianxia");
+        assert!(q.contains("xianxia"));
+        assert!(q.contains("趋势"));
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn errors_when_no_api_key() {

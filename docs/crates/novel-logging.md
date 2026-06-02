@@ -52,7 +52,7 @@ cargo tauri dev
 - ToolExecuted — 工具名与 success
 - Error — 可恢复错误（流式错误、用户中断等）
 - KnowledgeAuditorHookForked — PostToolUse 钩子触发轻量知识库扫描子 Agent
-- CompactionTriggered — 上下文 level4 压缩（含 tokens_before）
+- CompactionTriggered — 会话上下文压缩（`level: session`，含 tokens_before）
 
 **token_audit.jsonl：** 仅 TokenAudit 事件副本，便于 jq 汇总。
 

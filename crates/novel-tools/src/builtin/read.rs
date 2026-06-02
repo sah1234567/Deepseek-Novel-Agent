@@ -24,7 +24,7 @@ fn format_file_size(bytes: usize) -> String {
 }
 
 /// Fast path: read entire file into memory, slice by lines.
-async fn read_fast(
+pub(crate) async fn read_fast(
     full: &std::path::Path,
     line_offset: usize,
     limit: Option<usize>,
@@ -49,7 +49,7 @@ async fn read_fast(
 }
 
 /// Streaming path: for files >= 10 MB, read line by line without loading entirely into memory.
-async fn read_streaming(
+pub(crate) async fn read_streaming(
     full: &std::path::Path,
     line_offset: usize,
     limit: Option<usize>,
@@ -428,5 +428,30 @@ mod tests {
             .unwrap();
         assert!(out.content.contains("after edit"));
         assert!(!out.content.contains("has not been changed since last read"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn read_fast_slices_by_offset_and_limit() {
+        let tmp = TempDir::new().unwrap();
+        let lines: Vec<String> = (1..=10).map(|i| format!("line {i}")).collect();
+        write_file(tmp.path(), "slice.md", &lines.join("\n"));
+        let full = tmp.path().join("slice.md");
+        let (content, line_count, total) = read_fast(&full, 2, Some(3)).await.unwrap();
+        assert_eq!(total, 10);
+        assert_eq!(line_count, 3);
+        assert!(content.starts_with("line 3"));
+        assert!(content.contains("line 5"));
+        assert!(!content.contains("line 6"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn read_streaming_matches_fast_path() {
+        let tmp = TempDir::new().unwrap();
+        let lines: Vec<String> = (1..=10).map(|i| format!("line {i}")).collect();
+        write_file(tmp.path(), "stream.md", &lines.join("\n"));
+        let full = tmp.path().join("stream.md");
+        let fast = read_fast(&full, 1, Some(4)).await.unwrap();
+        let stream = read_streaming(&full, 1, Some(4)).await.unwrap();
+        assert_eq!(fast, stream);
     }
 }

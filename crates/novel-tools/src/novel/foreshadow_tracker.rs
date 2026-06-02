@@ -17,7 +17,7 @@ struct ForeshadowEntry {
 }
 
 #[derive(Debug, Serialize)]
-struct ForeshadowTrackerResult {
+pub(crate) struct ForeshadowTrackerResult {
     urgent: Vec<ForeshadowEntry>,
     overdue: Vec<ForeshadowEntry>,
     upcoming: Vec<ForeshadowEntry>,
@@ -52,6 +52,70 @@ fn parse_pending_foreshadows(content: &str) -> Vec<(String, String, String, u32)
         .into_iter()
         .map(|(id, (content, expected, num))| (id, content, expected, num))
         .collect()
+}
+
+pub(crate) fn build_foreshadow_tracker_result(
+    pending: Vec<(String, String, String, u32)>,
+    current_num: u32,
+    threshold: i32,
+) -> ForeshadowTrackerResult {
+    let mut urgent = Vec::new();
+    let mut overdue = Vec::new();
+    let mut upcoming = Vec::new();
+
+    for (id, desc, expected, expected_num) in pending {
+        if expected_num == 0 {
+            upcoming.push(ForeshadowEntry {
+                id,
+                content: desc,
+                expected_chapter: expected,
+                distance: None,
+                overdue_by: None,
+            });
+            continue;
+        }
+        let distance = expected_num as i32 - current_num as i32;
+        if distance < 0 {
+            overdue.push(ForeshadowEntry {
+                id: id.clone(),
+                content: desc,
+                expected_chapter: expected,
+                distance: Some(distance),
+                overdue_by: Some((-distance) as u32),
+            });
+        } else if distance == 0 {
+            urgent.push(ForeshadowEntry {
+                id,
+                content: desc,
+                expected_chapter: expected,
+                distance: Some(0),
+                overdue_by: None,
+            });
+        } else if distance <= threshold {
+            urgent.push(ForeshadowEntry {
+                id,
+                content: desc,
+                expected_chapter: expected,
+                distance: Some(distance),
+                overdue_by: None,
+            });
+        } else if distance <= threshold * 2 {
+            upcoming.push(ForeshadowEntry {
+                id,
+                content: desc,
+                expected_chapter: expected,
+                distance: Some(distance),
+                overdue_by: None,
+            });
+        }
+    }
+
+    ForeshadowTrackerResult {
+        urgent,
+        overdue,
+        upcoming,
+        density_warning: None,
+    }
 }
 
 #[async_trait]
@@ -100,63 +164,7 @@ impl Tool for ForeshadowTrackerTool {
             });
         }
 
-        let mut urgent = Vec::new();
-        let mut overdue = Vec::new();
-        let mut upcoming = Vec::new();
-
-        for (id, desc, expected, expected_num) in pending {
-            if expected_num == 0 {
-                upcoming.push(ForeshadowEntry {
-                    id,
-                    content: desc,
-                    expected_chapter: expected,
-                    distance: None,
-                    overdue_by: None,
-                });
-                continue;
-            }
-            let distance = expected_num as i32 - current_num as i32;
-            if distance < 0 {
-                overdue.push(ForeshadowEntry {
-                    id: id.clone(),
-                    content: desc,
-                    expected_chapter: expected,
-                    distance: Some(distance),
-                    overdue_by: Some((-distance) as u32),
-                });
-            } else if distance == 0 {
-                urgent.push(ForeshadowEntry {
-                    id,
-                    content: desc,
-                    expected_chapter: expected,
-                    distance: Some(0),
-                    overdue_by: None,
-                });
-            } else if distance <= threshold {
-                urgent.push(ForeshadowEntry {
-                    id,
-                    content: desc,
-                    expected_chapter: expected,
-                    distance: Some(distance),
-                    overdue_by: None,
-                });
-            } else if distance <= threshold * 2 {
-                upcoming.push(ForeshadowEntry {
-                    id,
-                    content: desc,
-                    expected_chapter: expected,
-                    distance: Some(distance),
-                    overdue_by: None,
-                });
-            }
-        }
-
-        let result = ForeshadowTrackerResult {
-            urgent,
-            overdue,
-            upcoming,
-            density_warning: None,
-        };
+        let result = build_foreshadow_tracker_result(pending, current_num, threshold);
         Ok(ToolOutput {
             content: serde_json::to_string_pretty(&result)
                 .map_err(|e| ToolError::Execution(format!("json serialize: {e}")))?,
@@ -174,6 +182,14 @@ mod tests {
     fn write_foreshadow(root: &std::path::Path, body: &str) {
         std::fs::create_dir_all(root.join("knowledge/plot")).unwrap();
         std::fs::write(root.join("knowledge/plot/伏笔追踪.md"), body).unwrap();
+    }
+
+    #[test]
+    fn build_result_marks_overdue() {
+        let pending = vec![("F01".into(), "伤疤".into(), "Ch5".into(), 5u32)];
+        let result = build_foreshadow_tracker_result(pending, 10, 5);
+        assert_eq!(result.overdue.len(), 1);
+        assert_eq!(result.overdue[0].overdue_by, Some(5));
     }
 
     #[tokio::test(flavor = "current_thread")]

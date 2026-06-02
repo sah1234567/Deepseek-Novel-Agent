@@ -6,7 +6,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 #[derive(Debug, Serialize)]
-struct ImpactFile {
+pub(crate) struct ImpactFile {
     path: String,
     reason: String,
 }
@@ -79,7 +79,7 @@ fn collect_foreshadow_impacts(
     (files, ids)
 }
 
-fn collect_causality_impacts(
+pub(crate) fn collect_causality_impacts(
     store: &KnowledgeStore,
     target_ch: u32,
 ) -> (Vec<ImpactFile>, Vec<String>) {
@@ -239,5 +239,20 @@ mod tests {
             .unwrap();
         assert!(out.content.contains("affected_files"));
         assert!(out.content.contains("主角"));
+    }
+
+    #[test]
+    fn collect_causality_impacts_finds_events_from_chapter() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("knowledge/plot")).unwrap();
+        std::fs::write(
+            tmp.path().join("knowledge/plot/因果链.md"),
+            "| 章节 | 事件ID | 描述 |\n|------|--------|------|\n| Ch10 | E01 | 伏笔引爆 |\n",
+        )
+        .unwrap();
+        let store = KnowledgeStore::new(tmp.path());
+        let (files, events) = collect_causality_impacts(&store, 10);
+        assert_eq!(events, vec!["E01".to_string()]);
+        assert_eq!(files.len(), 1);
     }
 }

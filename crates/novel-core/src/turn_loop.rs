@@ -1,304 +1,34 @@
-use crate::dynamic_context::{
+﻿use crate::dynamic_context::{
     filter_loadable_reference_paths, filter_loadable_skill_ids, format_activated_skill_block,
-    parse_skill_reference_path,
 };
-use crate::interrupt::{AbortController, InterruptReason, ERROR_MESSAGE_USER_ABORT};
-use crate::interrupt_finalize::{
-    finalize_stream_cancel, FinalizeStreamCancelParams, MainSessionSink,
-};
+use crate::interrupt::ERROR_MESSAGE_USER_ABORT;
+use crate::llm_stream_turn::should_continue_inner_after_completion;
+#[allow(unused_imports)]
+use crate::llm_stream_turn::{run_abort_bridge, LlmCallOutcome};
 use crate::message_bridge::{
     assistant_from_completion, chat_slice_to_compaction, chat_to_compaction, chat_to_json,
-    compaction_slice_to_chat, parse_tool_call_input, to_llm_messages, to_llm_messages_traced,
-    tool_result_message, RepairTraceContext,
+    compaction_slice_to_chat, to_llm_messages, to_llm_messages_traced, tool_result_message,
+    RepairTraceContext,
 };
 use crate::session_llm::{
     apply_session_usage, build_chat_client, read_session_llm, write_session_llm, SessionLlmSnapshot,
 };
+use crate::streaming_tool_dispatch::format_tool;
 use crate::subagent::{clear_subagent_queue, drain_subagent_jobs};
 use crate::turn::TurnContext;
 use crate::turn::MSG_SEQ_USER;
 use crate::{
     hooks::tool_schemas_for_agent, AgentEngine, AgentError, AgentType, ChatMessage,
-    CompactionAction, ContentBlockKind, Event, TerminalReason,
+    CompactionAction, Event, TerminalReason,
 };
-use novel_deepseek::{
-    is_output_truncated, ChatClient, LlmChatMessage, LlmCompletion, LlmError, LlmToolCall,
-    StreamEvent, StreamOutcome,
-};
+use novel_deepseek::{LlmChatMessage, LlmCompletion, LlmError};
 use novel_logging::LogEvent;
-use novel_tools::{
-    AbortSignal, PendingSubagentWork, PermissionResult, StreamingToolExecutor, ToolCallSpec,
-    ToolContext, ToolExecutor, ToolRegistry,
-};
-use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
-use tokio::sync::{mpsc, watch};
+use novel_tools::{ToolCallSpec, ToolExecutor};
+use std::collections::HashSet;
+use std::sync::Arc;
+use tokio::sync::mpsc;
 
 const MAIN_MAX_INNER_TURNS: u32 = 80;
-
-/// DeepSeek thinking mode often ends a stream with only `reasoning_content` and no
-/// `tool_calls`, while the model still intends to act on the next inner iteration.
-fn should_continue_inner_after_completion(completion: &LlmCompletion) -> bool {
-    if !completion.tool_calls.is_empty() {
-        return false;
-    }
-    if is_output_truncated(completion.stop_reason.as_deref()) {
-        return false;
-    }
-    let content_empty = completion
-        .content
-        .as_ref()
-        .map(|s| s.trim().is_empty())
-        .unwrap_or(true);
-    let has_reasoning = completion
-        .reasoning_content
-        .as_ref()
-        .map(|s| !s.trim().is_empty())
-        .unwrap_or(false);
-    content_empty && has_reasoning
-}
-
-fn map_abort_signal(reason: Option<InterruptReason>) -> AbortSignal {
-    match reason {
-        Some(InterruptReason::UserCancel) => AbortSignal::UserCancel,
-        Some(InterruptReason::SubmitInterrupt) => AbortSignal::SubmitInterrupt,
-        Some(InterruptReason::SiblingError) => AbortSignal::SiblingError,
-        Some(InterruptReason::StreamingFallback) => AbortSignal::StreamingFallback,
-        None => AbortSignal::None,
-    }
-}
-
-async fn run_abort_bridge(ac: Arc<AbortController>, tx: watch::Sender<AbortSignal>) {
-    let mut rx = ac.subscribe();
-    loop {
-        if rx.changed().await.is_err() {
-            break;
-        }
-        let _ = tx.send(map_abort_signal(*rx.borrow()));
-    }
-}
-
-enum LlmCallOutcome {
-    Continue(LlmCompletion),
-    Aborted(TerminalReason),
-}
-
-pub(crate) struct StreamingToolDispatch {
-    executor: Option<StreamingToolExecutor>,
-    pub(crate) handled_ids: HashSet<String>,
-    executed_specs: Vec<ToolCallSpec>,
-    pending_specs: HashMap<String, ToolCallSpec>,
-    denied_specs: HashMap<String, (ToolCallSpec, String)>,
-    ui_result_emitted: HashSet<String>,
-}
-
-impl StreamingToolDispatch {
-    pub(crate) fn new(
-        registry: Arc<ToolRegistry>,
-        ctx: ToolContext,
-        max_concurrent: usize,
-        abort: novel_tools::AbortWatch,
-    ) -> Self {
-        Self {
-            executor: Some(StreamingToolExecutor::new(
-                registry,
-                ctx,
-                max_concurrent,
-                abort,
-            )),
-            handled_ids: HashSet::new(),
-            executed_specs: Vec::new(),
-            pending_specs: HashMap::new(),
-            denied_specs: HashMap::new(),
-            ui_result_emitted: HashSet::new(),
-        }
-    }
-
-    fn executor_mut(&mut self) -> &mut StreamingToolExecutor {
-        self.executor
-            .as_mut()
-            .expect("streaming tool executor already taken")
-    }
-
-    pub(crate) fn take_executor(&mut self) -> StreamingToolExecutor {
-        self.executor
-            .take()
-            .expect("streaming tool executor already taken")
-    }
-
-    /// Move tools that were streamed and queued for approval into the engine's `pending_tools`.
-    fn drain_pending_specs(&mut self, engine: &mut AgentEngine) {
-        for (_, spec) in self.pending_specs.drain() {
-            tracing::debug!(
-                tool_call_id = %spec.id,
-                tool_name = %spec.name,
-                "flush_pending_tool_approval"
-            );
-            engine.pending_tools.insert(spec.id.clone(), spec);
-        }
-    }
-
-    pub(crate) fn handle_ready(
-        &mut self,
-        registry: &ToolRegistry,
-        ctx: &ToolContext,
-        event_tx: Option<&mpsc::UnboundedSender<Event>>,
-        tc: LlmToolCall,
-        finalize: bool,
-    ) {
-        if self.handled_ids.contains(&tc.id) {
-            return;
-        }
-        let input = parse_tool_call_input(&tc.arguments, &tc.id, &tc.name);
-        let validation_err: Option<Result<(), String>> = if tc.arguments.trim().is_empty() {
-            registry
-                .get(&tc.name)
-                .map(|t| t.validate_input(&input).map_err(|e| e.to_string()))
-        } else if input.as_object().is_some_and(|o| o.is_empty()) {
-            Some(Err(format!("Invalid tool arguments JSON for {}", tc.name)))
-        } else {
-            registry
-                .get(&tc.name)
-                .map(|t| t.validate_input(&input).map_err(|e| e.to_string()))
-        };
-
-        if let Some(Err(reason)) = validation_err {
-            if !finalize {
-                tracing::debug!(
-                    tool_call_id = %tc.id,
-                    tool_name = %tc.name,
-                    %reason,
-                    "tool_input_deferred"
-                );
-                return;
-            }
-            tracing::debug!(
-                tool_call_id = %tc.id,
-                tool_name = %tc.name,
-                %reason,
-                "tool_input_invalid_at_finalize"
-            );
-            self.handled_ids.insert(tc.id.clone());
-            let spec = ToolCallSpec {
-                id: tc.id.clone(),
-                name: tc.name.clone(),
-                input,
-            };
-            self.denied_specs.insert(spec.id.clone(), (spec, reason));
-            return;
-        }
-        if registry.get(&tc.name).is_none() {
-            if !finalize {
-                return;
-            }
-            self.handled_ids.insert(tc.id.clone());
-            let spec = ToolCallSpec {
-                id: tc.id.clone(),
-                name: tc.name.clone(),
-                input,
-            };
-            self.denied_specs
-                .insert(spec.id.clone(), (spec, "unknown tool".into()));
-            return;
-        }
-
-        let perm = registry
-            .get(&tc.name)
-            .map(|t| t.check_permissions(&input, ctx))
-            .unwrap_or(PermissionResult::Deny {
-                reason: "unknown tool".into(),
-            });
-        let needs_approval = matches!(perm, PermissionResult::Ask { .. });
-
-        if let Some(tx) = event_tx {
-            let _ = tx.send(Event::ToolInputComplete {
-                tool_call_id: tc.id.clone(),
-                name: tc.name.clone(),
-                input: input.clone(),
-                needs_approval,
-            });
-        }
-
-        self.handled_ids.insert(tc.id.clone());
-        let spec = ToolCallSpec {
-            id: tc.id.clone(),
-            name: tc.name.clone(),
-            input,
-        };
-
-        match perm {
-            PermissionResult::Allow => {
-                if let Some(tx) = event_tx {
-                    let _ = tx.send(Event::ToolCallRequest {
-                        tool_call_id: spec.id.clone(),
-                        name: spec.name.clone(),
-                        input: spec.input.clone(),
-                        needs_approval: false,
-                    });
-                }
-                self.executed_specs.push(spec.clone());
-                self.executor_mut().add_tool(spec);
-            }
-            PermissionResult::Ask { .. } => {
-                tracing::debug!(
-                    tool_call_id = %spec.id,
-                    tool_name = %spec.name,
-                    "tool_permission_ask"
-                );
-                if let Some(tx) = event_tx {
-                    let _ = tx.send(Event::ToolCallRequest {
-                        tool_call_id: spec.id.clone(),
-                        name: spec.name.clone(),
-                        input: spec.input.clone(),
-                        needs_approval: true,
-                    });
-                }
-                self.pending_specs.insert(spec.id.clone(), spec);
-            }
-            PermissionResult::Deny { reason } => {
-                tracing::debug!(
-                    tool_call_id = %spec.id,
-                    tool_name = %spec.name,
-                    %reason,
-                    "tool_permission_denied"
-                );
-                self.denied_specs.insert(spec.id.clone(), (spec, reason));
-            }
-        }
-    }
-
-    fn poll_ui_results(&mut self, event_tx: Option<&mpsc::UnboundedSender<Event>>) {
-        // Must not drain `completed` — results are collected once in get_remaining_results
-        // for persistence and the next LLM call. Draining here caused UI success + missing
-        // tool_result messages (model reports "timeout" / retries InvokeSkill).
-        let completed = self.executor_mut().peek_completed_results();
-        let peek_count = completed.len();
-        if peek_count > 0 {
-            tracing::debug!(peek_count, "poll_ui_results peeked completed tool results");
-        }
-        for (id, result) in completed {
-            if !self.ui_result_emitted.insert(id.clone()) {
-                continue;
-            }
-            let spec = self.executed_specs.iter().find(|s| s.id == id);
-            let content = format_tool(spec, result).content;
-            if let Some(tx) = event_tx {
-                let _ = tx.send(Event::ToolCallResult {
-                    tool_call_id: id,
-                    content,
-                });
-            }
-        }
-    }
-
-    pub(crate) fn discard(&mut self) {
-        if let Some(executor) = self.executor.as_mut() {
-            executor.discard();
-        }
-    }
-}
 
 impl AgentEngine {
     /// Lazily build main-session `ChatClient` from [`read_session_llm`] + [`build_chat_client`].
@@ -508,6 +238,55 @@ impl AgentEngine {
             .count() as u32
     }
 
+    /// `None` means continue the inner ReAct loop (reasoning-only assistant segment).
+    async fn complete_inner_turn_without_tools(
+        &mut self,
+        completion: &LlmCompletion,
+        turn_ctx: &mut TurnContext,
+    ) -> Result<Option<TerminalReason>, AgentError> {
+        let assistant = assistant_from_completion(completion);
+        self.persist_message_alloc(&assistant)?;
+        self.messages.push(assistant);
+        if self.interrupt_requested() {
+            return Ok(Some(TerminalReason::AbortedStreaming));
+        }
+        if !self.pending_tools.is_empty() {
+            tracing::debug!(
+                pending_tool_count = self.pending_tools.len(),
+                "inner_turn_paused_pending_tool_approval"
+            );
+            return Ok(Some(TerminalReason::Completed));
+        }
+        if should_continue_inner_after_completion(completion) {
+            tracing::debug!(
+                inner_turn = turn_ctx.inner_turn,
+                reasoning_len = completion
+                    .reasoning_content
+                    .as_ref()
+                    .map(|s| s.len())
+                    .unwrap_or(0),
+                stop_reason = ?completion.stop_reason,
+                "inner_turn_continue_reasoning_only"
+            );
+            match turn_ctx.increment_inner() {
+                Ok(()) => return Ok(None),
+                Err(e) => return Ok(Some(e)),
+            }
+        }
+        tracing::debug!(
+            inner_turn = turn_ctx.inner_turn,
+            content_len = completion.content.as_ref().map(|s| s.len()).unwrap_or(0),
+            reasoning_len = completion
+                .reasoning_content
+                .as_ref()
+                .map(|s| s.len())
+                .unwrap_or(0),
+            stop_reason = ?completion.stop_reason,
+            "inner_turn_terminal_no_tools"
+        );
+        Ok(Some(TerminalReason::Completed))
+    }
+
     // ── Inner turn loop ───────────────────────────────────────
 
     async fn run_inner_turn_loop(
@@ -576,47 +355,13 @@ impl AgentEngine {
             }
 
             if completion.tool_calls.is_empty() {
-                let assistant = assistant_from_completion(&completion);
-                self.persist_message_alloc(&assistant)?;
-                self.messages.push(assistant);
-                if self.interrupt_requested() {
-                    return Ok(TerminalReason::AbortedStreaming);
+                if let Some(reason) = self
+                    .complete_inner_turn_without_tools(&completion, turn_ctx)
+                    .await?
+                {
+                    return Ok(reason);
                 }
-                if !self.pending_tools.is_empty() {
-                    tracing::debug!(
-                        pending_tool_count = self.pending_tools.len(),
-                        "inner_turn_paused_pending_tool_approval"
-                    );
-                    return Ok(TerminalReason::Completed);
-                }
-                if should_continue_inner_after_completion(&completion) {
-                    tracing::debug!(
-                        inner_turn = turn_ctx.inner_turn,
-                        reasoning_len = completion
-                            .reasoning_content
-                            .as_ref()
-                            .map(|s| s.len())
-                            .unwrap_or(0),
-                        stop_reason = ?completion.stop_reason,
-                        "inner_turn_continue_reasoning_only"
-                    );
-                    match turn_ctx.increment_inner() {
-                        Ok(()) => continue,
-                        Err(e) => return Ok(e),
-                    }
-                }
-                tracing::debug!(
-                    inner_turn = turn_ctx.inner_turn,
-                    content_len = completion.content.as_ref().map(|s| s.len()).unwrap_or(0),
-                    reasoning_len = completion
-                        .reasoning_content
-                        .as_ref()
-                        .map(|s| s.len())
-                        .unwrap_or(0),
-                    stop_reason = ?completion.stop_reason,
-                    "inner_turn_terminal_no_tools"
-                );
-                return Ok(TerminalReason::Completed);
+                continue;
             }
 
             // Live LLM: assistant + tool results already persisted in call_llm_and_execute.
@@ -638,338 +383,12 @@ impl AgentEngine {
             }
         }
     }
-
-    // ── LLM call + streaming tool execution (unified path) ────
-
-    fn append_interrupt_message(&mut self, _tool_use: bool) -> Result<(), AgentError> {
-        // Suppressed — "[Request interrupted by user]" bubble is pointless noise.
-        // Drain request (max_tokens=1, stream=false) runs in background to
-        // keep session token counts accurate (see drain_usage_background).
-        Ok(())
-    }
-
-    async fn call_llm_and_execute(
-        &mut self,
-        messages: &[LlmChatMessage],
-        tools: &[(String, String, serde_json::Value)],
-        turn_ctx: &TurnContext,
-        event_tx: Option<&mpsc::UnboundedSender<Event>>,
-        persist_tool_messages: bool,
-    ) -> Result<LlmCallOutcome, AgentError> {
-        let max_concurrent = self.shared.settings.agent.max_tool_concurrency;
-        let session_id = self.shared.session.id.clone();
-        let model = self.shared.settings.model.model.clone();
-
-        if self.llm.is_some() {
-            tracing::debug!(
-                session_id = %session_id,
-                inner_turn = turn_ctx.inner_turn,
-                message_count = messages.len(),
-                tool_schema_count = tools.len(),
-                "llm_request_start"
-            );
-            self.audit_log(LogEvent::LlmRequest {
-                session_id: session_id.clone(),
-                model: model.clone(),
-                streaming: true,
-            });
-            let tx = event_tx.cloned();
-            let audit = self.shared.audit.clone();
-            let cancel_flag = self.shared.abort_controller.cancel_flag();
-            let initial_abort = map_abort_signal(self.abort_reason());
-            let (abort_tool_tx, abort_tool_rx) = novel_tools::abort_channel();
-            let _ = abort_tool_tx.send(initial_abort);
-            let bridge = tokio::spawn(run_abort_bridge(
-                Arc::clone(&self.shared.abort_controller),
-                abort_tool_tx,
-            ));
-
-            let ctx = self.tool_context();
-            let dispatch_arc = Arc::new(Mutex::new(StreamingToolDispatch::new(
-                Arc::clone(&self.shared.registry),
-                ctx.clone(),
-                max_concurrent,
-                abort_tool_rx,
-            )));
-
-            let stream_done = Arc::new(AtomicBool::new(false));
-            let stream_done_poll = Arc::clone(&stream_done);
-            let dispatch_poll = Arc::clone(&dispatch_arc);
-            let event_tx_poll = event_tx.cloned();
-            let poll_handle = tokio::spawn(async move {
-                while !stream_done_poll.load(Ordering::SeqCst) {
-                    tokio::time::sleep(Duration::from_millis(40)).await;
-                    if let Ok(mut d) = dispatch_poll.lock() {
-                        d.poll_ui_results(event_tx_poll.as_ref());
-                    }
-                }
-            });
-
-            let dispatch_cb = Arc::clone(&dispatch_arc);
-            let registry_cb = Arc::clone(&self.shared.registry);
-            let ctx_cb = ctx.clone();
-            let event_tx_cb = event_tx.cloned();
-            let on_tool = move |tc: LlmToolCall| {
-                if let Ok(mut d) = dispatch_cb.lock() {
-                    d.handle_ready(&registry_cb, &ctx_cb, event_tx_cb.as_ref(), tc, false);
-                }
-            };
-
-            let client = self.llm.as_mut().expect("llm checked");
-            let stream_result = client
-                .create_stream(
-                    messages,
-                    tools,
-                    self.shared.settings.model.max_output_tokens,
-                    move |ev: StreamEvent| {
-                        if let Some(ref tx) = tx {
-                            match ev {
-                                StreamEvent::ContentBlockDelta { delta, kind, .. } => {
-                                    let _ = tx.send(Event::ContentBlockDelta {
-                                        message_id: String::new(),
-                                        index: 0,
-                                        delta,
-                                        kind,
-                                    });
-                                }
-                                StreamEvent::ToolUseStarted {
-                                    tool_call_id, name, ..
-                                } => {
-                                    let _ = tx.send(Event::ToolUseStarted { tool_call_id, name });
-                                }
-                                StreamEvent::ToolInputDelta {
-                                    tool_call_id,
-                                    delta,
-                                } => {
-                                    let _ = tx.send(Event::ToolInputDelta {
-                                        tool_call_id,
-                                        delta,
-                                    });
-                                }
-                                StreamEvent::MessageStop { .. } => {}
-                                StreamEvent::StreamError { message, .. } => {
-                                    tracing::warn!(error = %message, "llm_stream_error");
-                                    if let Some(ref a) = audit {
-                                        let _ = a.log(&LogEvent::Error {
-                                            message: message.clone(),
-                                            recoverable: true,
-                                        });
-                                    }
-                                    let _ = tx.send(Event::Error {
-                                        message,
-                                        recoverable: true,
-                                    });
-                                }
-                            }
-                        }
-                    },
-                    Some(on_tool),
-                    Some(cancel_flag),
-                )
-                .await;
-
-            stream_done.store(true, Ordering::SeqCst);
-            let _ = poll_handle.await;
-            bridge.abort();
-
-            let (completion, stream_aborted, bg_usage) = match stream_result {
-                Err(e) => {
-                    tracing::warn!(error = %e, "llm_request_failed");
-                    self.audit_error(e.to_string(), true);
-                    return Err(AgentError::Llm(e));
-                }
-                Ok(StreamOutcome::Complete(c)) => (c, false, None),
-                Ok(StreamOutcome::Cancelled {
-                    partial,
-                    background_usage,
-                }) => (partial, true, Some(background_usage)),
-            };
-
-            if stream_aborted || self.interrupt_requested() {
-                if let Ok(mut dispatch) = dispatch_arc.lock() {
-                    dispatch.discard();
-                }
-                let shared = self.shared.clone();
-                let llm_snap = read_session_llm(&shared);
-                let llm_messages = messages.to_vec();
-                let tool_schemas = tools.to_vec();
-                let mut sink = MainSessionSink { engine: self };
-                let usage = finalize_stream_cancel(FinalizeStreamCancelParams {
-                    sink: &mut sink,
-                    partial: completion,
-                    llm_messages,
-                    tool_schemas,
-                    background_usage: bg_usage,
-                    llm_snap,
-                    shared,
-                    event_tx,
-                })
-                .await?;
-                self.last_turn_usage = usage.clone();
-                if let Some(u) = usage.as_ref() {
-                    tracing::debug!(
-                        cache_hit = u.cache_hit_tokens,
-                        cache_miss = u.cache_miss_tokens,
-                        completion = u.completion_tokens,
-                        "token_usage_recorded_stream_abort"
-                    );
-                }
-                self.append_interrupt_message(true)?;
-                return Ok(LlmCallOutcome::Aborted(TerminalReason::AbortedStreaming));
-            }
-
-            tracing::debug!(
-                session_id = %session_id,
-                tool_call_count = completion.tool_calls.len(),
-                has_usage = completion.usage.is_some(),
-                stream_aborted,
-                "llm_request_complete"
-            );
-
-            self.record_usage(&completion, event_tx);
-
-            if let Some(tx) = event_tx {
-                let _ = tx.send(Event::AssistantSegmentComplete {
-                    segment_index: turn_ctx.inner_turn,
-                    fork_run_id: None,
-                });
-            }
-
-            if completion.tool_calls.is_empty() {
-                if let Ok(mut dispatch) = dispatch_arc.lock() {
-                    dispatch.drain_pending_specs(self);
-                }
-                return Ok(LlmCallOutcome::Continue(completion));
-            }
-
-            let (executed_specs, skip_result_events, denied_specs, mut executor) = {
-                let mut dispatch = dispatch_arc.lock().map_err(|_| {
-                    AgentError::Validation("streaming tool dispatch lock poisoned".into())
-                })?;
-                for tc in &completion.tool_calls {
-                    if !dispatch.handled_ids.contains(&tc.id) {
-                        dispatch.handle_ready(
-                            &self.shared.registry,
-                            &ctx,
-                            event_tx,
-                            tc.clone(),
-                            true,
-                        );
-                    } else if let Some(tx) = event_tx {
-                        let input = parse_tool_call_input(&tc.arguments, &tc.id, &tc.name);
-                        let needs_approval = self.pending_tools.contains_key(&tc.id)
-                            || dispatch.pending_specs.contains_key(&tc.id);
-                        let _ = tx.send(Event::ToolCallRequest {
-                            tool_call_id: tc.id.clone(),
-                            name: tc.name.clone(),
-                            input,
-                            needs_approval,
-                        });
-                    }
-                }
-                for (_, spec) in dispatch.pending_specs.drain() {
-                    self.pending_tools.insert(spec.id.clone(), spec);
-                }
-                self.has_interruptible_tool_in_progress =
-                    dispatch.executor_mut().has_interruptible_tool_in_progress();
-                dispatch.poll_ui_results(event_tx);
-                let executor = dispatch.take_executor();
-                let executed_specs = std::mem::take(&mut dispatch.executed_specs);
-                let skip_result_events = std::mem::take(&mut dispatch.ui_result_emitted);
-                let denied_specs = std::mem::take(&mut dispatch.denied_specs);
-                (executed_specs, skip_result_events, denied_specs, executor)
-            };
-
-            let mut results = executor.get_remaining_results().await;
-            for (id, (_, reason)) in denied_specs {
-                results.push((id, Err(novel_tools::ToolError::PermissionDenied(reason))));
-            }
-            self.has_interruptible_tool_in_progress = false;
-            for spec in &executed_specs {
-                self.pending_tools.remove(&spec.id);
-            }
-
-            let assistant = assistant_from_completion(&completion);
-            self.persist_message_alloc(&assistant)?;
-            self.messages.push(assistant);
-
-            let tool_call_order: Vec<String> = completion
-                .tool_calls
-                .iter()
-                .map(|tc| tc.id.clone())
-                .collect();
-
-            if self.interrupt_requested() {
-                let _ = self
-                    .execute_stream_results(
-                        results,
-                        &executed_specs,
-                        &tool_call_order,
-                        &skip_result_events,
-                        event_tx,
-                        persist_tool_messages,
-                    )
-                    .await?;
-                self.append_interrupt_message(true)?;
-                return Ok(LlmCallOutcome::Aborted(TerminalReason::AbortedTools));
-            }
-
-            if self
-                .execute_stream_results(
-                    results,
-                    &executed_specs,
-                    &tool_call_order,
-                    &skip_result_events,
-                    event_tx,
-                    persist_tool_messages,
-                )
-                .await?
-            {
-                return Ok(LlmCallOutcome::Continue(completion));
-            }
-
-            Ok(LlmCallOutcome::Continue(completion))
-        } else {
-            let completion = ChatClient::offline_complete(messages);
-            if let Some(tx) = event_tx {
-                if let Some(content) = &completion.content {
-                    let _ = tx.send(Event::ContentBlockDelta {
-                        message_id: String::new(),
-                        index: 0,
-                        delta: content.clone(),
-                        kind: ContentBlockKind::Text,
-                    });
-                }
-                let _ = tx.send(Event::AssistantSegmentComplete {
-                    segment_index: turn_ctx.inner_turn,
-                    fork_run_id: None,
-                });
-            }
-            Ok(LlmCallOutcome::Continue(completion))
-        }
-    }
 } // end first impl AgentEngine block
-
-fn format_tool(
-    spec: Option<&ToolCallSpec>,
-    result: Result<novel_tools::ToolOutput, novel_tools::ToolError>,
-) -> novel_tools::FormattedToolResult {
-    let spec_ref = spec
-        .map(|s| novel_tools::ToolResultSpec {
-            tool_name: &s.name,
-            tool_input: Some(&s.input),
-        })
-        .unwrap_or(novel_tools::ToolResultSpec {
-            tool_name: "",
-            tool_input: None,
-        });
-    novel_tools::format_tool_result_for_llm(spec_ref, result)
-}
 
 impl AgentEngine {
     /// Returns true if turn should pause (e.g. AskUserQuestion).
     #[allow(clippy::too_many_arguments)]
-    async fn execute_stream_results(
+    pub(crate) async fn execute_stream_results(
         &mut self,
         results: Vec<(
             String,
@@ -984,41 +403,9 @@ impl AgentEngine {
         let spec_by_id: std::collections::HashMap<&str, &ToolCallSpec> =
             executed_specs.iter().map(|s| (s.id.as_str(), s)).collect();
 
-        // Prefer a single result per tool_call_id. NeedsUserInput (AskUserQuestion) wins
-        // over Ok when the streaming executor mis-reports after concurrent completion.
-        let mut by_id: HashMap<String, Result<novel_tools::ToolOutput, novel_tools::ToolError>> =
-            HashMap::new();
-        for (id, result) in results {
-            match by_id.get(&id) {
-                None => {
-                    by_id.insert(id, result);
-                }
-                Some(existing) => {
-                    let incoming_needs_input =
-                        matches!(&result, Err(novel_tools::ToolError::NeedsUserInput { .. }));
-                    let existing_needs_input =
-                        matches!(existing, Err(novel_tools::ToolError::NeedsUserInput { .. }));
-                    if incoming_needs_input {
-                        by_id.insert(id, result);
-                    } else if existing_needs_input {
-                        // Keep AskUserQuestion pause signal.
-                    } else if result.is_ok() && existing.is_err() {
-                        by_id.insert(id, result);
-                    }
-                }
-            }
-        }
-
-        let mut ordered_ids: Vec<String> = tool_call_order
-            .iter()
-            .filter(|id| by_id.contains_key(*id))
-            .cloned()
-            .collect();
-        for id in by_id.keys() {
-            if !ordered_ids.iter().any(|o| o == id) {
-                ordered_ids.push(id.clone());
-            }
-        }
+        let mut by_id = crate::tool_stream_results::merge_stream_results_by_id(results);
+        let ordered_ids =
+            crate::tool_stream_results::ordered_tool_result_ids(tool_call_order, &by_id);
 
         let mut pause_for_question = false;
         for id in ordered_ids {
@@ -1029,159 +416,20 @@ impl AgentEngine {
             let spec = spec_by_id.get(id.as_str()).copied();
             match result {
                 Ok(out) => {
-                    let success = !out.is_error;
-                    let formatted = format_tool(spec, Ok(out));
-                    let content = formatted.content;
-                    let hook_task = if self.shared.settings.hooks.post_tool_use.is_empty() {
-                        None
-                    } else {
-                        spec.and_then(|s| {
-                            crate::hooks::knowledge_auditor_hook_task(
-                                &self.shared.settings.hooks,
-                                &s.name,
-                                Some(&s.input),
-                                &formatted.hook_preview,
-                            )
-                        })
-                    };
-
-                    // Track last chapter written (for progress display in system prompt)
-                    if let Some(s) = spec {
-                        if let Some(path) = novel_tools::optional_file_path(&s.input) {
-                            if novel_tools::normalize_rel_path(&path).contains("chapters/") {
-                                self.last_chapter_written =
-                                    Some(novel_tools::normalize_chapter_progress_path(&path));
-                            }
-                        }
-                    }
-
-                    if let Some(tx) = event_tx {
-                        let _ = tx.send(Event::ToolCallResult {
-                            tool_call_id: id.clone(),
-                            content: content.clone(),
-                        });
-                    }
-                    let tool_msg = tool_result_message(&id, &content);
-                    if persist_tool_messages {
-                        self.persist_message_alloc(&tool_msg)?;
-                    }
-                    if let Some(s) = spec {
-                        tracing::debug!(
-                            tool_call_id = %id,
-                            tool_name = %s.name,
-                            success,
-                            "tool_executed"
-                        );
-                        self.audit_log(LogEvent::ToolExecuted {
-                            session_id: self.shared.session.id.clone(),
-                            tool_name: s.name.clone(),
-                            success,
-                        });
-                    }
-                    self.messages.push(tool_msg);
-
-                    if let Some(s) = spec {
-                        // Track invoked skills for post-compaction re-injection
-                        if s.name == "InvokeSkill" {
-                            if let Some(skill_id) = s
-                                .input
-                                .get("skill_id")
-                                .or_else(|| s.input.get("skillId"))
-                                .and_then(|v| v.as_str())
-                            {
-                                if !self.invoked_skill_ids.iter().any(|id| id == skill_id) {
-                                    self.invoked_skill_ids.push(skill_id.to_string());
-                                    let _ = self.shared.session.db.set_invoked_skill_ids(
-                                        &self.shared.session.id,
-                                        &self.invoked_skill_ids,
-                                    );
-                                }
-                            }
-                        }
-                        if s.name == "Read" && success {
-                            if let Some(path) = novel_tools::optional_file_path(&s.input) {
-                                if let Some((_, canonical)) = parse_skill_reference_path(
-                                    &self.shared.session.project_root,
-                                    &self.shared.agent_skills_dir,
-                                    &path,
-                                ) {
-                                    if !self
-                                        .read_skill_reference_paths
-                                        .iter()
-                                        .any(|p| p == &canonical)
-                                    {
-                                        self.read_skill_reference_paths.push(canonical);
-                                        let _ =
-                                            self.shared.session.db.set_read_skill_reference_paths(
-                                                &self.shared.session.id,
-                                                &self.read_skill_reference_paths,
-                                            );
-                                    }
-                                }
-                            }
-                        }
-                        // Opt-in PostToolUse hooks (settings.json); default config is empty.
-                        // Matching is now handled by hook_config.matcher, not hardcoded tool names.
-                        if let Some(task) = hook_task {
-                            if let Ok(mut guard) = self.shared.subagent_queue.lock() {
-                                guard.push(PendingSubagentWork {
-                                    agent_type: "KnowledgeAuditor".into(),
-                                    task,
-                                    parent_tool_call_id: None,
-                                });
-                            }
-                        }
-                    }
+                    self.apply_ok_stream_result(&id, spec, out, event_tx, persist_tool_messages)?;
                 }
                 Err(novel_tools::ToolError::NeedsUserInput { payload }) => {
-                    tracing::debug!(tool_call_id = %id, "tool_needs_user_input");
-                    self.pending_user_question = Some(id.clone());
-                    if let Some(s) = spec {
-                        self.audit_log(LogEvent::ToolExecuted {
-                            session_id: self.shared.session.id.clone(),
-                            tool_name: s.name.clone(),
-                            success: true,
-                        });
-                    }
-                    if let Some(tx) = event_tx {
-                        let _ = tx.send(Event::AskUserQuestion {
-                            tool_call_id: id.clone(),
-                            payload: payload.clone(),
-                        });
-                    }
-                    let tool_msg = tool_result_message(&id, novel_tools::NEEDS_USER_INPUT_STUB);
-                    if persist_tool_messages {
-                        self.persist_message_alloc(&tool_msg)?;
-                    }
-                    self.messages.push(tool_msg);
+                    self.apply_needs_input_stream_result(
+                        &id,
+                        spec,
+                        payload,
+                        event_tx,
+                        persist_tool_messages,
+                    )?;
                     pause_for_question = true;
                 }
                 Err(e) => {
-                    if let Some(s) = spec {
-                        tracing::warn!(
-                            tool_call_id = %id,
-                            tool_name = %s.name,
-                            error = %e,
-                            "tool_executed_failed"
-                        );
-                        self.audit_log(LogEvent::ToolExecuted {
-                            session_id: self.shared.session.id.clone(),
-                            tool_name: s.name.clone(),
-                            success: false,
-                        });
-                    }
-                    let msg = format_tool(spec, Err(e)).content;
-                    if let Some(tx) = event_tx {
-                        let _ = tx.send(Event::ToolCallResult {
-                            tool_call_id: id.clone(),
-                            content: msg.clone(),
-                        });
-                    }
-                    let tool_msg = tool_result_message(&id, &msg);
-                    if persist_tool_messages {
-                        self.persist_message_alloc(&tool_msg)?;
-                    }
-                    self.messages.push(tool_msg);
+                    self.apply_err_stream_result(&id, spec, e, event_tx, persist_tool_messages)?;
                 }
             }
         }
@@ -1503,7 +751,9 @@ impl AgentEngine {
             "compaction_start_detail"
         );
 
-        use novel_compaction::{apply_level4_compaction, partition_messages};
+        use novel_compaction::{
+            partition_messages, rebuild_session_under_budget, SessionBudgetRebuildInput,
+        };
 
         let retain = self.shared.context_manager.retain_policy().clone();
         let compacted = chat_slice_to_compaction(&self.messages);
@@ -1570,18 +820,18 @@ impl AgentEngine {
         };
 
         let window = self.shared.context_manager.window_size();
-        let root = self.shared.session.project_root.clone();
+        let compaction_threshold = self.shared.context_manager.threshold();
 
-        let final_msgs = apply_level4_compaction(
+        let final_msgs = rebuild_session_under_budget(SessionBudgetRebuildInput {
             system,
-            &summary_text,
-            to_retain,
-            &skill_bodies,
-            &skill_ids,
-            &retain,
-            &root,
+            summary_text: &summary_text,
+            retain: to_retain,
+            skill_bodies: &skill_bodies,
+            invoked_skill_ids: &skill_ids,
+            retain_policy: &retain,
             window,
-        )?;
+            compaction_threshold,
+        })?;
 
         self.invoked_skill_ids = skill_ids.clone();
         let _ = self
@@ -1599,7 +849,7 @@ impl AgentEngine {
         let tokens_before = self.last_context_tokens;
         self.audit_log(LogEvent::CompactionTriggered {
             session_id: self.shared.session.id.clone(),
-            level: "level4".into(),
+            level: "session".into(),
             tokens_before,
         });
         self.messages = compaction_slice_to_chat(&final_msgs);
@@ -1820,7 +1070,7 @@ impl AgentEngine {
             })
     }
 
-    fn record_usage(
+    pub(crate) fn record_usage(
         &mut self,
         completion: &LlmCompletion,
         event_tx: Option<&mpsc::UnboundedSender<Event>>,
@@ -1872,7 +1122,10 @@ impl AgentEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::streaming_tool_dispatch::StreamingToolDispatch;
     use crate::EngineConfig;
+    use novel_deepseek::LlmToolCall;
+    use novel_tools::PendingSubagentWork;
     use tempfile::TempDir;
 
     fn test_config(tmp: &TempDir) -> EngineConfig {
@@ -1920,6 +1173,131 @@ mod tests {
         let hooks = default_hook_config();
         let input = serde_json::json!({"file_path": "chapters/chapter-001.md"});
         assert!(knowledge_auditor_hook_task(&hooks, "Write", Some(&input), "written").is_none());
+    }
+
+    #[tokio::test]
+    async fn approve_unknown_tool_returns_validation() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("skills")).unwrap();
+        let mut engine = AgentEngine::new(test_config(&tmp)).unwrap();
+        let err = engine.approve_tool("missing-id", None).await.unwrap_err();
+        assert!(matches!(err, AgentError::Validation(_)));
+    }
+
+    #[tokio::test]
+    async fn approve_pending_read_persists_tool_message() {
+        let _offline = crate::test_env::StripDeepseekApiKey::new();
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("skills")).unwrap();
+        std::fs::write(tmp.path().join("notes.md"), "approved body").unwrap();
+        let mut engine = AgentEngine::new(test_config(&tmp)).unwrap();
+        engine.pending_tools.insert(
+            "t-approve".into(),
+            ToolCallSpec {
+                id: "t-approve".into(),
+                name: "Read".into(),
+                input: serde_json::json!({"file_path": "notes.md"}),
+            },
+        );
+        engine.approve_tool("t-approve", None).await.unwrap();
+        assert!(engine.pending_tools.is_empty());
+        assert!(engine.messages.iter().any(|m| {
+            m.role == "tool"
+                && m.tool_call_id.as_deref() == Some("t-approve")
+                && m.content.contains("approved body")
+        }));
+    }
+
+    #[tokio::test]
+    async fn execute_stream_results_persists_tool_message() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("skills")).unwrap();
+        let mut engine = AgentEngine::new(test_config(&tmp)).unwrap();
+        let spec = ToolCallSpec {
+            id: "t1".into(),
+            name: "Read".into(),
+            input: serde_json::json!({"file_path": "notes.md"}),
+        };
+        let pause = engine
+            .execute_stream_results(
+                vec![(
+                    "t1".into(),
+                    Ok(novel_tools::ToolOutput {
+                        content: "file body".into(),
+                        is_error: false,
+                    }),
+                )],
+                std::slice::from_ref(&spec),
+                &["t1".into()],
+                &HashSet::new(),
+                None,
+                true,
+            )
+            .await
+            .unwrap();
+        assert!(!pause);
+        assert!(engine
+            .messages
+            .iter()
+            .any(|m| m.role == "tool" && m.tool_call_id.as_deref() == Some("t1")));
+    }
+
+    #[tokio::test]
+    async fn execute_stream_results_pauses_on_needs_user_input() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("skills")).unwrap();
+        let mut engine = AgentEngine::new(test_config(&tmp)).unwrap();
+        let spec = ToolCallSpec {
+            id: "q1".into(),
+            name: "AskUserQuestion".into(),
+            input: serde_json::json!({}),
+        };
+        let pause = engine
+            .execute_stream_results(
+                vec![(
+                    "q1".into(),
+                    Err(novel_tools::ToolError::NeedsUserInput {
+                        payload: novel_tools::AskUserQuestionPayload { questions: vec![] },
+                    }),
+                )],
+                std::slice::from_ref(&spec),
+                &["q1".into()],
+                &HashSet::new(),
+                None,
+                false,
+            )
+            .await
+            .unwrap();
+        assert!(pause);
+        assert_eq!(engine.pending_user_question.as_deref(), Some("q1"));
+    }
+
+    #[tokio::test]
+    async fn handle_ready_allows_read_tool() {
+        use novel_tools::{abort_channel, default_registry, PermissionMode, ToolContext};
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("x.md"), "body").unwrap();
+        let registry = Arc::new(default_registry());
+        let ctx = ToolContext {
+            permission_mode: PermissionMode::Auto,
+            project_root: tmp.path().to_path_buf(),
+            ..ToolContext::new(tmp.path().to_path_buf())
+        };
+        let (_, abort_rx) = abort_channel();
+        let mut dispatch = StreamingToolDispatch::new(registry.clone(), ctx.clone(), 4, abort_rx);
+        dispatch.handle_ready(
+            &registry,
+            &ctx,
+            None,
+            LlmToolCall {
+                id: "tc-read".into(),
+                name: "Read".into(),
+                arguments: r#"{"file_path":"x.md"}"#.into(),
+            },
+            true,
+        );
+        assert!(dispatch.handled_ids.contains("tc-read"));
+        assert_eq!(dispatch.executed_specs.len(), 1);
     }
 
     #[tokio::test]

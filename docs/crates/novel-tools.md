@@ -85,7 +85,7 @@ SSE 流开始前创建，Allow 权限的工具在 arguments JSON 完整时即可
 | CharacterRotate | 人物出场轮值（"失踪"检测） |
 | InvokeSkill | 按需加载 `skills/{id}/SKILL.md` body（文件夹格式），body 可能含 references Markdown 链接 |
 | ImpactAnalysis | 删章/改纲影响 JSON |
-| KnowledgeDerive | 知识库派生快照建议；支持 `compressLogs` 操作（调用 L2 压缩演化日志） |
+| KnowledgeDerive | 知识库派生快照、伏笔分类、关系索引、`INDEX.md` 重建 |
 | TrackingQuery | 追踪表查询（场景/道具/势力/时间线/战力/功法），支持 current/range/search 三种操作 |
 | RelationQuery | 角色关系与称呼查询，支持双向关系、历史演变、目标过滤 |
 | **ForkSubAgent** | 主会话委派子 Agent；入队 `subagent_queue`，`drain_subagent_jobs` spawn/join 后 inject **一条**报告摘要；完整 transcript 在 `fork_messages`（与 PostToolUse KnowledgeAuditor hook 并列，触发路径不同） |

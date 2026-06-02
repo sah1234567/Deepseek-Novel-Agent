@@ -18,9 +18,7 @@ pub use derive::{
     derive_character_snapshot, derive_foreshadow_categories, derive_relation_cross_index,
 };
 pub use error::KnowledgeError;
-pub use evolution_log::{
-    append_evolution_log, compress_evolution_table, find_table_last_row, TableRow,
-};
+pub use evolution_log::{append_evolution_log, find_table_last_row, TableRow};
 pub use index::{ensure_index, rebuild_index};
 pub use parser::parse_frontmatter;
 pub use project_tree::{list_project_files, read_project_file, ProjectFileEntry};

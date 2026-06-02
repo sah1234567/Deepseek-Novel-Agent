@@ -39,7 +39,7 @@ pub fn load_project_settings(path: impl AsRef<Path>) -> Result<ProjectSettings, 
 }
 
 impl ProjectSettings {
-    fn apply_env_overrides(&mut self) {
+    pub(crate) fn apply_env_overrides(&mut self) {
         let env = Figment::new().merge(Env::prefixed("NOVEL_"));
         if let Ok(api_base) = env.extract_inner::<String>("API_BASE") {
             self.model.api_base = api_base;
@@ -135,5 +135,36 @@ mod tests {
         assert!(s.validate().is_err());
         s.agent.max_tool_concurrency = 33;
         assert!(s.validate().is_err());
+    }
+
+    #[test]
+    fn env_overrides_max_output_tokens() {
+        let _guard = EnvGuard::set("NOVEL_MAX_OUTPUT_TOKENS", "8192");
+        let mut settings = ProjectSettings::default();
+        settings.apply_env_overrides();
+        assert_eq!(settings.model.max_output_tokens, 8192);
+    }
+
+    struct EnvGuard {
+        key: &'static str,
+        prev: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let prev = std::env::var(key).ok();
+            // SAFETY: test-only; restored on drop.
+            unsafe { std::env::set_var(key, value) };
+            Self { key, prev }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.prev {
+                Some(v) => unsafe { std::env::set_var(self.key, v) },
+                None => unsafe { std::env::remove_var(self.key) },
+            }
+        }
     }
 }

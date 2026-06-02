@@ -336,4 +336,95 @@ mod tests {
         assert_eq!(msgs[0].message_kind.as_deref(), Some("contextRefresh"));
         assert_eq!(msgs[0].role, "user");
     }
+
+    const FORK_MESSAGES_FIXTURE: &str = r#"[
+        {
+            "id": "fm-user",
+            "run_id": "run-1",
+            "sequence": 0,
+            "role": "user",
+            "content_json": { "content": "audit chapter 1" },
+            "created_at": "2024-06-01T12:00:00Z"
+        },
+        {
+            "id": "fm-asst",
+            "run_id": "run-1",
+            "sequence": 1,
+            "role": "assistant",
+            "content_json": {
+                "content": "",
+                "tool_calls": [{ "id": "tc-fork", "name": "Read", "arguments": {} }]
+            },
+            "created_at": "2024-06-01T12:00:01Z"
+        },
+        {
+            "id": "fm-tool",
+            "run_id": "run-1",
+            "sequence": 2,
+            "role": "tool",
+            "content_json": { "content": "file body", "tool_call_id": "tc-fork" },
+            "created_at": "2024-06-01T12:00:02Z"
+        },
+        {
+            "id": "fm-system",
+            "run_id": "run-1",
+            "sequence": 3,
+            "role": "system",
+            "content_json": { "content": "hidden" },
+            "created_at": "2024-06-01T12:00:03Z"
+        }
+    ]"#;
+
+    #[test]
+    fn fork_messages_fixture_maps_tool_name() {
+        let stored: Vec<novel_state::ForkMessage> =
+            serde_json::from_str(FORK_MESSAGES_FIXTURE).unwrap();
+        let ui = fork_messages_to_ui(&stored);
+        assert_eq!(ui.len(), 3);
+        assert_eq!(ui[0].role, "user");
+        assert_eq!(ui[1].role, "assistant");
+        assert_eq!(ui[2].role, "tool");
+        assert_eq!(ui[2].tool_name.as_deref(), Some("Read"));
+        assert_eq!(ui[2].content_blocks[0].text, "file body");
+    }
+
+    #[test]
+    fn build_session_transcript_archives_and_active() {
+        use tempfile::TempDir;
+
+        let tmp = TempDir::new().unwrap();
+        let db = novel_state::Database::open(tmp.path().join("test.db")).unwrap();
+        let sid = db.create_session("/tmp/proj", "deepseek-chat").unwrap();
+        db.insert_message(
+            &sid,
+            0,
+            0,
+            "user",
+            &serde_json::json!({ "content": "archived user" }),
+            None,
+        )
+        .unwrap();
+        db.archive_session_messages(&sid, 1).unwrap();
+        db.replace_session_messages(
+            &sid,
+            &[(
+                1,
+                0,
+                "user",
+                &serde_json::json!({ "content": "active user" }),
+            )],
+        )
+        .unwrap();
+
+        let transcript = build_session_transcript(&db, &sid).unwrap();
+        assert_eq!(transcript.archives.len(), 1);
+        assert_eq!(transcript.archives[0].epoch, 1);
+        assert_eq!(transcript.archives[0].messages.len(), 1);
+        assert_eq!(
+            transcript.archives[0].messages[0].content_blocks[0].text,
+            "archived user"
+        );
+        assert_eq!(transcript.active.len(), 1);
+        assert_eq!(transcript.active[0].content_blocks[0].text, "active user");
+    }
 }

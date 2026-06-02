@@ -84,6 +84,113 @@ struct PendingTool {
     ready_emitted: bool,
 }
 
+struct StreamAccumulators {
+    content_buf: String,
+    reasoning_buf: String,
+    pending: HashMap<u32, PendingTool>,
+    usage: Option<TokenUsage>,
+    stop_reason: Option<String>,
+}
+
+impl StreamAccumulators {
+    fn new() -> Self {
+        Self {
+            content_buf: String::new(),
+            reasoning_buf: String::new(),
+            pending: HashMap::new(),
+            usage: None,
+            stop_reason: None,
+        }
+    }
+
+    fn apply_chunk<TF>(
+        &mut self,
+        chunk: &StreamChunk,
+        on_event: &mut impl FnMut(StreamEvent),
+        on_tool_call: &mut Option<TF>,
+    ) where
+        TF: FnMut(LlmToolCall),
+    {
+        if let Some(u) = &chunk.usage {
+            let hit = u
+                .prompt_tokens_details
+                .as_ref()
+                .and_then(|d| d.cached_tokens)
+                .unwrap_or(0) as i64;
+            let miss = u.prompt_tokens.unwrap_or(0) as i64 - hit;
+            let comp = u.completion_tokens.unwrap_or(0) as i64;
+            self.usage = Some(TokenUsage::from_deepseek_usage(hit, miss, comp, 0));
+        }
+        let Some(choices) = &chunk.choices else {
+            return;
+        };
+        for choice in choices {
+            if let Some(sr) = &choice.finish_reason {
+                self.stop_reason = Some(sr.clone());
+            }
+            let delta = &choice.delta;
+            if let Some(rc) = &delta.reasoning_content {
+                if !rc.is_empty() {
+                    self.reasoning_buf.push_str(rc);
+                    on_event(StreamEvent::ContentBlockDelta {
+                        index: 0,
+                        delta: rc.clone(),
+                        kind: ContentBlockKind::Thinking,
+                    });
+                }
+            }
+            if let Some(c) = &delta.content {
+                self.content_buf.push_str(c);
+                on_event(StreamEvent::ContentBlockDelta {
+                    index: 0,
+                    delta: c.clone(),
+                    kind: ContentBlockKind::Text,
+                });
+            }
+            if let Some(tcs) = &delta.tool_calls {
+                for tc in tcs {
+                    let idx = tc.index;
+                    let entry = self.pending.entry(idx).or_insert_with(|| PendingTool {
+                        id: String::new(),
+                        name: None,
+                        arguments: String::new(),
+                        start_emitted: false,
+                        ready_emitted: false,
+                    });
+                    if let Some(id) = &tc.id {
+                        entry.id = id.clone();
+                    }
+                    if let Some(func) = &tc.function {
+                        if let Some(name) = &func.name {
+                            entry.name = Some(name.clone());
+                        }
+                        if !entry.start_emitted && entry.name.is_some() && !entry.id.is_empty() {
+                            on_event(StreamEvent::ToolUseStarted {
+                                index: idx,
+                                tool_call_id: entry.id.clone(),
+                                name: entry.name.clone().unwrap_or_default(),
+                            });
+                            entry.start_emitted = true;
+                        }
+                        if let Some(args) = &func.arguments {
+                            if !args.is_empty() && !entry.id.is_empty() {
+                                on_event(StreamEvent::ToolInputDelta {
+                                    tool_call_id: entry.id.clone(),
+                                    delta: args.clone(),
+                                });
+                            }
+                            entry.arguments.push_str(args);
+                        }
+                        if let Some(cb) = on_tool_call {
+                            ChatClient::try_emit_ready_tool(entry, cb);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 // ── ChatClient ──────────────────────────────────────────────────
 
 impl ChatClient {
@@ -214,11 +321,7 @@ impl ChatClient {
         let byte_stream = resp.bytes_stream();
         futures::pin_mut!(byte_stream);
 
-        let mut content_buf = String::new();
-        let mut reasoning_buf = String::new();
-        let mut pending: HashMap<u32, PendingTool> = HashMap::new();
-        let mut usage: Option<TokenUsage> = None;
-        let mut stop_reason: Option<String> = None;
+        let mut acc = StreamAccumulators::new();
         let mut line_buf = String::new();
 
         // For background drain on cancel
@@ -226,25 +329,16 @@ impl ChatClient {
         let drain_msgs = Self::to_openai_messages(messages);
         let drain_tools = tool_defs;
 
+        let return_cancelled = |acc: StreamAccumulators| {
+            Ok(drain_self.cancelled_stream_outcome(acc, &drain_msgs, &drain_tools))
+        };
+
         loop {
             let chunk_result = if let Some(ref flag) = cancel {
                 tokio::select! {
                     r = byte_stream.next() => r,
                     () = Self::wait_cancel(Arc::clone(flag)) => {
-                        let tool_calls = Self::drain_pending(&mut pending);
-                        let partial = Self::make_completion(
-                            content_buf, reasoning_buf, tool_calls, &usage, stop_reason.clone(),
-                        );
-                        let (tx, rx) = tokio::sync::oneshot::channel();
-                        tokio::spawn(async move {
-                            let _ = drain_self.drain_usage_background(
-                                &drain_msgs, &drain_tools, usage, tx, 30,
-                            ).await;
-                        });
-                        return Ok(StreamOutcome::Cancelled {
-                            partial,
-                            background_usage: rx,
-                        });
+                        return return_cancelled(acc);
                     }
                 }
             } else {
@@ -261,109 +355,31 @@ impl ChatClient {
                 let line = line_buf[..pos].trim().to_string();
                 line_buf = line_buf[pos + 1..].to_string();
 
-                if line.is_empty() {
-                    continue;
-                }
-                let Some(payload) = line.strip_prefix("data: ") else {
-                    continue;
-                };
-                if payload == "[DONE]" {
-                    break;
-                }
-
-                let chunk: StreamChunk = match serde_json::from_str(payload) {
-                    Ok(c) => c,
-                    Err(e) => {
+                match crate::stream_parse::parse_sse_line(&line) {
+                    crate::stream_parse::SseLine::Skip => continue,
+                    crate::stream_parse::SseLine::Done => break,
+                    crate::stream_parse::SseLine::InvalidJson(e) => {
                         on_event(StreamEvent::StreamError {
                             message: format!("JSON parse: {e}"),
                             retryable: true,
                         });
                         continue;
                     }
-                };
-
-                // Usage (may appear in any chunk with include_usage)
-                if let Some(u) = &chunk.usage {
-                    let hit = u
-                        .prompt_tokens_details
-                        .as_ref()
-                        .and_then(|d| d.cached_tokens)
-                        .unwrap_or(0) as i64;
-                    let miss = u.prompt_tokens.unwrap_or(0) as i64 - hit;
-                    let comp = u.completion_tokens.unwrap_or(0) as i64;
-                    usage = Some(TokenUsage::from_deepseek_usage(hit, miss, comp, 0));
-                }
-
-                // Choices
-                if let Some(choices) = &chunk.choices {
-                    for choice in choices {
-                        if let Some(sr) = &choice.finish_reason {
-                            stop_reason = Some(sr.clone());
-                        }
-                        let delta = &choice.delta;
-
-                        // reasoning_content → Thinking
-                        if let Some(rc) = &delta.reasoning_content {
-                            if !rc.is_empty() {
-                                reasoning_buf.push_str(rc);
-                                on_event(StreamEvent::ContentBlockDelta {
-                                    index: 0,
-                                    delta: rc.clone(),
-                                    kind: ContentBlockKind::Thinking,
+                    crate::stream_parse::SseLine::Data(json) => {
+                        let chunk: StreamChunk = match serde_json::from_value(json) {
+                            Ok(c) => c,
+                            Err(e) => {
+                                on_event(StreamEvent::StreamError {
+                                    message: format!("JSON parse: {e}"),
+                                    retryable: true,
                                 });
+                                continue;
                             }
-                        }
-                        // content → Text
-                        if let Some(c) = &delta.content {
-                            content_buf.push_str(c);
-                            on_event(StreamEvent::ContentBlockDelta {
-                                index: 0,
-                                delta: c.clone(),
-                                kind: ContentBlockKind::Text,
-                            });
-                        }
-                        // tool_calls
-                        if let Some(tcs) = &delta.tool_calls {
-                            for tc in tcs {
-                                let idx = tc.index;
-                                let entry = pending.entry(idx).or_insert_with(|| PendingTool {
-                                    id: String::new(),
-                                    name: None,
-                                    arguments: String::new(),
-                                    start_emitted: false,
-                                    ready_emitted: false,
-                                });
-                                if let Some(id) = &tc.id {
-                                    entry.id = id.clone();
-                                }
-                                if let Some(func) = &tc.function {
-                                    if let Some(name) = &func.name {
-                                        entry.name = Some(name.clone());
-                                    }
-                                    if !entry.start_emitted
-                                        && entry.name.is_some()
-                                        && !entry.id.is_empty()
-                                    {
-                                        on_event(StreamEvent::ToolUseStarted {
-                                            index: idx,
-                                            tool_call_id: entry.id.clone(),
-                                            name: entry.name.clone().unwrap_or_default(),
-                                        });
-                                        entry.start_emitted = true;
-                                    }
-                                    if let Some(args) = &func.arguments {
-                                        if !args.is_empty() && !entry.id.is_empty() {
-                                            on_event(StreamEvent::ToolInputDelta {
-                                                tool_call_id: entry.id.clone(),
-                                                delta: args.clone(),
-                                            });
-                                        }
-                                        entry.arguments.push_str(args);
-                                    }
-                                    if let Some(ref mut cb) = on_tool_call {
-                                        Self::try_emit_ready_tool(entry, cb);
-                                    }
-                                }
+                        };
+                        acc.apply_chunk(&chunk, &mut on_event, &mut on_tool_call);
+                        if let Some(flag) = &cancel {
+                            if flag.load(Ordering::SeqCst) {
+                                return return_cancelled(acc);
                             }
                         }
                     }
@@ -372,21 +388,21 @@ impl ChatClient {
         }
 
         on_event(StreamEvent::MessageStop {
-            stop_reason: stop_reason.clone(),
+            stop_reason: acc.stop_reason.clone(),
         });
 
         if let Some(ref mut cb) = on_tool_call {
-            for entry in pending.values_mut() {
+            for entry in acc.pending.values_mut() {
                 Self::try_emit_ready_tool(entry, cb);
             }
         }
-        let tool_calls = Self::drain_pending(&mut pending);
+        let tool_calls = Self::drain_pending(&mut acc.pending);
         let completion = Self::make_completion(
-            content_buf,
-            reasoning_buf,
+            acc.content_buf,
+            acc.reasoning_buf,
             tool_calls,
-            &usage,
-            stop_reason.clone(),
+            &acc.usage,
+            acc.stop_reason.clone(),
         );
         if let Some(u) = &completion.usage {
             self.cache_tracker.record(u);
@@ -436,6 +452,36 @@ impl ChatClient {
             }
         }
         tools
+    }
+
+    fn cancelled_stream_outcome(
+        &self,
+        mut acc: StreamAccumulators,
+        drain_msgs: &[Value],
+        drain_tools: &[Value],
+    ) -> StreamOutcome {
+        let tool_calls = Self::drain_pending(&mut acc.pending);
+        let partial = Self::make_completion(
+            acc.content_buf,
+            acc.reasoning_buf,
+            tool_calls,
+            &acc.usage,
+            acc.stop_reason.clone(),
+        );
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let drain_self = self.clone();
+        let usage_snapshot = acc.usage.clone();
+        let msgs = drain_msgs.to_vec();
+        let tools = drain_tools.to_vec();
+        tokio::spawn(async move {
+            let _ = drain_self
+                .drain_usage_background(&msgs, &tools, usage_snapshot, tx, 30)
+                .await;
+        });
+        StreamOutcome::Cancelled {
+            partial,
+            background_usage: rx,
+        }
     }
 
     fn make_completion(
@@ -877,5 +923,161 @@ mod tests {
         assert!(read.ready_emitted);
         assert!(write.ready_emitted);
         assert!(!partial.ready_emitted);
+    }
+
+    #[test]
+    fn stream_accumulators_apply_tool_delta() {
+        let mut acc = StreamAccumulators::new();
+        let json = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"Read","arguments":"{\"path\":\"a.md\"}"}}]}}]}"#;
+        let chunk: StreamChunk = serde_json::from_str(json).unwrap();
+        let mut ready: Vec<LlmToolCall> = Vec::new();
+        acc.apply_chunk(
+            &chunk,
+            &mut |_| {},
+            &mut Some(|tc: LlmToolCall| ready.push(tc)),
+        );
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].name, "Read");
+    }
+
+    #[tokio::test]
+    async fn create_stream_parses_sse_via_wiremock() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let sse = "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2,\"prompt_tokens_details\":{\"cached_tokens\":4}}}\n\ndata: [DONE]\n\n";
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(sse),
+            )
+            .mount(&server)
+            .await;
+
+        let mut client = ChatClient::deepseek("test-key", "deepseek-chat", &server.uri(), false);
+        let messages = vec![LlmChatMessage {
+            role: "user".into(),
+            content: "ping".into(),
+            tool_call_id: None,
+            tool_calls: None,
+            reasoning_content: None,
+        }];
+        let outcome = client
+            .create_stream(&messages, &[], 64, |_| {}, None::<fn(LlmToolCall)>, None)
+            .await
+            .expect("stream ok");
+        match outcome {
+            StreamOutcome::Complete(c) => {
+                assert_eq!(c.content.as_deref(), Some("hi"));
+                assert!(c.usage.is_some());
+            }
+            _ => panic!("expected Complete"),
+        }
+    }
+
+    #[tokio::test]
+    async fn create_stream_cancel_drains_usage_via_wiremock() {
+        use wiremock::matchers::{header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let sse = "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\ndata: [DONE]\n\n";
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(header("accept", "text/event-stream"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(sse),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "usage": {
+                    "prompt_tokens": 20,
+                    "completion_tokens": 1,
+                    "prompt_tokens_details": { "cached_tokens": 5 }
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let mut client = ChatClient::deepseek("key", "m", &server.uri(), false);
+        let messages = vec![LlmChatMessage {
+            role: "user".into(),
+            content: "q".into(),
+            tool_call_id: None,
+            tool_calls: None,
+            reasoning_content: None,
+        }];
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_on_event = Arc::clone(&cancel);
+        let outcome = client
+            .create_stream(
+                &messages,
+                &[],
+                32,
+                move |_| {
+                    cancel_on_event.store(true, Ordering::SeqCst);
+                },
+                None::<fn(LlmToolCall)>,
+                Some(cancel),
+            )
+            .await
+            .expect("cancelled stream");
+        let StreamOutcome::Cancelled {
+            background_usage, ..
+        } = outcome
+        else {
+            panic!("expected Cancelled");
+        };
+        let usage = tokio::time::timeout(Duration::from_secs(3), background_usage)
+            .await
+            .expect("drain timeout")
+            .expect("drain channel")
+            .expect("usage from drain");
+        assert_eq!(usage.cache_hit_tokens, 5);
+    }
+
+    #[tokio::test]
+    async fn web_search_parses_mock_response() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let body = serde_json::json!({
+            "content": [{
+                "type": "web_search_tool_result",
+                "content": [{
+                    "title": "Example",
+                    "url": "https://example.com",
+                    "snippet": "text"
+                }]
+            }]
+        });
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let prev = std::env::var("DEEPSEEK_WEB_SEARCH_MESSAGES_URL").ok();
+        std::env::set_var(
+            "DEEPSEEK_WEB_SEARCH_MESSAGES_URL",
+            format!("{}/v1/messages", server.uri()),
+        );
+        let results = ChatClient::web_search("key", "rust", 3)
+            .await
+            .expect("web_search");
+        match prev {
+            Some(p) => std::env::set_var("DEEPSEEK_WEB_SEARCH_MESSAGES_URL", p),
+            None => std::env::remove_var("DEEPSEEK_WEB_SEARCH_MESSAGES_URL"),
+        }
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Example");
     }
 }

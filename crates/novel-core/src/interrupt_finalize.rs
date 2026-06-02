@@ -146,3 +146,86 @@ pub fn append_interrupted_tool_stubs(assistant: &ChatMessage) -> Vec<ChatMessage
     }
     blocks
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::ToolCallRecord;
+
+    #[tokio::test]
+    async fn finalize_stream_cancel_persists_partial_and_stubs() {
+        use crate::interrupt_finalize::{FinalizeStreamCancelParams, MainSessionSink};
+        use crate::test_env::StripDeepseekApiKey;
+        use novel_deepseek::{LlmChatMessage, LlmCompletion};
+        use tempfile::TempDir;
+
+        let _offline = StripDeepseekApiKey::new();
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("skills")).unwrap();
+        let cfg = crate::EngineConfig {
+            project_root: tmp.path().to_path_buf(),
+            settings_path: tmp.path().join("settings.json"),
+            db_path: tmp.path().join("state.db"),
+            skills_dir: tmp.path().join("skills"),
+            global_config_path: tmp.path().join(".novel-agent/api_config.json"),
+        };
+        let mut engine = crate::AgentEngine::new(cfg).unwrap();
+        let partial = LlmCompletion {
+            content: Some("partial".into()),
+            tool_calls: vec![novel_deepseek::LlmToolCall {
+                id: "tc1".into(),
+                name: "Read".into(),
+                arguments: "{}".into(),
+            }],
+            usage: None,
+            reasoning_content: None,
+            stop_reason: None,
+        };
+        let shared = engine.shared.clone();
+        let llm_snap = crate::session_llm::read_session_llm(&shared);
+        let mut sink = MainSessionSink {
+            engine: &mut engine,
+        };
+        let params = FinalizeStreamCancelParams {
+            sink: &mut sink,
+            partial,
+            llm_messages: vec![LlmChatMessage {
+                role: "user".into(),
+                content: "hi".into(),
+                tool_call_id: None,
+                tool_calls: None,
+                reasoning_content: None,
+            }],
+            tool_schemas: vec![],
+            background_usage: None,
+            llm_snap,
+            shared,
+            event_tx: None,
+        };
+        finalize_stream_cancel(params).await.unwrap();
+        assert!(engine
+            .messages
+            .iter()
+            .any(|m| m.role == "assistant" && m.content == "partial"));
+        assert!(engine.messages.iter().any(|m| m.role == "tool"));
+    }
+
+    #[test]
+    fn append_interrupted_tool_stubs_fills_missing_results() {
+        let assistant = ChatMessage {
+            role: "assistant".into(),
+            content: String::new(),
+            tool_calls: Some(vec![ToolCallRecord {
+                id: "tc1".into(),
+                name: "Read".into(),
+                arguments: serde_json::json!({}),
+            }]),
+            ..Default::default()
+        };
+        let stubs = append_interrupted_tool_stubs(&assistant);
+        assert_eq!(stubs.len(), 1);
+        assert_eq!(stubs[0].role, "tool");
+        assert_eq!(stubs[0].tool_call_id.as_deref(), Some("tc1"));
+        assert!(stubs[0].content.contains("Read"));
+    }
+}

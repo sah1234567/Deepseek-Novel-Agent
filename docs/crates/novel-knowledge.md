@@ -33,9 +33,7 @@ CharacterFrontmatter：name, aliases, category, first_appearance, last_update, s
 
 ### 1.3 演变日志
 
-**append_evolution_log：** 定位表格 → 末行后追加（append-only）
-
-**compress_evolution_table：** compaction Level 2 保留 tail 行，更早行合并
+**append_evolution_log：** 定位表格 → 末行后追加（append-only）；续写通过 Grep/Read 末行或工具层查询，不在磁盘上合并历史行
 
 ### 1.4 因果链
 
@@ -47,7 +45,7 @@ CharacterFrontmatter：name, aliases, category, first_appearance, last_update, s
 |------|------|
 | `character` | 人物 frontmatter 类型 |
 | `causality` | 因果图 |
-| `evolution_log` | 演变日志 append / L2 压缩 |
+| `evolution_log` | 演变日志 append、末行查询 |
 | `index` | `rebuild_index`, `ensure_index` |
 | `derive` | 派生快照（纯函数，不自动写盘） |
 | `scaffold` / `scaffold_templates` | 新建作品目录树 |

@@ -61,6 +61,7 @@ fn hint_for_execution(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     #[test]
     fn edit_not_read_hint() {
@@ -69,5 +70,48 @@ mod tests {
         let s = enhance_tool_error_for_llm("Edit", &err, None);
         assert!(s.contains("Next steps:"));
         assert!(s.contains("Read or Tail"));
+    }
+
+    #[rstest]
+    #[case("Read", "Read economy: knowledge/foo.md", Some("Grep"))]
+    #[case("Edit", "Read foo.md before editing", Some("Read or Tail"))]
+    #[case("Write", "Read bar.md before overwriting", Some("Read or Tail"))]
+    #[case("Edit", "modified since last read", Some("Read or Tail"))]
+    #[case("Edit", "only read a portion of this file", Some("offset/limit"))]
+    #[case("Edit", "not in the read slice", Some("offset/limit"))]
+    #[case("Edit", "line number prefix in old_string", Some("prefixes"))]
+    #[case("Edit", "not found in file", Some("Grep"))]
+    #[case("Edit", "3 matches of old_string", Some("replace_all"))]
+    #[case("Edit", "old_string and new_string are identical", Some("differs"))]
+    #[case("Tail", "requested lines exceeds max", Some("Reduce lines"))]
+    #[case("Grep", "pattern not found", None)]
+    #[case("Read", "file not found", None)]
+    fn hint_for_execution_cases(
+        #[case] tool_name: &str,
+        #[case] msg: &str,
+        #[case] expect_substr: Option<&str>,
+    ) {
+        let hint = hint_for_execution(tool_name, msg, None);
+        match expect_substr {
+            Some(sub) => {
+                let h = hint.expect("expected hint");
+                assert!(h.contains(sub), "hint {:?} should contain {:?}", h, sub);
+            }
+            None => assert!(hint.is_none()),
+        }
+    }
+
+    #[rstest]
+    #[case("Edit", "Read foo before editing", true)]
+    #[case("Read", "Read economy: cap", true)]
+    #[case("Grep", "no match", false)]
+    fn enhance_tool_error_appends_next_steps(
+        #[case] tool_name: &str,
+        #[case] msg: &str,
+        #[case] with_steps: bool,
+    ) {
+        let err = ToolError::Execution(msg.into());
+        let s = enhance_tool_error_for_llm(tool_name, &err, None);
+        assert_eq!(s.contains("Next steps:"), with_steps);
     }
 }

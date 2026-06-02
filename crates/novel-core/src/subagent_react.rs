@@ -68,4 +68,20 @@ mod tests {
         assert!(m.content.contains("40/40"));
         assert!(m.content.contains("禁止再调用"));
     }
+
+    #[test]
+    fn consume_grace_steps_down() {
+        let phase = SubagentLoopPhase::ReportOnly { grace_left: 2 };
+        let p1 = phase.consume_grace().unwrap();
+        assert!(matches!(
+            p1,
+            SubagentLoopPhase::ReportOnly { grace_left: 1 }
+        ));
+        let p0 = p1.consume_grace().unwrap();
+        assert!(matches!(
+            p0,
+            SubagentLoopPhase::ReportOnly { grace_left: 0 }
+        ));
+        assert!(p0.consume_grace().is_none());
+    }
 }

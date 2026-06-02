@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use std::sync::OnceLock;
 
 #[derive(Debug, Serialize)]
-struct CorkboardCard {
+pub(crate) struct CorkboardCard {
     chapter: String,
     scene_number: u32,
     scene_title: String,
@@ -25,6 +25,31 @@ struct CorkboardResult {
 }
 
 pub struct CorkboardTool;
+
+pub(crate) fn apply_corkboard_filters(
+    cards: &mut Vec<CorkboardCard>,
+    filter_pov: Option<&str>,
+    filter_char: Option<&str>,
+    filter_fs: Option<&str>,
+    filter_world: Option<&str>,
+    filter_prop: Option<&str>,
+) {
+    if let Some(pov) = filter_pov {
+        cards.retain(|c| c.pov.contains(pov));
+    }
+    if let Some(ch) = filter_char {
+        cards.retain(|c| c.characters.iter().any(|x| x.contains(ch)));
+    }
+    if let Some(fs) = filter_fs {
+        cards.retain(|c| c.foreshadowings.iter().any(|x| x == fs));
+    }
+    if let Some(world) = filter_world {
+        cards.retain(|c| c.world.contains(world));
+    }
+    if let Some(prop) = filter_prop {
+        cards.retain(|c| c.summary.contains(prop));
+    }
+}
 
 fn scene_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
@@ -295,21 +320,14 @@ impl Tool for CorkboardTool {
             }
         }
 
-        if let Some(pov) = filter_pov {
-            cards.retain(|c| c.pov.contains(pov));
-        }
-        if let Some(ch) = filter_char {
-            cards.retain(|c| c.characters.iter().any(|x| x.contains(ch)));
-        }
-        if let Some(fs) = filter_fs {
-            cards.retain(|c| c.foreshadowings.iter().any(|x| x == fs));
-        }
-        if let Some(world) = filter_world {
-            cards.retain(|c| c.world.contains(world));
-        }
-        if let Some(prop) = filter_prop {
-            cards.retain(|c| c.summary.contains(prop));
-        }
+        apply_corkboard_filters(
+            &mut cards,
+            filter_pov,
+            filter_char,
+            filter_fs,
+            filter_world,
+            filter_prop,
+        );
 
         let result = CorkboardResult { cards };
         Ok(ToolOutput {
@@ -360,6 +378,49 @@ mod tests {
             .await
             .unwrap();
         assert!(out.content.contains("矿洞入口"));
+        assert!(out.content.contains("林若烟"));
+    }
+
+    #[test]
+    fn apply_filters_by_pov() {
+        let mut cards = vec![CorkboardCard {
+            chapter: "Ch1".into(),
+            scene_number: 1,
+            scene_title: "A".into(),
+            summary: "x".into(),
+            pov: "林若烟".into(),
+            characters: vec![],
+            foreshadowings: vec![],
+            word_count_estimate: 100,
+            world: "主世界".into(),
+        }];
+        apply_corkboard_filters(&mut cards, Some("陈默"), None, None, None, None);
+        assert!(cards.is_empty());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn corkboard_filter_pov_via_call() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("knowledge/plot/细纲");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("chapter-001-细纲.md"),
+            "# Chapter 1\n### 场景 1: 山门（~200字）\nPOV ✓ | 林若烟 |\n",
+        )
+        .unwrap();
+        let tool = CorkboardTool;
+        let ctx = ToolContext {
+            permission_mode: PermissionMode::Auto,
+            project_root: tmp.path().to_path_buf(),
+            ..ToolContext::new(tmp.path().to_path_buf())
+        };
+        let out = tool
+            .call(
+                json!({"filter": {"pov": "林若烟"}, "chapter_range": [1, 1]}),
+                &ctx,
+            )
+            .await
+            .unwrap();
         assert!(out.content.contains("林若烟"));
     }
 }

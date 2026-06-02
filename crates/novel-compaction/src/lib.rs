@@ -2,8 +2,6 @@
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
 mod error;
-mod level1;
-mod level2;
 mod message_format;
 mod message_types;
 mod react_cycles;
@@ -17,8 +15,6 @@ mod token_counter;
 pub type RoleContent = (String, String);
 
 pub use error::CompactionError;
-pub use level1::apply_level1_on_compaction_messages;
-pub use level2::apply_level2_knowledge;
 pub use message_format::format_for_summary;
 pub use message_types::{CompactionMessage, CompactionToolCall};
 pub use react_cycles::{
@@ -27,8 +23,8 @@ pub use react_cycles::{
 };
 pub use retain_policy::RetainPolicy;
 pub use session_rebuild::{
-    apply_level4_compaction, rebuild_session_messages, rule_based_summary,
-    wrap_context_refresh_user_message, SessionRebuildInput,
+    rebuild_session_messages, rebuild_session_under_budget, rule_based_summary,
+    wrap_context_refresh_user_message, SessionBudgetRebuildInput, SessionRebuildInput,
 };
 pub use strategy::{CompactionDecision, CompactionStrategy};
 pub use summarizer::{build_summary_trailing_user_prompt, truncate_summary};

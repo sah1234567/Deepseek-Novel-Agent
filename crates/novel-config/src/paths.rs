@@ -120,4 +120,35 @@ mod tests {
         let p = work_path(tmp.path(), "demo").unwrap();
         assert!(p.ends_with("works/demo"));
     }
+
+    #[test]
+    fn ensure_work_under_works_accepts_child() {
+        let tmp = TempDir::new().unwrap();
+        let works = tmp.path().join("works");
+        std::fs::create_dir_all(works.join("demo")).unwrap();
+        ensure_work_under_works(&works, &works.join("demo")).unwrap();
+    }
+
+    #[test]
+    fn ensure_work_under_works_rejects_escape() {
+        let tmp = TempDir::new().unwrap();
+        let works = tmp.path().join("works");
+        std::fs::create_dir_all(&works).unwrap();
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        assert!(ensure_work_under_works(&works, &outside).is_err());
+    }
+
+    #[test]
+    fn resolve_agent_root_finds_skills_dir() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("skills")).unwrap();
+        let prev = std::env::current_dir().ok();
+        std::env::set_current_dir(tmp.path()).unwrap();
+        let root = resolve_agent_root();
+        if let Some(p) = prev {
+            let _ = std::env::set_current_dir(p);
+        }
+        assert!(root.join("skills").is_dir());
+    }
 }

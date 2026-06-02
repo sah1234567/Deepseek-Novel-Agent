@@ -6,6 +6,7 @@ mod client;
 mod config;
 mod connectivity;
 mod error;
+mod stream_parse;
 mod tool_args;
 mod types;
 

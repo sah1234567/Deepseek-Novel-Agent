@@ -7,7 +7,9 @@ use tauri::Emitter;
 
 mod dto;
 mod engine_loop;
+mod event_payload;
 mod events;
+mod session_api;
 mod state;
 
 pub use dto::{
@@ -191,27 +193,19 @@ pub fn list_works(works_dir: &std::path::Path) -> Result<Vec<WorkSummary>, Strin
     if !works_dir.is_dir() {
         return Ok(Vec::new());
     }
-    let mut works = Vec::new();
-    for entry in std::fs::read_dir(works_dir).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let Some(name) = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .filter(|n| !n.is_empty() && !n.starts_with('.'))
-        else {
-            continue;
-        };
-        let initialized = path.join("AGENTS.md").is_file() || path.join("knowledge").is_dir();
-        works.push(WorkSummary {
-            name: name.to_string(),
-            path: path.to_string_lossy().into_owned(),
-            initialized,
-        });
-    }
+    std::fs::read_dir(works_dir).map_err(|e| e.to_string())?;
+    let mut works = session_api::list_work_dirs(works_dir)
+        .into_iter()
+        .map(|name| {
+            let path = works_dir.join(&name);
+            let initialized = path.join("AGENTS.md").is_file() || path.join("knowledge").is_dir();
+            WorkSummary {
+                path: path.to_string_lossy().into_owned(),
+                name,
+                initialized,
+            }
+        })
+        .collect::<Vec<_>>();
     works.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(works)
 }

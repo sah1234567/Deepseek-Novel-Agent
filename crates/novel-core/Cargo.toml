@@ -23,6 +23,8 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 chrono = { workspace = true }
+novel-config = { path = "../novel-config" }
 novel-state = { path = "../novel-state" }
 rstest = { workspace = true }
 tempfile = { workspace = true }
+wiremock = { workspace = true }

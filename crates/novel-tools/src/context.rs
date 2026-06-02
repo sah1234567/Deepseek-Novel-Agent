@@ -373,3 +373,44 @@ impl std::fmt::Debug for ToolContext {
             .finish_non_exhaustive()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+
+    fn ctx_with_deny_rules(rules: &[&str]) -> ToolContext {
+        let mut ctx = ToolContext::new(std::path::PathBuf::from("."));
+        ctx.deny_rules = rules.iter().map(|s| (*s).to_string()).collect();
+        ctx
+    }
+
+    #[rstest]
+    #[case(&[], "Read", None, false)]
+    #[case(&["*"], "Read", None, true)]
+    #[case(&["Edit"], "Edit", None, true)]
+    #[case(&["Edit"], "Grep", None, false)]
+    #[case(&["Write(chapters/**)"], "Write", Some("chapters/chapter-001.md"), true)]
+    #[case(&["Write(chapters/**)"], "Edit", Some("chapters/chapter-001.md"), true)]
+    #[case(&["Write(chapters/**)"], "Write", Some("plan/outline.md"), false)]
+    #[case(&["Write(chapters/**)"], "Read", Some("chapters/chapter-001.md"), false)]
+    fn deny_rule_block_matrix(
+        #[case] rules: &[&str],
+        #[case] tool_name: &str,
+        #[case] target_path: Option<&str>,
+        #[case] blocked: bool,
+    ) {
+        let ctx = ctx_with_deny_rules(rules);
+        assert_eq!(
+            ctx.deny_rule_block(tool_name, target_path).is_some(),
+            blocked
+        );
+    }
+
+    #[rstest]
+    #[case("chapters/foo.md", true)]
+    #[case("plan/foo.md", false)]
+    fn path_matches_write_chapters_rule(#[case] path: &str, #[case] matches: bool) {
+        assert_eq!(path_matches_rule("Write(chapters/**)", path), matches);
+    }
+}

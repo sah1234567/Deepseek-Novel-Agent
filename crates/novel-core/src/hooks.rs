@@ -114,6 +114,24 @@ mod tests {
         assert!(hooks.post_tool_use.is_empty());
     }
 
+    use rstest::rstest;
+
+    #[rstest]
+    #[case("*", "Read", None, true)]
+    #[case("", "Write", None, true)]
+    #[case("Read", "Read", None, true)]
+    #[case("Read", "Write", None, false)]
+    #[case("Write|Edit", "Edit", None, true)]
+    #[case("Write|Edit", "Grep", None, false)]
+    fn matcher_matches_cases(
+        #[case] matcher: &str,
+        #[case] tool: &str,
+        #[case] input: Option<serde_json::Value>,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(matcher_matches(matcher, tool, input.as_ref()), expected);
+    }
+
     #[test]
     fn knowledge_auditor_hook_skips_when_no_hooks() {
         let hooks = default_hook_config();

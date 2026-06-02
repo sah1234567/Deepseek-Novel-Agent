@@ -48,7 +48,7 @@ pub struct EngineStatus {
     pub has_interruptible_tool_in_progress: bool,
 }
 
-fn permission_mode_label(mode: &PermissionMode) -> &'static str {
+pub(crate) fn permission_mode_label(mode: &PermissionMode) -> &'static str {
     match mode {
         PermissionMode::Normal => "normal",
         PermissionMode::Plan => "plan",
@@ -720,6 +720,33 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
+    async fn engine_run_approve_tool_op() {
+        let _offline = crate::test_env::StripDeepseekApiKey::new();
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("skills")).unwrap();
+        let mut engine = AgentEngine::new(test_config(&tmp)).unwrap();
+        engine.pending_tools.insert(
+            "p1".into(),
+            novel_tools::ToolCallSpec {
+                id: "p1".into(),
+                name: "Read".into(),
+                input: serde_json::json!({"file_path": "settings.json"}),
+            },
+        );
+        let (op_tx, op_rx) = mpsc::unbounded_channel();
+        let (event_tx, _event_rx) = mpsc::unbounded_channel();
+        op_tx
+            .send(Op::ApproveTool {
+                tool_call_id: "p1".into(),
+            })
+            .unwrap();
+        drop(op_tx);
+        let reason = engine.run(op_rx, event_tx).await.unwrap();
+        assert!(matches!(reason, TerminalReason::Completed));
+    }
+
+    #[rstest]
+    #[tokio::test]
     async fn resume_session_loads_messages() {
         let _offline = crate::test_env::StripDeepseekApiKey::new();
         let tmp = TempDir::new().unwrap();
@@ -730,6 +757,18 @@ mod tests {
         let sid = engine.shared.session.id.clone();
         let resumed = AgentEngine::resume(cfg, &sid).unwrap();
         assert!(resumed.messages.len() >= 2);
+    }
+
+    #[test]
+    fn permission_mode_label_maps_all_modes() {
+        use novel_tools::PermissionMode;
+        assert_eq!(permission_mode_label(&PermissionMode::Normal), "normal");
+        assert_eq!(permission_mode_label(&PermissionMode::Auto), "auto");
+        assert_eq!(permission_mode_label(&PermissionMode::Plan), "plan");
+        assert_eq!(
+            permission_mode_label(&PermissionMode::Unattended),
+            "unattended"
+        );
     }
 
     #[test]

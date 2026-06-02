@@ -356,6 +356,55 @@ impl StreamingToolExecutor {
         }
     }
 
+    fn abort_in_flight(&mut self) {
+        for h in self.join_handles.drain(..) {
+            h.abort();
+        }
+        self.flush_aborted_tools();
+    }
+
+    async fn await_in_flight_handles(&mut self) {
+        let handles = std::mem::take(&mut self.join_handles);
+        for h in handles {
+            let _ = h.await;
+        }
+        self.prune_finished_executing();
+    }
+
+    fn circuit_break_stalled(
+        &mut self,
+        in_flight: usize,
+    ) -> Option<Vec<(String, Result<crate::ToolOutput, ToolError>)>> {
+        tracing::warn!(
+            queued = self
+                .queue
+                .iter()
+                .filter(|t| t.status == TrackedStatus::Queued)
+                .count(),
+            executing = self
+                .queue
+                .iter()
+                .filter(|t| t.status == TrackedStatus::Executing)
+                .count(),
+            in_flight,
+            "streaming_tool_executor_circuit_breaker"
+        );
+        let mut completed = self.completed.lock().unwrap_or_else(|e| e.into_inner());
+        while let Some(call) = self.queue.pop_front() {
+            let id = call.call.id.clone();
+            if completed.iter().any(|(cid, r)| cid == &id && r.is_ok()) {
+                continue;
+            }
+            completed.push((
+                id,
+                Err(ToolError::Internal(
+                    "tool execution stalled — aborted by circuit breaker".into(),
+                )),
+            ));
+        }
+        Some(std::mem::take(&mut *completed))
+    }
+
     pub async fn get_remaining_results(
         &mut self,
     ) -> Vec<(String, Result<crate::ToolOutput, ToolError>)> {
@@ -363,29 +412,19 @@ impl StreamingToolExecutor {
         let mut prev_pending = usize::MAX;
         loop {
             if self.current_abort().is_aborted() {
-                for h in self.join_handles.drain(..) {
-                    h.abort();
-                }
-                self.flush_aborted_tools();
+                self.abort_in_flight();
                 break;
             }
 
             self.try_execute_queued();
-            let handles = std::mem::take(&mut self.join_handles);
-            let handle_count = handles.len();
+            let in_flight = self.join_handles.len();
 
             if self.current_abort().is_aborted() {
-                for h in handles {
-                    h.abort();
-                }
-                self.flush_aborted_tools();
+                self.abort_in_flight();
                 break;
             }
 
-            for h in handles {
-                let _ = h.await;
-            }
-            self.prune_finished_executing();
+            self.await_in_flight_handles().await;
 
             let pending = self.pending_count(0);
             if pending == 0 {
@@ -394,34 +433,9 @@ impl StreamingToolExecutor {
             if pending >= prev_pending {
                 stall_count += 1;
                 if stall_count > 10 {
-                    tracing::warn!(
-                        queued = self
-                            .queue
-                            .iter()
-                            .filter(|t| t.status == TrackedStatus::Queued)
-                            .count(),
-                        executing = self
-                            .queue
-                            .iter()
-                            .filter(|t| t.status == TrackedStatus::Executing)
-                            .count(),
-                        in_flight = handle_count,
-                        "streaming_tool_executor_circuit_breaker"
-                    );
-                    let mut completed = self.completed.lock().unwrap_or_else(|e| e.into_inner());
-                    while let Some(call) = self.queue.pop_front() {
-                        let id = call.call.id.clone();
-                        if completed.iter().any(|(cid, r)| cid == &id && r.is_ok()) {
-                            continue;
-                        }
-                        completed.push((
-                            id,
-                            Err(ToolError::Internal(
-                                "tool execution stalled — aborted by circuit breaker".into(),
-                            )),
-                        ));
+                    if let Some(broken) = self.circuit_break_stalled(in_flight) {
+                        return broken;
                     }
-                    return std::mem::take(&mut *completed);
                 }
             } else {
                 stall_count = 0;

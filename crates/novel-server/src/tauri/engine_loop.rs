@@ -2,7 +2,6 @@ use crate::AppConfig;
 use novel_config::ensure_work_under_works;
 use novel_core::{AbortController, AgentEngine, AgentError, EngineStatus, Event, TerminalReason};
 use novel_state::SessionTodo;
-use novel_tools::PermissionMode;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, RwLock};
 
@@ -112,16 +111,6 @@ fn build_app_status(engine: &AgentEngine, active_work_name: &str) -> AppStatus {
     }
 }
 
-fn parse_permission_mode(mode: &str) -> Result<PermissionMode, String> {
-    match mode {
-        "normal" => Ok(PermissionMode::Normal),
-        "plan" => Ok(PermissionMode::Plan),
-        "auto" => Ok(PermissionMode::Auto),
-        "unattended" => Ok(PermissionMode::Unattended),
-        other => Err(format!("invalid permission mode: {other}")),
-    }
-}
-
 pub fn spawn_engine_loop(
     engine: AgentEngine,
     mut cmd_rx: mpsc::UnboundedReceiver<EngineCommand>,
@@ -205,7 +194,7 @@ pub fn spawn_engine_loop(
                 }
                 EngineCommand::SetPermissionMode { mode, reply } => {
                     tracing::debug!(%mode, "engine_command SetPermissionMode");
-                    let result = parse_permission_mode(&mode).map(|parsed| {
+                    let result = super::session_api::parse_permission_mode(&mode).map(|parsed| {
                         engine.set_permission_mode_override(parsed);
                     });
                     let _ = reply.send(result);

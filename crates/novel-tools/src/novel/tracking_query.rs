@@ -145,61 +145,69 @@ impl Tool for TrackingQueryTool {
         let path = resolve_file_path(&file)?;
         let store = KnowledgeStore::new(&ctx.project_root);
         let content = store.read_file(path).unwrap_or_default();
-
-        let table_heading = match file.as_str() {
-            "scene" => "场景演变日志",
-            "prop" => "道具演变日志",
-            "faction" => "势力演变日志",
-            "timeline" => "时间线演变日志",
-            "power" => "战力演变日志",
-            "ability" => "功法演变日志",
-            _ => return Err(ToolError::Execution(format!("unknown file: {file}"))),
-        };
-
-        let rows = parse_table_rows(&content, table_heading);
-
-        let (entries, current_state) = match operation.as_str() {
-            "current" => {
-                let state = extract_current_state(&rows);
-                let entries = state
-                    .iter()
-                    .map(|r| TrackingEntry {
-                        chapter: format!("Ch{}", parse_chapter_num(r)),
-                        content: r.clone(),
-                    })
-                    .collect();
-                (entries, state)
-            }
-            "range" => {
-                let range = parse_chapter_range(&input).ok_or_else(|| {
-                    ToolError::Execution("chapter_range required for range operation".into())
-                })?;
-                (filter_by_chapter_range(&rows, range), None)
-            }
-            "search" => {
-                let keyword = require_str(&input, "keyword")?;
-                (search_rows(&rows, &keyword), None)
-            }
-            _ => {
-                return Err(ToolError::Execution(format!(
-                    "unknown operation: {operation}"
-                )))
-            }
-        };
-
-        let result = TrackingQueryResult {
-            file: file.to_string(),
-            operation: operation.to_string(),
-            entries,
-            current_state,
-        };
-
-        Ok(ToolOutput {
-            content: serde_json::to_string_pretty(&result)
-                .map_err(|e| ToolError::Internal(e.to_string()))?,
-            is_error: false,
-        })
+        run_tracking_query(&file, &operation, &content, &input)
     }
+}
+
+pub(crate) fn run_tracking_query(
+    file: &str,
+    operation: &str,
+    content: &str,
+    input: &Value,
+) -> Result<ToolOutput, ToolError> {
+    let table_heading = match file {
+        "scene" => "场景演变日志",
+        "prop" => "道具演变日志",
+        "faction" => "势力演变日志",
+        "timeline" => "时间线演变日志",
+        "power" => "战力演变日志",
+        "ability" => "功法演变日志",
+        _ => return Err(ToolError::Execution(format!("unknown file: {file}"))),
+    };
+
+    let rows = parse_table_rows(content, table_heading);
+
+    let (entries, current_state) = match operation {
+        "current" => {
+            let state = extract_current_state(&rows);
+            let entries = state
+                .iter()
+                .map(|r| TrackingEntry {
+                    chapter: format!("Ch{}", parse_chapter_num(r)),
+                    content: r.clone(),
+                })
+                .collect();
+            (entries, state)
+        }
+        "range" => {
+            let range = parse_chapter_range(input).ok_or_else(|| {
+                ToolError::Execution("chapter_range required for range operation".into())
+            })?;
+            (filter_by_chapter_range(&rows, range), None)
+        }
+        "search" => {
+            let keyword = require_str(input, "keyword")?;
+            (search_rows(&rows, &keyword), None)
+        }
+        _ => {
+            return Err(ToolError::Execution(format!(
+                "unknown operation: {operation}"
+            )))
+        }
+    };
+
+    let result = TrackingQueryResult {
+        file: file.to_string(),
+        operation: operation.to_string(),
+        entries,
+        current_state,
+    };
+
+    Ok(ToolOutput {
+        content: serde_json::to_string_pretty(&result)
+            .map_err(|e| ToolError::Internal(e.to_string()))?,
+        is_error: false,
+    })
 }
 
 #[cfg(test)]
@@ -301,6 +309,12 @@ mod tests {
         assert!(out.content.contains("结盟"));
         assert!(out.content.contains("背叛"));
         assert!(!out.content.contains("血月教"));
+    }
+
+    #[test]
+    fn run_tracking_query_unknown_operation() {
+        let err = run_tracking_query("scene", "nope", "", &json!({})).unwrap_err();
+        assert!(err.to_string().contains("unknown operation"));
     }
 
     #[tokio::test(flavor = "current_thread")]

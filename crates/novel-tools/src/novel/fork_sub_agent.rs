@@ -50,55 +50,62 @@ impl Tool for ForkSubAgentTool {
     }
 
     async fn call(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
-        if !ctx.allow_fork {
-            return Err(ToolError::PermissionDenied(
-                "子 Agent 禁止嵌套 fork。子 Agent 共用父 system prompt，仅通过 task_message 注入指令。"
-                    .into(),
-            ));
-        }
-        let agent_type = require_str(&input, "agent_type")?;
-        if !VALID_AGENT_TYPES.contains(&agent_type.as_str()) {
-            return Err(ToolError::Validation(ValidationError::InvalidField(
-                format!("agent_type: {agent_type}"),
-            )));
-        }
-        let task_raw = require_str(&input, "task")?;
-        let task = task_raw.trim();
-        if task.is_empty() {
-            return Err(ToolError::Validation(ValidationError::MissingField(
-                "task".into(),
-            )));
-        }
-        let parent_tool_call_id = ctx
-            .current_tool_call_id
-            .clone()
-            .ok_or_else(|| ToolError::Internal("fork queue missing tool_call_id".into()))?;
-        let queue = ctx
-            .subagent_queue
-            .as_ref()
-            .ok_or_else(|| ToolError::Internal("subagent queue not configured on engine".into()))?;
-        let mut guard = queue
-            .lock()
-            .map_err(|_| ToolError::Internal("subagent queue lock poisoned".into()))?;
-        let agent_label = agent_type.clone();
-        guard.push(crate::PendingSubagentWork {
-            agent_type,
-            task: task.to_string(),
-            parent_tool_call_id: Some(parent_tool_call_id),
-        });
-        let label = input
-            .get("description")
-            .and_then(|v| v.as_str())
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .unwrap_or("custom subagent");
-        Ok(ToolOutput {
-            content: format!(
-                "已启动 {agent_label}（{label}）。主会话将等待本批 Subagent 全部完成并注入报告后再继续；子 Agent 不可再 fork。"
-            ),
-            is_error: false,
-        })
+        enqueue_fork_subagent(&input, ctx)
     }
+}
+
+pub(crate) fn enqueue_fork_subagent(
+    input: &Value,
+    ctx: &ToolContext,
+) -> Result<ToolOutput, ToolError> {
+    if !ctx.allow_fork {
+        return Err(ToolError::PermissionDenied(
+            "子 Agent 禁止嵌套 fork。子 Agent 共用父 system prompt，仅通过 task_message 注入指令。"
+                .into(),
+        ));
+    }
+    let agent_type = require_str(input, "agent_type")?;
+    if !VALID_AGENT_TYPES.contains(&agent_type.as_str()) {
+        return Err(ToolError::Validation(ValidationError::InvalidField(
+            format!("agent_type: {agent_type}"),
+        )));
+    }
+    let task_raw = require_str(input, "task")?;
+    let task = task_raw.trim();
+    if task.is_empty() {
+        return Err(ToolError::Validation(ValidationError::MissingField(
+            "task".into(),
+        )));
+    }
+    let parent_tool_call_id = ctx
+        .current_tool_call_id
+        .clone()
+        .ok_or_else(|| ToolError::Internal("fork queue missing tool_call_id".into()))?;
+    let queue = ctx
+        .subagent_queue
+        .as_ref()
+        .ok_or_else(|| ToolError::Internal("subagent queue not configured on engine".into()))?;
+    let mut guard = queue
+        .lock()
+        .map_err(|_| ToolError::Internal("subagent queue lock poisoned".into()))?;
+    let agent_label = agent_type.clone();
+    guard.push(crate::PendingSubagentWork {
+        agent_type,
+        task: task.to_string(),
+        parent_tool_call_id: Some(parent_tool_call_id),
+    });
+    let label = input
+        .get("description")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("custom subagent");
+    Ok(ToolOutput {
+        content: format!(
+            "已启动 {agent_label}（{label}）。主会话将等待本批 Subagent 全部完成并注入报告后再继续；子 Agent 不可再 fork。"
+        ),
+        is_error: false,
+    })
 }
 
 #[cfg(test)]
@@ -146,6 +153,25 @@ mod tests {
         assert_eq!(guard.len(), 1);
         assert_eq!(guard[0].agent_type, "KnowledgeAuditor");
         assert_eq!(guard[0].parent_tool_call_id.as_deref(), Some("tc-1"));
+    }
+
+    #[test]
+    fn rejects_empty_task() {
+        let tmp = std::path::PathBuf::from(".");
+        let queue = Arc::new(Mutex::new(Vec::new()));
+        let ctx = ToolContext {
+            permission_mode: PermissionMode::Auto,
+            allow_fork: true,
+            subagent_queue: Some(Arc::clone(&queue)),
+            current_tool_call_id: Some("tc-1".into()),
+            ..ToolContext::new(tmp)
+        };
+        let err = enqueue_fork_subagent(
+            &json!({"agent_type": "KnowledgeAuditor", "task": "   "}),
+            &ctx,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("task"));
     }
 
     #[tokio::test(flavor = "current_thread")]
