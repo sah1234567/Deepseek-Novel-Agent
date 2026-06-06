@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { MessageBody } from "./MessageBody";
 import { agentLabelFromType } from "../../fork";
 import "./SubAgentForkCard.css";
@@ -25,27 +24,19 @@ export function SubAgentForkCard({
   onEnter,
   enterDisabled = false,
   enterHint,
-  mode = "tool",
 }: SubAgentForkCardProps) {
-  const [reportOpen, setReportOpen] = useState(false);
   const label = agentLabelFromType(agentType);
-  const displayName = mode === "tool" ? "ForkSubAgent" : label;
-  const statusIcon = status === "running" ? "◌" : "✓";
-  const statusClass = status === "running" ? "running" : "done";
+  const isRunning = status === "running";
   const hasReport = !!reportContent?.trim();
 
   return (
-    <article className={`sub-agent-fork-card sub-agent-fork-${statusClass}`}>
+    <article
+      className={`message message-assistant sub-agent-fork-card${isRunning ? " message-streaming" : ""}`}
+    >
       <header className="sub-agent-fork-header">
-        <span className={`sub-agent-fork-status-icon sub-agent-fork-${statusClass}`}>
-          {statusIcon}
-        </span>
-        <strong className="sub-agent-fork-name">{displayName}</strong>
-        <span className="sub-agent-fork-summary">
-          {mode === "tool" ? label : ""}
-          {summary ? `${mode === "tool" ? " · " : ""}${summary}` : ""}
-        </span>
-        {status === "running" && <span className="sub-agent-fork-badge">运行中</span>}
+        <span>Subagent · {label}</span>
+        {isRunning && <span className="streaming-dot" aria-hidden />}
+        {isRunning && <span className="sub-agent-fork-badge">运行中</span>}
         <button
           type="button"
           className="sub-agent-fork-enter"
@@ -57,22 +48,16 @@ export function SubAgentForkCard({
         </button>
       </header>
 
-      {hasReport && (
-        <>
-          <button
-            type="button"
-            className="sub-agent-fork-expand"
-            onClick={() => setReportOpen((v) => !v)}
-          >
-            {reportOpen ? "收起返回内容" : "查看返回内容"}
-          </button>
-          {reportOpen && (
-            <div className="sub-agent-fork-report">
-              <MessageBody blocks={[{ blockIndex: 0, kind: "text", text: reportContent! }]} />
-            </div>
-          )}
-        </>
-      )}
+      <div className="message-body">
+        {summary.trim() && <p className="sub-agent-fork-summary">{summary}</p>}
+
+        {hasReport && (
+          <details className="thinking-stream">
+            <summary>返回内容</summary>
+            <MessageBody blocks={[{ blockIndex: 0, kind: "text", text: reportContent! }]} />
+          </details>
+        )}
+      </div>
     </article>
   );
 }

@@ -1,13 +1,16 @@
 /// Static + dynamic system prompt assembly.
-/// Prompt text loaded from `prompt/system.md` at compile time via `include_str!`.
+/// Prompt text loaded from `prompt/system.md` and `prompt/autonomous-writing.md`
+/// at compile time via `include_str!`.
 pub struct StaticPrompt {
     pub body: String,
+    pub autonomous_body: String,
 }
 
 impl Default for StaticPrompt {
     fn default() -> Self {
         Self {
             body: include_str!("../../../prompt/system.md").into(),
+            autonomous_body: include_str!("../../../prompt/autonomous-writing.md").into(),
         }
     }
 }
@@ -34,8 +37,13 @@ impl SystemPromptBuilder {
         }
     }
 
-    pub fn build(&self, dynamic: &DynamicContext) -> String {
+    /// Build the full system prompt. When `is_unattended` is true, the autonomous
+    /// writing mode instructions are appended after the static system.md body.
+    pub fn build(&self, dynamic: &DynamicContext, is_unattended: bool) -> String {
         let mut parts = vec![self.static_layer.body.clone()];
+        if is_unattended {
+            parts.push(self.static_layer.autonomous_body.clone());
+        }
         if !dynamic.agents_md.is_empty() {
             parts.push(format!("## AGENTS.md\n{}", dynamic.agents_md));
         }
@@ -68,15 +76,19 @@ impl SystemPromptBuilder {
     }
 
     /// Static-only system prompt (AGENTS + Workspace frozen; other sections empty).
+    /// Autonomous mode is not included — this is used for hash computation, not agent context.
     pub fn build_static_only(&self, dynamic: &DynamicContext) -> String {
-        self.build(&DynamicContext {
-            agents_md: dynamic.agents_md.clone(),
-            knowledge_index: String::new(),
-            memory: String::new(),
-            progress: String::new(),
-            skill_summaries: Vec::new(),
-            workspace_path: dynamic.workspace_path.clone(),
-        })
+        self.build(
+            &DynamicContext {
+                agents_md: dynamic.agents_md.clone(),
+                knowledge_index: String::new(),
+                memory: String::new(),
+                progress: String::new(),
+                skill_summaries: Vec::new(),
+                workspace_path: dynamic.workspace_path.clone(),
+            },
+            false,
+        )
     }
 }
 
@@ -102,7 +114,7 @@ mod tests {
     #[test]
     fn static_prompt_loaded() {
         let b = SystemPromptBuilder::new();
-        let prompt = b.build(&DynamicContext::default());
+        let prompt = b.build(&DynamicContext::default(), false);
         assert!(prompt.contains("小说创作 Agent"));
         assert!(prompt.contains("题材可选文件"));
     }
@@ -110,29 +122,46 @@ mod tests {
     #[test]
     fn dynamic_sections_appended() {
         let b = SystemPromptBuilder::new();
-        let prompt = b.build(&DynamicContext {
-            knowledge_index: "林若烟 Ch31".into(),
-            ..Default::default()
-        });
+        let prompt = b.build(
+            &DynamicContext {
+                knowledge_index: "林若烟 Ch31".into(),
+                ..Default::default()
+            },
+            false,
+        );
         assert!(prompt.contains("林若烟 Ch31"));
     }
 
     #[test]
     fn skill_summaries_render_merged_description() {
         let b = SystemPromptBuilder::new();
-        let prompt = b.build(&DynamicContext {
-            skill_summaries: vec![
-                ("xianxia".into(), "仙侠规范".into()),
-                (
-                    "post-change".into(),
-                    "修改后清单 - 代码改动完成后执行".into(),
-                ),
-            ],
-            ..Default::default()
-        });
+        let prompt = b.build(
+            &DynamicContext {
+                skill_summaries: vec![
+                    ("xianxia".into(), "仙侠规范".into()),
+                    (
+                        "post-change".into(),
+                        "修改后清单 - 代码改动完成后执行".into(),
+                    ),
+                ],
+                ..Default::default()
+            },
+            false,
+        );
         assert!(prompt.contains("## Skills"));
         assert!(prompt.contains("- xianxia: 仙侠规范"));
         assert!(prompt.contains("- post-change: 修改后清单 - 代码改动完成后执行"));
+    }
+
+    #[test]
+    fn autonomous_prompt_injected_when_unattended() {
+        let b = SystemPromptBuilder::new();
+        let unattended = b.build(&DynamicContext::default(), true);
+        assert!(unattended.contains("自主连续写作模式"));
+        assert!(unattended.contains("审计降频"));
+
+        let normal = b.build(&DynamicContext::default(), false);
+        assert!(!normal.contains("自主连续写作模式"));
     }
 
     #[test]

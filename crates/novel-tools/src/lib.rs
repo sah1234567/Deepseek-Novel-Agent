@@ -22,7 +22,7 @@ mod tests_extra;
 
 pub use abort::{abort_channel, AbortSignal, AbortWatch, InterruptBehavior, REJECT_MESSAGE};
 pub use blocking::{create_dir_all, read_to_string, run_blocking, write};
-pub use builtin::AskUserQuestionPayload;
+pub use builtin::{AskQuestion, AskUserQuestionPayload};
 pub use context::{
     PendingSubagentWork, PermissionMode, PermissionResult, SubagentWorkQueue, ToolContext,
 };

@@ -34,7 +34,7 @@
 
 | 路径 | 说明 |
 |------|------|
-| [prompt/](../prompt/) | System / 子 Agent 提示词（`include_str!` 嵌入）；含 `agents/general_purpose.md`、`compaction-summary-trailing.md`（压缩摘要 trailing user） |
+| [prompt/](../prompt/) | System / 子 Agent 提示词（`include_str!` 嵌入）；含 `agents/plan-auditor.md`、`knowledge-auditor.md`、`chapter-craft-analyzer.md`、`general_purpose.md`、`compaction-summary-trailing.md` |
 | [skills/](../skills/) | Workflow + 流派 Skill（Agent 级；`works/{名}/skills/` 可覆盖同 id） |
 | [templates/](../templates/) | 新建作品脚手架 Markdown（运行时读盘，必填） |
 | [works/](../works/) | 用户作品实例（gitignore） |
@@ -56,7 +56,7 @@ Claude Code 文件夹格式：`skills/<id>/SKILL.md` + 可选 `references/`。
 |------|------|
 | 创作顺序（大纲→细纲→正文） | `prompt/system.md` §1 |
 | **读盘经济**（Grep 优先、分段 Read） | `prompt/system.md` §2.3、§5.1 |
-| 写后 **2 项 Subagent** 并行 Fork | `prompt/system.md` §1.2、§3.2 |
+| 细纲后 **PlanAuditor**；正文后 **2 项 Subagent** 并行 Fork | `prompt/system.md` §1.2、§3.2 |
 | 权限四模式 | `prompt/system.md` §2.1 |
 
 引擎仅 enforce sandbox、Plan 路径、嵌套 fork 等；写后审计顺序由 prompt 约束，非 Rust 硬编码。
@@ -66,18 +66,20 @@ Claude Code 文件夹格式：`skills/<id>/SKILL.md` + 可选 `references/`。
 | 功能 | 说明 |
 |------|------|
 | StatusBar 作品 | `list_works` 下拉 + 新建作品；切换作品会 **新建 session**（不自动恢复上次会话） |
-| StatusBar 会话 | `list_sessions` 下拉 + `resume_session` 切换；`+` → `create_session`；标签显示 **对话轮数** + **最后 LLM 活跃时间** |
-| StatusBar Todo | TodoWrite 持久化项的下拉列表（非独立 TodoPanel）；全部 completed/cancelled 后自动隐藏 |
-| StatusBar Token | 本轮三分类 + 会话累计 + 当前上下文；`get_app_status` 5s 轮询 + `turn-complete` 刷新 |
+| StatusBar 会话 | `list_sessions` 下拉 + `resume_session` 切换；`+` → `create_session`；标签显示 **对话轮数** + **最后 LLM 活跃时间**；流式中（`isStreaming`）禁用切换 |
+| StatusBar Todo | **按钮常驻**（StatusBar 最左）；`TodoWrite` → DB → `get_app_status.todos`；下拉按 **进行中 / 未进行 / 已完成** 分组；空列表显示「暂无待办事项」；`update_session_todo` 点击循环状态；未完成数 **0→>0** 时自动展开；**工具 result 后即时 refresh** |
+| StatusBar Token | 会话累计三分类 + 当前上下文；**30s** 轮询 `get_app_status` + `turn-complete` / `session-resumed` / `permission-mode-changed` / `tool-call-request`(result) 全量 refresh；`session-tokens-updated` 局部 patch token 字段 |
 | 设置 · 会话列表 | 同 `list_sessions`；元数据含 **对话 N 轮 · API M 次** |
-| 权限 / 模型 | normal / plan / auto / unattended；flash/pro 切换；**turn 进行中禁用** |
+| 权限 / 模型 | ChatPanel 底栏：normal / plan / auto / unattended；flash/pro；**turn 进行中禁用** |
+| **聊天区布局** | Agent/用户/Subagent 全宽 `message`；问答全宽卡片；普通工具 `message-tool` + `ToolUseCard`；`word-break` 边界换行 |
+| **Turn 折叠 + Sticky** | 最后一轮 `transcript-turn-anchor` 最小高度 = 视口；用户提问滚出上方时 **sticky-prompt-header**；点击滚回本轮起点 |
 | **Transcript FSM** | `ui/src/transcript/`：`dispatchTranscriptEvent` 管理 Turn / LlmSegment / openSegment；Tauri 事件经 `mapEvents` 适配 |
-| **SegmentGroup 渲染** | `TranscriptView` 唯一入口；`segmentRender.tsx` 成组 Agent + Tool 气泡；主聊天、AskUserQuestion、SubAgent overlay 共用 |
-| **SubAgentForkCard** | ForkSubAgent 工具卡与 Hook 卡；**进入** 打开 `SubAgentOverlay`（`TranscriptView mode=fork`） |
-| 流式 Tool | `ToolCall.status=streaming-args` 流式累积参数；`ToolUseCard` 显示 pending / running / done |
-| AskUserQuestion | 问答面板插在 `pauseAfterSegmentId` 对应段的全部 tools 之后 |
+| **SegmentGroup 渲染** | `TranscriptView` 唯一入口；`segmentRender.tsx` 成组 Agent + Tool；主聊天、AskUserQuestion、SubAgent overlay 共用 |
+| **SubAgentForkCard** | tool 路径：段内 `ForkSubAgent`；hook 路径：`HookForkCards` 列在滚动区底部。与 Agent 同构（`Subagent · {类型}`）；**进入** → `SubAgentOverlay`（`mode=fork`，含 `forkRuns` 与 approve/deny） |
+| 流式 Tool | `ToolUseCard`（虚线内卡）显示 pending / running / done；`ForkSubAgent` 走 `SubAgentForkCard` 而非 `ToolUseCard` |
+| AskUserQuestion | 全宽卡片；插在 `pauseAfterSegmentId` 段 tools 之后；事件 payload `allowMultiple` / `allowCustom`（camelCase） |
 | **CompactionDivider / ContextRefreshBubble** | archive 区分隔线；`[上下文刷新]` 单气泡（Skill + 摘要两节） |
-| 压缩进度 | `compaction-progress` → **CompactionBanner**（ChatPanel viewport 顶部，已接入） |
+| 压缩进度 | `compaction-progress` → **CompactionBanner**（`dialog-viewport` 顶部） |
 
 **会话术语：** 见 [novel-state §1.4](crates/novel-state.md#14-sessionsummary)（`total_turns` vs `api_call_count` vs `context_tokens` vs `last_active_at`）。
 
@@ -86,7 +88,8 @@ Claude Code 文件夹格式：`skills/<id>/SKILL.md` + 可选 `references/`。
 | 模式 | 触发 | 典型场景 |
 |------|------|----------|
 | Workflow Skill | InvokeSkill | 策划、写章、改稿、写后收尾 |
-| 检查 Subagent | ForkSubAgent（同批 2 项写后必做） | 知识库审计（KnowledgeAuditor）、章节技艺分析（ChapterCraftAnalyzer） |
+| 计划审计 Subagent | ForkSubAgent（细纲 + 追踪文件更新后） | PlanAuditor（大纲对齐、伏笔密度、因果闭合等） |
+| 写后检查 Subagent | ForkSubAgent（正文写后同批 2 项） | KnowledgeAuditor（执行忠实度）、ChapterCraftAnalyzer（文笔 + 设定一致性） |
 | GeneralPurpose | ForkSubAgent，task = 完整 prompt | 一次性自定义任务 |
 
 主 LLM 仅见工具路径的一条 `[子 Agent 完成: …]` 摘要；完整 transcript 在 `fork_messages` + overlay。Hook 路径（KnowledgeAuditor）**不 inject** 主会话。
@@ -95,9 +98,12 @@ Claude Code 文件夹格式：`skills/<id>/SKILL.md` + 可选 `references/`。
 
 ```
 start → input_delta → input_complete → (pending | running) → progress/result
+  result 阶段仅含 toolCallId + content（无 toolName）→ useAppStatus 在 result 时 refresh（含 todos）
 assistant-segment-complete → 主聊天或 fork overlay 分段 finalize
-turn-complete → StatusBar token refresh；若 pending 工具/问答则前端不 hydrate
-session-resumed / turn-complete → useAgent hydrate（get_session_transcript）
+ask-user-question → questions[] 含 allowMultiple / allowCustom（camelCase）
+turn-complete → useAppStatus 全量 refresh；useAgent 若 pending 工具/问答则跳过 hydrate
+session-tokens-updated → useAppStatus 局部 patch token（非全量 get_app_status）
+session-resumed / turn-complete（无 pending）→ useAgent hydrate（get_session_transcript）
 ```
 
 详见 [novel-server §1.9](crates/novel-server.md#19-前端事件eventsrs) 与 [novel-core §1.10](crates/novel-core.md#110-流式-tool-调度streamingtooldispatch)。

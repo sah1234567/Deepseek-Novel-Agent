@@ -10,9 +10,20 @@ import "./ChatPanel.css";
 interface SubAgentOverlayProps {
   forkRun: ForkRunState | undefined;
   onClose: () => void;
+  forkRuns: Map<string, ForkRunState>;
+  onApproveTool?: (id: string) => void;
+  onDenyTool?: (id: string, reason?: string) => void;
+  onOpenForkOverlay?: (forkRunId: string) => void;
 }
 
-export function SubAgentOverlay({ forkRun, onClose }: SubAgentOverlayProps) {
+export function SubAgentOverlay({
+  forkRun,
+  onClose,
+  forkRuns,
+  onApproveTool,
+  onDenyTool,
+  onOpenForkOverlay,
+}: SubAgentOverlayProps) {
   if (!forkRun) return null;
 
   const flatMessages = flatMessagesFromMachine(forkRun.machine);
@@ -48,6 +59,10 @@ export function SubAgentOverlay({ forkRun, onClose }: SubAgentOverlayProps) {
           machine={forkRun.machine}
           mode="fork"
           flatMessages={flatMessages}
+          forkRuns={forkRuns}
+          onApproveTool={onApproveTool}
+          onDenyTool={onDenyTool}
+          onOpenForkOverlay={onOpenForkOverlay}
           isStreaming={forkRun.status === "running"}
         />
       </ScrollViewport>

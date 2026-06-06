@@ -29,6 +29,23 @@
   flex-direction: column;
   gap: 0.75rem;
   min-width: 0;
+  box-sizing: border-box;
+}
+
+.message-list.message-list--sticky-active {
+  padding-top: 0;
+}
+
+.transcript-turn,
+.segment-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.transcript-turn-anchor {
+  flex-shrink: 0;
 }
 
 .placeholder {
@@ -38,24 +55,57 @@
 }
 
 .message {
+  align-self: stretch;
+  width: 100%;
+  box-sizing: border-box;
   border-radius: 8px;
   padding: 0.75rem 1rem;
-  max-width: 85%;
   min-width: 0;
+  max-width: 100%;
   overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .message-user {
-  align-self: flex-end;
   background: var(--color-accent);
   color: #fff;
 }
 
 .message-assistant,
-.message-tool {
-  align-self: flex-start;
+.message-tool,
+.sub-agent-fork-card {
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-border);
+}
+
+.message-body,
+.message-body .markdown-body,
+.message-body .markdown-body p,
+.message-body .markdown-body li,
+.streaming-text,
+.streaming-text .markdown-body,
+.streaming-text p,
+.thinking-stream .markdown-body,
+.thinking-stream p,
+.tool-detail,
+.question-prompt,
+.sub-agent-fork-summary {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.message-body .markdown-body pre {
+  max-width: 100%;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.message-body .markdown-body pre code {
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .message header {
@@ -139,11 +189,17 @@
 
 .ask-user-question {
   align-self: stretch;
+  width: 100%;
+  box-sizing: border-box;
   background: #1c2128;
   border: 1px solid var(--color-accent-blue);
   border-radius: 10px;
   padding: 1rem;
   animation: ask-slide-up 0.3s ease-out;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 @keyframes ask-slide-up {

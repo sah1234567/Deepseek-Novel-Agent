@@ -435,22 +435,25 @@ impl AgentEngine {
 
     fn build_initial_prompt(
         config: &EngineConfig,
-        _settings: &ProjectSettings,
+        settings: &ProjectSettings,
         session: &SessionHandle,
     ) -> Result<(String, String, DynamicContext), AgentError> {
         let store = KnowledgeStore::new(&config.project_root);
         let agents = store
             .read_file("AGENTS.md")
             .unwrap_or_else(|_| "默认：第三人称限知，2000-3000字/章".into());
-        let (prompt, dynamic) = Self::assemble_system_prompt(config, session, &agents)?;
+        let (prompt, dynamic) =
+            Self::assemble_system_prompt(config, session, &agents, &settings.permissions.mode)?;
         Ok((prompt, agents, dynamic))
     }
 
     /// Build system prompt from fresh dynamic context (Progress, Memory, INDEX, Skills).
+    /// `permission_mode`: settings `mode` string — "unattended" enables autonomous writing prompt.
     pub fn assemble_system_prompt(
         config: &EngineConfig,
         session: &SessionHandle,
         agents_md: &str,
+        permission_mode: &str,
     ) -> Result<(String, DynamicContext), AgentError> {
         let dynamic = build_dynamic_context(
             &config.project_root,
@@ -459,7 +462,8 @@ impl AgentEngine {
             agents_md,
             &config.skills_dir,
         );
-        let prompt = SystemPromptBuilder::new().build(&dynamic);
+        let is_unattended = permission_mode == "unattended";
+        let prompt = SystemPromptBuilder::new().build(&dynamic, is_unattended);
         Ok((prompt, dynamic))
     }
 
@@ -475,7 +479,13 @@ impl AgentEngine {
             &self.shared.agent_skills_dir,
             &frozen,
         );
-        let prompt = SystemPromptBuilder::new().build(&ctx);
+        let is_unattended = self
+            .shared
+            .permission_mode_override
+            .lock()
+            .map(|g| matches!(*g, PermissionMode::Unattended))
+            .unwrap_or(false);
+        let prompt = SystemPromptBuilder::new().build(&ctx, is_unattended);
         self.shared.system_prompt = prompt.clone();
         if let Some(m0) = self.messages.first_mut() {
             if m0.role == "system" {

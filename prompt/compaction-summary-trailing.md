@@ -8,6 +8,12 @@
 ## 情节与正文
 已写章节的关键事件、章末钩子、未回收伏笔
 
+## 上一章衔接锚点
+**上一章正文的末 3 句原文 + 钩子**（必须从原文中引用，不摘要）。如已有下一章细纲：列出各场景的核心动作（≤50字/场景）
+
+## 活跃伏笔
+未来 5 章内待回收/推进的伏笔 ID 与一句话描述（从 ForeshadowTracker 结果中提取）
+
 ## 设定与知识库
 世界观/人物/关系/功法等变更；已更新或读取的 knowledge/ 路径
 
@@ -15,12 +21,13 @@
 重要的 Write/Edit/Read/InvokeSkill/ForkSubAgent 及结果（一句话/条）
 
 ## 作者意图与待办
-用户明确要求、待确认项、进行中的 Todo
+用户明确要求、待确认项、进行中的 TodoWrite
 
 ## 子 Agent 结论
-KnowledgeAuditor / ChapterCraftAnalyzer / GeneralPurpose subagent 报告要点（若有）
+KnowledgeAuditor / ChapterCraftAnalyzer / PlanAuditor / GeneralPurpose subagent 报告要点（若有）
 
 输出要求：
 - 只输出摘要正文（Markdown），不要前言或「以下是摘要」类套话
 - 使用简体中文，保留章节号、人物名、文件路径等可操作细节
+- ★ 「上一章衔接锚点」中的原文引用必须准确，这是压缩后恢复写作的关键信息
 - 总长度控制在10000字左右，在保留可操作细节的前提下尽量精炼

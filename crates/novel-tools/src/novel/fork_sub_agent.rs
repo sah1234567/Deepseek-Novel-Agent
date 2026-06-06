@@ -4,7 +4,12 @@ use serde_json::{json, Value};
 
 pub struct ForkSubAgentTool;
 
-const VALID_AGENT_TYPES: &[&str] = &["KnowledgeAuditor", "ChapterCraftAnalyzer", "GeneralPurpose"];
+const VALID_AGENT_TYPES: &[&str] = &[
+    "PlanAuditor",
+    "KnowledgeAuditor",
+    "ChapterCraftAnalyzer",
+    "GeneralPurpose",
+];
 
 #[async_trait]
 impl Tool for ForkSubAgentTool {
@@ -19,8 +24,8 @@ impl Tool for ForkSubAgentTool {
     }
 
     fn usage_hint(&self) -> &str {
-        "Main session only. After each chapter Write (same message, parallel): KnowledgeAuditor + ChapterCraftAnalyzer. \
-         Parallel: send all ForkSubAgent tool calls in one assistant message."
+        "After each 细纲 Write: PlanAuditor. After each chapter Write: KnowledgeAuditor + ChapterCraftAnalyzer (same message, parallel). \
+         All subagents in one assistant message run in parallel."
     }
 
     fn input_schema(&self) -> Value {

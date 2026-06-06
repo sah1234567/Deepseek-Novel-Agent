@@ -1,7 +1,9 @@
 import {
+  forwardRef,
   ReactNode,
   useCallback,
   useEffect,
+  useImperativeHandle,
   useRef,
   useState,
   type UIEvent,
@@ -20,30 +22,34 @@ function isNearTop(el: HTMLElement, threshold = NEAR_EDGE_PX) {
   return el.scrollTop <= threshold;
 }
 
-export function ScrollViewport({
-  children,
-  className,
-  autoScrollDeps = [],
-  autoScrollTo = "none",
-  resetScrollKey,
-  initialScrollTop = 0,
-  overlayActive = false,
-  onScrollPositionChange,
-}: {
-  children: ReactNode;
-  className?: string;
-  /** When these values change, auto-scroll if the user was already near the edge. */
-  autoScrollDeps?: unknown[];
-  autoScrollTo?: "bottom" | "none";
-  /** When this value changes, restore scroll to `initialScrollTop` (e.g. opened another file). */
-  resetScrollKey?: unknown;
-  /** Scroll position to restore when `resetScrollKey` changes. */
-  initialScrollTop?: number;
-  /** While true, freeze auto-scroll and restore prior position when it becomes false. */
-  overlayActive?: boolean;
-  onScrollPositionChange?: (scrollTop: number) => void;
-}) {
+export const ScrollViewport = forwardRef(function ScrollViewport(
+  {
+    children,
+    className,
+    autoScrollDeps = [],
+    autoScrollTo = "none",
+    resetScrollKey,
+    initialScrollTop = 0,
+    overlayActive = false,
+    onScrollPositionChange,
+  }: {
+    children: ReactNode;
+    className?: string;
+    /** When these values change, auto-scroll if the user was already near the edge. */
+    autoScrollDeps?: unknown[];
+    autoScrollTo?: "bottom" | "none";
+    /** When this value changes, restore scroll to `initialScrollTop` (e.g. opened another file). */
+    resetScrollKey?: unknown;
+    /** Scroll position to restore when `resetScrollKey` changes. */
+    initialScrollTop?: number;
+    /** While true, freeze auto-scroll and restore prior position when it becomes false. */
+    overlayActive?: boolean;
+    onScrollPositionChange?: (scrollTop: number) => void;
+  },
+  ref: React.ForwardedRef<HTMLDivElement>,
+) {
   const viewportRef = useRef<HTMLDivElement>(null);
+  useImperativeHandle(ref, () => viewportRef.current);
   const holdTimerRef = useRef<number | null>(null);
   const pinnedToBottomRef = useRef(autoScrollTo === "bottom");
   const savedScrollRef = useRef<{ scrollTop: number; pinnedToBottom: boolean } | null>(null);
@@ -211,4 +217,6 @@ export function ScrollViewport({
       )}
     </div>
   );
-}
+});
+
+ScrollViewport.displayName = "ScrollViewport";

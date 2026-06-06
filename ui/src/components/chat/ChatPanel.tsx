@@ -1,8 +1,9 @@
-import { FormEvent, useCallback, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ForkRunState, PendingQuestion } from "../../hooks/useAgent";
 import { useAgentContext } from "../../context/AgentContext";
 import { APP_DISPLAY_NAME } from "../../constants/app";
 import { isSyntheticUser } from "../../transcript";
+import { isContextRefreshUser } from "../../transcript/types";
 import { ScrollViewport } from "../layout/ScrollViewport";
 import { FilePreviewOverlay, type FilePreviewState } from "./FilePreviewOverlay";
 import { TranscriptView } from "./TranscriptView";
@@ -10,7 +11,7 @@ import { CompactionBanner } from "./CompactionBanner";
 import { useCompactionProgress } from "../../hooks/useCompactionProgress";
 import { SubAgentOverlay } from "./SubAgentOverlay";
 import { SubAgentForkCard } from "./SubAgentForkCard";
-import { agentLabelFromType, listHookForkRuns } from "../../fork";
+import { listHookForkRuns } from "../../fork";
 import "./ChatPanel.css";
 import "./DialogOverlays.css";
 import "./SubAgentForkCard.css";
@@ -109,17 +110,15 @@ function HookForkCards({
   return (
     <>
       {hookRuns.map((run) => (
-        <article key={run.forkRunId} className="message message-tool">
-          <header>Subagent · {agentLabelFromType(run.agentType)}</header>
-          <SubAgentForkCard
-            mode="hook"
-            agentType={run.agentType}
-            summary={run.taskPreview}
-            status={run.status === "running" ? "running" : "complete"}
-            reportContent={run.reportOutput}
-            onEnter={() => void openForkOverlay(run.forkRunId)}
-          />
-        </article>
+        <SubAgentForkCard
+          key={run.forkRunId}
+          mode="hook"
+          agentType={run.agentType}
+          summary={run.taskPreview}
+          status={run.status === "running" ? "running" : "complete"}
+          reportContent={run.reportOutput}
+          onEnter={() => void openForkOverlay(run.forkRunId)}
+        />
       ))}
     </>
   );
@@ -168,38 +167,105 @@ export function ChatPanel({
   const compaction = useCompactionProgress();
   const [input, setInput] = useState("");
   const [stickyPrompt, setStickyPrompt] = useState<string | null>(null);
+  const [stickyDismissed, setStickyDismissed] = useState(false);
+  const [userAnchorVersion, setUserAnchorVersion] = useState(0);
+  const scrollViewportRef = useRef<HTMLDivElement>(null);
+  const turnAnchorRef = useRef<HTMLDivElement>(null);
   const userMsgRef = useRef<HTMLElement | null>(null);
-
 
   const lastUserMsg = [...transcriptMachine.context.turns]
     .reverse()
-    .find((t) => !isSyntheticUser(t.user))?.user;
-  const lastUserMsgText =
-    lastUserMsg?.contentBlocks?.[0]?.text?.slice(0, 200) ?? "";
+    .find((t) => !isSyntheticUser(t.user) && !isContextRefreshUser(t.user))?.user;
+  const lastUserMsgText = (() => {
+    const raw = lastUserMsg?.contentBlocks?.[0]?.text ?? "";
+    const trimmed = raw.trimStart();
+    const paraEnd = trimmed.search(/\n\s*\n/);
+    const collapsed =
+      paraEnd >= 0 ? trimmed.slice(0, paraEnd) : trimmed;
+    return collapsed.slice(0, 200).replace(/\s+/g, " ").trim();
+  })();
 
-  const onScrollPosition = useCallback(
-    (scrollTop: number) => {
-      const el = userMsgRef.current;
-      if (!el) return;
-      if (scrollTop > el.offsetTop + el.offsetHeight + 8) {
-        if (!stickyPrompt) setStickyPrompt(lastUserMsgText);
-      } else {
-        if (stickyPrompt) setStickyPrompt(null);
+  useLayoutEffect(() => {
+    const viewport = scrollViewportRef.current;
+    const anchor = turnAnchorRef.current;
+    if (!viewport || !anchor) {
+      anchor?.style.removeProperty("min-height");
+      return;
+    }
+    const applyMinHeight = () => {
+      anchor.style.minHeight = `${viewport.clientHeight}px`;
+    };
+    applyMinHeight();
+    const observer = new ResizeObserver(applyMinHeight);
+    observer.observe(viewport);
+    return () => {
+      observer.disconnect();
+      anchor?.style.removeProperty("min-height");
+    };
+  }, [transcriptMachine, archivedEpochs, pendingQuestion, forkRuns]);
+
+  useLayoutEffect(() => {
+    setStickyDismissed(false);
+  }, [lastUserMsg]);
+
+  useEffect(() => {
+    const root = scrollViewportRef.current;
+    const target = userMsgRef.current;
+    if (!root || !target || !lastUserMsgText) {
+      setStickyPrompt(null);
+      return;
+    }
+
+    const updateSticky = () => {
+      const rootRect = root.getBoundingClientRect();
+      const targetRect = target.getBoundingClientRect();
+      // User bubble fully scrolled above the viewport — show sticky even when pinned to bottom.
+      const scrolledPast = targetRect.bottom < rootRect.top + 4;
+      const userVisible =
+        targetRect.bottom > rootRect.top && targetRect.top < rootRect.bottom;
+      if (scrolledPast && !stickyDismissed) {
+        setStickyPrompt(lastUserMsgText);
+      } else if (userVisible) {
+        setStickyPrompt(null);
       }
-    },
-    [lastUserMsgText, stickyPrompt],
-  );
+    };
+
+    const observer = new IntersectionObserver(() => updateSticky(), {
+      root,
+      threshold: 0,
+    });
+
+    observer.observe(target);
+    root.addEventListener("scroll", updateSticky, { passive: true });
+    const resizeObserver = new ResizeObserver(() => updateSticky());
+    resizeObserver.observe(root);
+    resizeObserver.observe(target);
+    updateSticky();
+    return () => {
+      observer.disconnect();
+      resizeObserver.disconnect();
+      root.removeEventListener("scroll", updateSticky);
+    };
+  }, [lastUserMsg, lastUserMsgText, stickyDismissed, userAnchorVersion]);
 
   const scrollToUserMessage = useCallback(() => {
-    userMsgRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    const root = scrollViewportRef.current;
+    const el = userMsgRef.current;
+    if (!root || !el) return;
+    setStickyDismissed(true);
     setStickyPrompt(null);
+    const top =
+      el.getBoundingClientRect().top -
+      root.getBoundingClientRect().top +
+      root.scrollTop;
+    root.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
   }, []);
 
   const hasInput = input.trim().length > 0;
   const canSubmitInterrupt = isStreaming && hasInput && hasInterruptibleToolInProgress;
   const submitBlockedByTools = isStreaming && hasInput && !hasInterruptibleToolInProgress;
 
-  const autoScrollDeps = [transcriptMachine, pendingQuestion, forkRuns];
+  const autoScrollDeps = [transcriptMachine, archivedEpochs, pendingQuestion, forkRuns, isStreaming];
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -222,7 +288,9 @@ export function ChatPanel({
 
   const renderUserRef = useCallback(
     (user: (typeof flatMessages)[0], el: HTMLElement | null) => {
-      if (user === lastUserMsg) userMsgRef.current = el;
+      if (user !== lastUserMsg) return;
+      userMsgRef.current = el;
+      if (el) setUserAnchorVersion((v) => v + 1);
     },
     [lastUserMsg],
   );
@@ -260,11 +328,15 @@ export function ChatPanel({
           </button>
         )}
         <ScrollViewport
-          className="message-list"
+          ref={scrollViewportRef}
+          className={
+            stickyPrompt || stickyDismissed
+              ? "message-list message-list--sticky-active"
+              : "message-list"
+          }
           autoScrollTo="bottom"
           autoScrollDeps={autoScrollDeps}
           overlayActive={overlayActive}
-          onScrollPositionChange={onScrollPosition}
         >
           {!hasTranscript && !pendingQuestion && (
             <p className="placeholder">发送消息开始与 {APP_DISPLAY_NAME} 对话…</p>
@@ -281,6 +353,7 @@ export function ChatPanel({
             onDenyTool={(id, reason) => void denyTool(id, reason)}
             onOpenForkOverlay={(id) => void openForkOverlay(id)}
             renderUserRef={renderUserRef}
+            turnAnchorRef={turnAnchorRef}
             isStreaming={isStreaming}
           />
 
@@ -289,7 +362,14 @@ export function ChatPanel({
 
         {filePreview && <FilePreviewOverlay preview={filePreview} />}
         {subAgentForkRun && onCloseSubAgent && (
-          <SubAgentOverlay forkRun={subAgentForkRun} onClose={onCloseSubAgent} />
+          <SubAgentOverlay
+            forkRun={subAgentForkRun}
+            onClose={onCloseSubAgent}
+            forkRuns={forkRuns}
+            onApproveTool={(id) => void approveTool(id)}
+            onDenyTool={(id, reason) => void denyTool(id, reason)}
+            onOpenForkOverlay={(id) => void openForkOverlay(id)}
+          />
         )}
       </div>
 

@@ -1,9 +1,17 @@
 .message-body .markdown-body {
   line-height: 1.55;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .message-body .markdown-body pre {
   overflow-x: auto;
+  max-width: 100%;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
   background: var(--color-bg-muted);
   padding: 0.5rem 0.75rem;
   border-radius: 6px;

@@ -1,5 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AppStatus, SessionSummary, SessionTodo, WorkSummary } from "../hooks/useAppStatus";
+import { useAgentContext } from "../context/AgentContext";
+import {
+  countIncompleteTodos,
+  groupTodosForDisplay,
+  hasVisibleTodos,
+} from "../utils/todoDisplay";
 import "./StatusBar.css";
 
 interface StatusBarProps {
@@ -20,7 +26,7 @@ function fmt(n: number): string {
 }
 
 const STATUS_LABEL: Record<string, string> = {
-  pending: "待办",
+  pending: "未进行",
   in_progress: "进行中",
   completed: "已完成",
   cancelled: "已取消",
@@ -51,16 +57,9 @@ function TodoDropdown({
   onToggle: () => void;
   onCycle: (id: string, next: string) => void;
 }) {
-  const incompleteCount = todos.filter(
-    (t) => t.status === "pending" || t.status === "in_progress",
-  ).length;
-  const allFinished =
-    todos.length > 0 &&
-    todos.every((t) => t.status === "completed" || t.status === "cancelled");
-
-  if (todos.length === 0 || allFinished) {
-    return null;
-  }
+  const incompleteCount = countIncompleteTodos(todos);
+  const sections = groupTodosForDisplay(todos);
+  const showEmpty = !hasVisibleTodos(todos);
 
   return (
     <div className="todo-dropdown-wrapper">
@@ -69,38 +68,49 @@ function TodoDropdown({
         className={`todo-dropdown-btn${incompleteCount > 0 ? " has-active" : ""}${open ? " is-open" : ""}`}
         onClick={onToggle}
         title="当前待办事项"
+        aria-expanded={open}
       >
         待办事项{incompleteCount > 0 ? ` ${incompleteCount}` : ""}
       </button>
       {open && (
         <div className="todo-dropdown">
-          <ul className="todo-dropdown-list">
-            {todos.map((todo) => (
-              <li key={todo.id} className={`todo-dropdown-item todo-dropdown-${todo.status}`}>
-                <button
-                  type="button"
-                  className="todo-dropdown-status"
-                  title="点击切换状态"
-                  onClick={() =>
-                    onCycle(todo.id, STATUS_CYCLE[todo.status] ?? "pending")
-                  }
-                >
-                  <span className="todo-dropdown-icon">
-                    {STATUS_ICON[todo.status] ?? "○"}
-                  </span>
-                  {STATUS_LABEL[todo.status] ?? todo.status}
-                </button>
-                <span className="todo-dropdown-content">{todo.content}</span>
-              </li>
-            ))}
-          </ul>
+          {showEmpty ? (
+            <p className="todo-dropdown-empty">暂无待办事项</p>
+          ) : (
+            sections.map((section) => (
+              <section key={section.status} className="todo-dropdown-section">
+                <h3 className="todo-dropdown-section-title">{section.title}</h3>
+                <ul className="todo-dropdown-list">
+                  {section.items.map((todo) => (
+                    <li
+                      key={todo.id}
+                      className={`todo-dropdown-item todo-dropdown-${todo.status}`}
+                    >
+                      <button
+                        type="button"
+                        className="todo-dropdown-status"
+                        title="点击切换状态"
+                        onClick={() =>
+                          onCycle(todo.id, STATUS_CYCLE[todo.status] ?? "pending")
+                        }
+                      >
+                        <span className="todo-dropdown-icon">
+                          {STATUS_ICON[todo.status] ?? "○"}
+                        </span>
+                        {STATUS_LABEL[todo.status] ?? todo.status}
+                      </button>
+                      <span className="todo-dropdown-content">{todo.content}</span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ))
+          )}
         </div>
       )}
     </div>
   );
 }
-
-import { useAgentContext } from "../context/AgentContext";
 
 function sessionOptionLabel(s: SessionSummary): string {
   const name = s.title?.trim() || "新会话";
@@ -147,6 +157,19 @@ export function StatusBar({
 }: StatusBarProps) {
   const { isStreaming } = useAgentContext();
   const [todoOpen, setTodoOpen] = useState(false);
+  const prevIncompleteRef = useRef(0);
+  useEffect(() => {
+    prevIncompleteRef.current = 0;
+    setTodoOpen(false);
+  }, [status?.sessionId]);
+
+  useEffect(() => {
+    const incomplete = countIncompleteTodos(status?.todos ?? []);
+    if (incomplete > 0 && prevIncompleteRef.current === 0) {
+      setTodoOpen(true);
+    }
+    prevIncompleteRef.current = incomplete;
+  }, [status?.todos]);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [works, setWorks] = useState<WorkSummary[]>([]);
   const [sessionBusy, setSessionBusy] = useState(false);
@@ -257,7 +280,14 @@ export function StatusBar({
   return (
     <div className="status-bar">
       <div className="status-items">
-<label className="session-control work-control">
+        <TodoDropdown
+          todos={status?.todos ?? []}
+          open={todoOpen}
+          onToggle={() => setTodoOpen((v) => !v)}
+          onCycle={onCycleTodo}
+        />
+
+        <label className="session-control work-control">
           <span className="session-control-label">作品</span>
           <select
             className="session-select"
@@ -362,12 +392,6 @@ export function StatusBar({
           <span className="status-chip status-warn">项目未初始化</span>
         )}
 
-        <TodoDropdown
-          todos={status?.todos ?? []}
-          open={todoOpen}
-          onToggle={() => setTodoOpen((v) => !v)}
-          onCycle={onCycleTodo}
-        />
       </div>
 
       <button type="button" className="settings-btn" onClick={onOpenSettings}>

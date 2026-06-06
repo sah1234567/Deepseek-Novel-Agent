@@ -1,11 +1,30 @@
 //! Map core engine events to Tauri emit `(event_name, payload)` pairs.
 
 use novel_core::{CompactionAction, Event};
+use novel_tools::AskQuestion;
 
 use super::events::{
     SessionTokensUpdatedPayload, StreamChunkPayload, SubAgentCompletePayload,
     ToolCallRequestPayload, TurnCompletePayload,
 };
+
+/// Frontend expects camelCase (`allowMultiple`); tool schema keeps snake_case internally.
+fn ask_questions_for_ui(questions: &[AskQuestion]) -> serde_json::Value {
+    serde_json::Value::Array(
+        questions
+            .iter()
+            .map(|q| {
+                serde_json::json!({
+                    "id": q.id,
+                    "prompt": q.prompt,
+                    "options": q.options,
+                    "allowMultiple": q.allow_multiple,
+                    "allowCustom": q.allow_custom,
+                })
+            })
+            .collect(),
+    )
+}
 
 fn compaction_progress_payload(attempt: u32, action: &CompactionAction) -> serde_json::Value {
     match action {
@@ -249,7 +268,7 @@ pub(crate) fn core_event_payload(
             "ask-user-question".into(),
             serde_json::json!({
                 "toolCallId": tool_call_id,
-                "questions": payload.questions,
+                "questions": ask_questions_for_ui(&payload.questions),
             }),
         )),
         Event::CompactionProgress { attempt, action } => Some((
@@ -520,6 +539,30 @@ mod tests {
         let (name, payload) = core_event_payload(&event, "m").unwrap();
         assert_eq!(name, "ask-user-question");
         assert!(payload["questions"].is_array());
+        assert_eq!(payload["questions"][0]["allowMultiple"], false);
+        assert_eq!(payload["questions"][0]["allowCustom"], false);
+    }
+
+    #[test]
+    fn ask_user_question_payload_camel_case_flags() {
+        use novel_tools::AskUserQuestionPayload;
+        let payload: AskUserQuestionPayload = serde_json::from_value(serde_json::json!({
+            "questions": [{
+                "id": "q1",
+                "prompt": "Pick many?",
+                "allow_multiple": true,
+                "allow_custom": true,
+                "options": [{ "id": "a", "label": "A" }]
+            }]
+        }))
+        .unwrap();
+        let event = Event::AskUserQuestion {
+            tool_call_id: "tc1".into(),
+            payload,
+        };
+        let (_, payload) = core_event_payload(&event, "m").unwrap();
+        assert_eq!(payload["questions"][0]["allowMultiple"], true);
+        assert_eq!(payload["questions"][0]["allowCustom"], true);
     }
 
     #[test]

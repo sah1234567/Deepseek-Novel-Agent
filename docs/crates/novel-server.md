@@ -58,9 +58,11 @@ React (ui/) ──invoke/listen──► src-tauri/commands.rs
   "sessionCacheMiss": 0,
   "sessionCompletion": 0,
   "contextTokens": 0,
-  "todos": [{ "todoId", "content", "status" }]
+  "todos": [{ "id", "content", "status" }]
 }
 ```
+
+`status` 取值：`pending` | `in_progress` | `completed` | `cancelled`（与 TodoWrite schema 一致）。前端 StatusBar 分组展示前三类，`cancelled` 不显示。
 
 `projectInitialized`：`knowledge/` 或 `AGENTS.md` 存在；`activeWorkName` 来自当前 `AppConfig.active_project`。
 
@@ -82,8 +84,8 @@ React (ui/) ──invoke/listen──► src-tauri/commands.rs
 | `interrupt` | 中断当前 turn | Esc / 发送中断 |
 | `approve_tool` / `deny_tool` | 工具批准/拒绝 | ChatPanel |
 | `answer_question` | AskUserQuestion | 问答 UI |
-| `get_app_status` | 轮询状态 | `useAppStatus` |
-| `set_permission_mode` | 权限模式 | SettingsPanel |
+| `get_app_status` | 轮询状态（30s）+ 事件即时刷新 | `useAppStatus` |
+| `set_permission_mode` | 权限模式 | ChatPanel 底栏 |
 | `list_works` | 作品列表 | StatusBar 下拉 |
 | `create_work(name)` | 新建作品 + 切换 + 新 session | StatusBar |
 | `open_work(name)` | 打开作品 + 新 session | StatusBar |
@@ -92,13 +94,13 @@ React (ui/) ──invoke/listen──► src-tauri/commands.rs
 | `list_sessions` | 当前作品会话列表（`last_active_at` 降序） | StatusBar · SettingsPanel |
 | `get_session_transcript` | 历史 hydrate（`{ archives, active }`） | `useAgent.hydrateMessages` |
 | `get_session_messages` | 仅 active 工作集（兼容 IPC） | 内部 / 调试 |
-| `get_fork_messages` | 子 Agent transcript 回放 | `SubAgentOverlay` |
+| `get_fork_messages` | 子 Agent transcript 回放 | `useAgent.openForkOverlay`（打开 overlay 时 hydrate） |
 | `init_novel_project` | 当前作品 scaffold | SettingsPanel |
 | `list_project_files` / `read_project_file` | 文件树 | FileTreePanel |
 | `update_session_todo` | Todo 状态 | StatusBar Todo 下拉 |
 | `get_api_config` / `set_api_config` | 全局 API（json） | SettingsPanel |
 
-共 **20** 个 Tauri command（见 `src-tauri/src/main.rs` `generate_handler!`）。
+共 **22** 个 Tauri command（见 `src-tauri/src/main.rs` `generate_handler!`）。
 
 **Tauri invoke 参数命名：** 前端使用 camelCase，Rust 命令参数为 snake_case。示例：
 
@@ -128,23 +130,24 @@ invoke("approve_tool", { toolCallId });
 | `input_complete` | toolCallId, toolName, input, needsApproval | ToolInputComplete |
 | （无 phase） | toolCallId, toolName, input, needsApproval | ToolCallRequest（流末幂等） |
 | `progress` | toolCallId, status, description | ToolCallProgress |
-| `result` | toolCallId, content | ToolCallResult |
+| `result` | toolCallId, content（**无 toolName**） | ToolCallResult |
 
 其他 Tauri 事件：
 
 | Tauri 事件 | 来源 |
 |------------|------|
 | `stream-chunk` | ContentBlockDelta |
-| `ask-user-question` | AskUserQuestion |
-| `turn-complete` | TurnComplete（含 `wasInterrupted`）/ TurnStart / Error（`phase: "error"`，不含用户主动中断）；**含 turn 级 token 字段，触发 StatusBar refresh** |
+| `ask-user-question` | AskUserQuestion；`questions[]` 经 `ask_questions_for_ui` 输出 **camelCase**（`allowMultiple` / `allowCustom`） |
+| `turn-complete` | TurnComplete（含 `wasInterrupted`）/ TurnStart / Error（`phase: "error"`）；**含 turn 级 token 字段，触发 `useAppStatus` 全量 refresh** |
+| `session-tokens-updated` | SessionTokensUpdated；**`useAppStatus` 局部 patch token 四字段**（不调用 `get_app_status`） |
 | `session-resumed` | create/open work、create/resume session |
-| `permission-mode-changed` | SetPermissionMode |
-| `sub-agent-started` / `sub-agent-complete` | 子 Agent（含 GeneralPurpose；payload 含 `agentType`） |
+| `permission-mode-changed` | SetPermissionMode → `useAppStatus` refresh |
+| `sub-agent-started` / `sub-agent-complete` | 子 Agent；payload 含 `forkRunId`、`agentType`、`parentToolCallId`（前端据其推断 `source`: tool \| hook） |
 | `sub-agent-stream` / `sub-agent-tool` | 子 Agent overlay 流式正文与工具 |
 | `assistant-segment-complete` | AssistantSegmentComplete（`segmentIndex`；可选 `forkRunId`） |
 | `compaction-progress` | CompactionProgress → **CompactionBanner**（ChatPanel viewport 顶部；`action` + `attempt` / `tokensBefore`/`tokensAfter` / `reason`） |
 
-子 Agent 事件驱动 StatusBar chip 与 SubAgentOverlay：`sub-agent-started` 显示运行中标签，`sub-agent-complete` 清除。`forkRunId` 非空时分段 finalize overlay，否则 finalize 主聊天。前端按 **SegmentGroup**（Agent 在上、Tool 在下）渲染 transcript；事件顺序与 DB `ORDER BY sequence` 一致，异步 tool result 写入 `openSegment.tools` 而非顶层 messages。
+子 Agent 事件更新 `forkRuns` 并驱动 **SubAgentOverlay** 实时 transcript；`AppStatus.hook_running` 反映 `drain_in_progress`，**StatusBar 无 sub-agent 运行 chip**。tool 路径卡片在 `SegmentGroup` 内（`ForkSubAgent` → `SubAgentForkCard`）；hook 路径经 `HookForkCards` 列在滚动区底部。`forkRunId` 非空时 `assistant-segment-complete` finalize overlay，否则 finalize 主聊天。前端按 **SegmentGroup**（Agent 在上、Tool 在下）渲染 transcript；事件顺序与 DB `ORDER BY sequence` 一致，异步 tool result 写入 `openSegment.tools` 而非顶层 messages。
 
 ### 1.10 API 配置
 

@@ -3,14 +3,21 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AgentType {
+    /// 细纲完成后：计划结构质量审计（大纲对齐、伏笔密度、因果闭合、人物轮换）
+    PlanAuditor,
+    /// 正文完成后：执行忠实度审计（正文是否忠实执行细纲）
     KnowledgeAuditor,
     ChapterCraftAnalyzer,
     GeneralPurpose,
 }
 
 /// Agent types the main session may fork via `ForkSubAgent`.
-pub const FORKABLE_AGENT_TYPE_NAMES: &[&str] =
-    &["KnowledgeAuditor", "ChapterCraftAnalyzer", "GeneralPurpose"];
+pub const FORKABLE_AGENT_TYPE_NAMES: &[&str] = &[
+    "PlanAuditor",
+    "KnowledgeAuditor",
+    "ChapterCraftAnalyzer",
+    "GeneralPurpose",
+];
 
 impl std::fmt::Display for AgentType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -31,6 +38,25 @@ pub struct AgentDefinition {
 impl AgentType {
     pub fn definition(self) -> AgentDefinition {
         match self {
+            AgentType::PlanAuditor => AgentDefinition {
+                agent_type: self,
+                name: "plan-auditor".into(),
+                when_to_use: "细纲完成后的计划结构质量审计（大纲对齐、伏笔密度、因果闭合、人物轮换、字数分配）".into(),
+                system_prompt: include_str!("../../../prompt/agents/plan-auditor.md").into(),
+                max_react_loops: 30,
+                tools: vec![
+                    "Read".into(),
+                    "Grep".into(),
+                    "PlotGraph".into(),
+                    "ForeshadowTracker".into(),
+                    "CharacterSearch".into(),
+                    "TrackingQuery".into(),
+                    "RelationQuery".into(),
+                    "Corkboard".into(),
+                    "Tail".into(),
+                    "Stats".into(),
+                ],
+            },
             AgentType::KnowledgeAuditor => AgentDefinition {
                 agent_type: self,
                 name: "knowledge-auditor".into(),
@@ -51,7 +77,7 @@ impl AgentType {
             AgentType::ChapterCraftAnalyzer => AgentDefinition {
                 agent_type: self,
                 name: "chapter-craft-analyzer".into(),
-                when_to_use: "对话质量 + 叙事节奏 + 角色情感轨迹（只读报告）".into(),
+                when_to_use: "对话质量 + 叙事节奏 + 情感轨迹 + 设定一致性（只读报告）".into(),
                 system_prompt: include_str!("../../../prompt/agents/chapter-craft-analyzer.md")
                     .into(),
                 max_react_loops: 25,
@@ -61,6 +87,8 @@ impl AgentType {
                     "CharacterSearch".into(),
                     "Stats".into(),
                     "Tail".into(),
+                    "TrackingQuery".into(),
+                    "RelationQuery".into(),
                 ],
             },
             AgentType::GeneralPurpose => AgentDefinition {
@@ -110,6 +138,7 @@ impl AgentType {
 
     pub fn parse(name: &str) -> Option<Self> {
         match name {
+            "PlanAuditor" | "plan-auditor" => Some(AgentType::PlanAuditor),
             "KnowledgeAuditor" | "knowledge-auditor" => Some(AgentType::KnowledgeAuditor),
             "ChapterCraftAnalyzer" | "chapter-craft-analyzer" => {
                 Some(AgentType::ChapterCraftAnalyzer)
@@ -124,6 +153,7 @@ impl AgentType {
         use std::collections::HashSet;
         let mut names = HashSet::new();
         for agent in [
+            AgentType::PlanAuditor,
             AgentType::KnowledgeAuditor,
             AgentType::ChapterCraftAnalyzer,
             AgentType::GeneralPurpose,
@@ -189,7 +219,24 @@ mod tests {
     }
 
     #[test]
-    fn forkable_names_include_knowledge_auditor() {
+    fn forkable_names_include_plan_auditor() {
+        assert!(AgentType::all_forkable_names().contains(&"PlanAuditor"));
+        assert!(AgentType::is_forkable("PlanAuditor"));
+        assert!(AgentType::is_forkable("plan-auditor"));
+    }
+
+    #[test]
+    fn plan_auditor_is_read_only() {
+        let tools = AgentType::PlanAuditor.definition().tools;
+        assert!(tools.contains(&"PlotGraph".into()));
+        assert!(tools.contains(&"ForeshadowTracker".into()));
+        assert!(tools.contains(&"Corkboard".into()));
+        assert!(!tools.contains(&"Edit".into()));
+        assert!(!tools.contains(&"Write".into()));
+    }
+
+    #[test]
+    fn forkable_names_include_existing_agents() {
         assert!(AgentType::all_forkable_names().contains(&"KnowledgeAuditor"));
         assert!(AgentType::all_forkable_names().contains(&"GeneralPurpose"));
         assert!(AgentType::is_forkable("KnowledgeAuditor"));

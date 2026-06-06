@@ -1,6 +1,6 @@
 ---
 name: novel-planning
-description: 小说规划工作流——三级策划（世界观/人物 → 大纲 → 细纲）。当用户要新建作品、规划世界观、人物体系、大纲或细纲时使用。触发词："策划"、"规划"、"大纲"、"细纲"、"世界观"、"人物设定"、"开新书"
+description: 小说规划工作流——三级策划（世界观/人物 → 大纲 → 细纲）。含新书策划与已有书追加卷/补细纲。触发词："策划"、"规划"、"大纲"、"细纲"、"世界观"、"人物设定"、"开新书"、"追加卷"、"第X卷"、"补细纲"
 when_to_use: 新建作品、规划世界观/人物/大纲/细纲时使用。与写章、改稿无关的任务可忽略本 Skill。
 skill_kind: workflow
 allowed-tools: Read, Write, Edit, Glob, Grep, Bash, WebSearch, InvokeSkill, AskUserQuestion, TodoWrite
@@ -50,8 +50,14 @@ allowed-tools: Read, Write, Edit, Glob, Grep, Bash, WebSearch, InvokeSkill, AskU
 
 9. Write `knowledge/plot/大纲.md`，格式如下：
    - `## 第X卷：（本卷主线概括）`——每卷一个二级标题
-   - `### 本卷概要`：自然语言 150–300 字，描述本卷起止状态、主线冲突、核心转折、结局方向。**禁止**逐章展开写具体情节。多世界/无限流/多副本作品：概要用 `####` 子标题切分各世界/副本/任务段落
-   - `### 章节索引`：表格（Ch/标题/核心事件≤30字/POV/所在世界或副本），Ch 列值为裸数字
+   - `### 本卷概要`：自然语言 150–300 字，**必须包含四个要素**（缺一不可）：
+     - **起点状态**：主角在哪里、什么处境
+     - **核心冲突**：对手/障碍是什么
+     - **关键转折**：中点/高潮位置
+     - **终点状态+钩子**：主角获得了/失去了什么，为下一卷留什么钩子
+   - **禁止**逐章展开写具体情节。多世界/无限流/多副本作品：概要用 `####` 子标题切分各世界/副本/任务段落
+   - `### 章节索引`：表格（Ch/标题/核心事件≤30字/POV/所在世界或副本），Ch 列值为裸数字，**初建时留空**
+   - 四要素不完整 → 视为该卷大纲未完成 → 禁止进入第三层（细纲）
 10. Write `knowledge/plot/伏笔追踪.md`
 11. Write `knowledge/plot/因果链.md`
 
@@ -65,6 +71,26 @@ allowed-tools: Read, Write, Edit, Glob, Grep, Bash, WebSearch, InvokeSkill, AskU
    - 各场景 `~字` 合计接近本章目标字数（2000–4000 字）
 13. 后续细纲分批产出（每 5–10 章一批）
 
+### 细纲完成后的追踪文件更新
+
+**每章细纲 Write 后立即更新追踪文件（登记计划值，不可延后）：**
+
+- 伏笔追踪.md：append 本章计划操作
+- 因果链.md：append 计划事件边
+- 各人物卡演变日志：append 计划变化
+- 场景/道具/势力/时间线追踪：append 计划变化
+- 大纲.md 章节索引：append 本章行
+- 细纲「知识库更新清单」逐条打勾 ✓
+
+### ★ Fork PlanAuditor 审计（不可跳过）
+
+追踪文件更新完成后，Fork PlanAuditor 对计划质量做独立审计：
+```
+ForkSubAgent(agent_type="PlanAuditor", task="审计细纲 chapter-NNN-细纲.md 的计划质量")
+```
+
+按报告修改细纲后，该章细纲才算完成。PlanAuditor 通过的细纲才可用于正文写作。
+
 **多世界题材：** 在 knowledge/worlds/ 下为每个持久世界创建 INDEX.md
 
 ## 产出检查清单
@@ -73,15 +99,19 @@ allowed-tools: Read, Write, Edit, Glob, Grep, Bash, WebSearch, InvokeSkill, AskU
 1. 外部调研（WebSearch）✓
 2. 世界观设定 ✓
 3. 人物体系 ✓
-4. 大纲 ✓
+4. 大纲（四要素齐全）✓
 5. 细纲 Ch1-5 ✓
-6. 开始编写第一章 (next)
+6. 追踪文件已更新 ✓
+7. PlanAuditor 已通过 ✓
+8. 开始正文阶段 (next)
 
 **分歧确认：** 主角性别、CP 走向、战力天花板、结局倾向等关键决策，必须使用 AskUserQuestion 确认。
 
 ## 本阶段完成后
 
 1. 向用户汇报规划摘要：调研要点、已创建文件清单、待确认决策。
-2. 若细纲已覆盖前 5 章：建议 InvokeSkill(chapter-writing) 开始写第一章。
+2. 若细纲已覆盖前 5 章且 PlanAuditor 已通过：建议 InvokeSkill(`chapter-writing`) 开始正文阶段（写第一章）。
 3. 若用户仅要大纲不要写章：说明知识库已就绪，等待用户指令。
-4. 若已完成章节数 ≥ 已有细纲最大章号 + 5：建议继续补充细纲（Invoke 本 Skill 或自行 Write 细纲文件）。
+4. 若已完成章节数 ≥ 已有细纲最大章号 + 5：建议继续补充细纲（先补细纲 → 更新追踪文件 → Fork PlanAuditor → 再动笔正文）。
+5. 若用户对规划产物不满意要求修改 → InvokeSkill(`revision`)（改大纲、改细纲均走 revision）。
+6. 若用户只要求追加后续卷大纲 → 复用本 Skill 的第二层步骤。

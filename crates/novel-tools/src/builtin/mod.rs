@@ -10,7 +10,7 @@ mod todo_write;
 mod web_search;
 mod write;
 
-pub use ask_user_question::{AskUserQuestionPayload, AskUserQuestionTool};
+pub use ask_user_question::{AskQuestion, AskUserQuestionPayload, AskUserQuestionTool};
 pub use bash::BashTool;
 pub use edit::EditTool;
 pub use glob::GlobTool;

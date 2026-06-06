@@ -128,20 +128,18 @@ export function ToolBubble({
       (forkRunId ? reports.get(forkRunId) : undefined) || run?.reportOutput;
     const canEnter = !!forkRunId;
     return (
-      <article className="message message-tool">
-        <header>工具 · ForkSubAgent</header>
-        <SubAgentForkCard
-          agentType={String(agentType)}
-          summary={summary}
-          status={forkStatusFromRun(run)}
-          reportContent={reportContent}
-          enterDisabled={!canEnter}
-          enterHint={canEnter ? undefined : "子 Agent 尚未启动，请稍候"}
-          onEnter={() => {
-            if (forkRunId) onOpenForkOverlay?.(forkRunId);
-          }}
-        />
-      </article>
+      <SubAgentForkCard
+        mode="tool"
+        agentType={String(agentType)}
+        summary={summary}
+        status={forkStatusFromRun(run)}
+        reportContent={reportContent}
+        enterDisabled={!canEnter}
+        enterHint={canEnter ? undefined : "子 Agent 尚未启动，请稍候"}
+        onEnter={() => {
+          if (forkRunId) onOpenForkOverlay?.(forkRunId);
+        }}
+      />
     );
   }
 

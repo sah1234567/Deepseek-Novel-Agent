@@ -77,7 +77,8 @@ describe("segmentRender", () => {
         onOpenForkOverlay={onOpen}
       />,
     );
-    expect(screen.getByText("ForkSubAgent")).toBeInTheDocument();
+    expect(screen.getByText(/Subagent · GeneralPurpose/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "进入" })).toBeInTheDocument();
   });
 
   it("ToolBubble shows approve buttons for pending Write", () => {

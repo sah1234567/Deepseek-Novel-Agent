@@ -91,6 +91,15 @@ export function useAppStatus() {
         void refresh();
       }),
     );
+    // ToolCallResult events use phase "result" but omit toolName (see event_payload.rs).
+    // Refresh status (incl. session todos) after any tool completes.
+    unlisteners.push(
+      listen<{ phase?: string }>("tool-call-request", (event) => {
+        if (event.payload.phase === "result") {
+          void refresh();
+        }
+      }),
+    );
     unlisteners.push(
       listen("session-resumed", () => {
         void refresh();

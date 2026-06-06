@@ -2,11 +2,14 @@ use crate::{AgentError, AgentType};
 
 fn fallback_prompt(agent_type: AgentType) -> &'static str {
     match agent_type {
+        AgentType::PlanAuditor => {
+            "你是细纲计划审计 Agent。只读检查大纲对齐、伏笔密度、因果闭合、人物轮换、字数分配、登记完整性，输出自然语言报告与「接下来」指引。"
+        }
         AgentType::KnowledgeAuditor => {
-            "你是知识库审计 Agent。只读检查遗漏与设定一致性，输出自然语言报告与「接下来」指引。"
+            "你是知识库审计 Agent。只读检查正文执行忠实度与收尾完整性，输出自然语言报告与「接下来」指引。"
         }
         AgentType::ChapterCraftAnalyzer => {
-            "你是章节文笔分析 Agent。分析对话、节奏、情感，输出自然语言报告。禁止 fork 与 JSON。"
+            "你是章节文笔分析 Agent。分析对话、节奏、情感、设定一致性，输出自然语言报告。禁止 fork 与 JSON。"
         }
         AgentType::GeneralPurpose => {
             "你是通用子 Agent。严格按下方自定义任务执行，结论写在返回正文中，禁止为说明新建文件。禁止 fork。"
@@ -16,6 +19,7 @@ fn fallback_prompt(agent_type: AgentType) -> &'static str {
 
 fn embedded_prompt(agent_type: AgentType) -> &'static str {
     match agent_type {
+        AgentType::PlanAuditor => include_str!("../../../prompt/agents/plan-auditor.md"),
         AgentType::KnowledgeAuditor => include_str!("../../../prompt/agents/knowledge-auditor.md"),
         AgentType::ChapterCraftAnalyzer => {
             include_str!("../../../prompt/agents/chapter-craft-analyzer.md")
@@ -98,6 +102,22 @@ mod tests {
         let p = load_agent_prompt(AgentType::GeneralPurpose).expect("prompt");
         assert!(p.contains("严禁"));
         assert!(p.contains("assistant 消息正文中返回"));
+    }
+
+    #[test]
+    fn plan_auditor_prompt_has_next_steps() {
+        let p = load_agent_prompt(AgentType::PlanAuditor).expect("prompt");
+        assert!(p.contains("接下来"));
+        assert!(p.contains("读不到本 prompt"));
+        assert!(p.contains("大纲对齐"));
+    }
+
+    #[test]
+    fn plan_auditor_fork_task_has_runtime_constraints() {
+        let tools = AgentType::PlanAuditor.definition().tools;
+        let t = format_fork_task(AgentType::PlanAuditor, "审计细纲 ch5", &tools).expect("task");
+        assert!(t.contains("禁止嵌套 fork"));
+        assert!(t.contains("Corkboard"));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 ---
 name: chapter-writing
-description: 章节写作工作流——写前准备（含续写时必读上一章）、反 AI 味约束、写后同步知识库。当用户要写章、续写、产出正文时使用。触发词："写第X章"、"续写"、"写正文"、"下一章"
+description: 章节写作工作流——两层推进：先细纲（计划→登记→审计）再正文（写作→收尾→审计）。含重写模式与批量模式。触发词："写第X章"、"续写"、"写正文"、"下一章"、"重写第X章"、"连写"
 when_to_use: 写章/续写/产出正文时使用。策划、改稿、纯审计任务可忽略本 Skill。
 skill_kind: workflow
 allowed-tools: Read, Write, Edit, Glob, Grep, Bash, CharacterSearch, PlotGraph, Tail, InvokeSkill, TodoWrite, Stats, ForkSubAgent, TrackingQuery, RelationQuery, Corkboard, ForeshadowTracker
@@ -8,143 +8,205 @@ allowed-tools: Read, Write, Edit, Glob, Grep, Bash, CharacterSearch, PlotGraph, 
 
 # 章节写作工作流
 
-## 阶段说明
+写章分两层推进：**先细纲（计划层）→ 再正文（执行层）**。每层各有独立的知识库更新与审计步骤，追踪文件在细纲阶段一次性更新完毕，正文后仅做收尾与偏差修正。
 
-本 Skill 覆盖**写章阶段** SOP。写前读知识库 → 写中遵循约束 → 写后同步更新——全部由你按本 Skill 执行。
+### 模式判断（开始前先确认）
+
+| 情况 | 使用模式 |
+|------|---------|
+| 本章正文不存在，正常写新章 | 完整两层流程 |
+| `chapters/chapter-NNN.md` 已存在，作者不满意要求重写 | **重写模式**（跳过细纲阶段，正文阶段完整执行） |
+| 作者要求连写多章（如 Ch8-10） | **批量模式**（细纲批量→一次审计；正文连写→一次审计） |
+
+### 重写模式
+
+1. 细纲已存在且 PlanAuditor 已通过 → **跳过细纲阶段**（细纲不变）
+2. Read 细纲「修订记录」→ 了解之前的修改历史
+3. Write 覆写正文 → 覆写细纲「写后记录」
+4. 正文后审计不可跳过 → 正常 Fork KnowledgeAuditor + ChapterCraftAnalyzer
+5. 如果重写后偏离细纲 → 按下方「偏离处理」执行
+6. 细纲「修订记录」追加一行（原因=重写，范围=全章）
+
+### 批量模式（多章连写）
+
+当作者要求一次写多章（≤5 章）：
+1. 细纲批量 Write → 批量更新追踪文件 → **一次性** Fork PlanAuditor（task 含所有章号）
+2. 正文逐章 Write（每章单独 Stats + 写后记录）
+3. 全部章写完后 → **一次性** Fork KnowledgeAuditor + ChapterCraftAnalyzer（task 含所有章号，提示按章分组输出）
+
+批量模式下 PlanAuditor 可额外检查跨章伏笔节奏与人物弧线。
 
 ---
 
-## 第一步：写前准备
+## 第一层：细纲阶段（策划 → 登记 → 审计）
 
-以下标记 **「必做」** 的步骤不可跳过；**「按需」** 在条件满足时执行。
+「必做」不可跳过，「按需」在条件满足时执行。
 
-### 必做
+### 写前必做
 
 1. **确认进度**：Read `knowledge/INDEX.md`，对照 TodoWrite 和 `chapters/` 文件数量，双重确认当前应写哪一章
+2. **读大纲**：Read `knowledge/plot/大纲.md` 当前卷概要 → 确认本章在卷级剧情中的位置
+3. **门禁检查**：确认本卷大纲四要素（起点/冲突/转折/终点+钩子）齐全；不齐全 → 先补齐大纲再继续
 
-2. **读大纲**：Read `knowledge/plot/大纲.md` → 确认本章在大纲中的承上启下位置
+### 编写细纲
 
-3. **读细纲**：Read `knowledge/plot/细纲/chapter-NNN-细纲.md` → 场景拆分、出场人物、伏笔清单、知识库更新清单。如细纲文件不存在，Read `knowledge/plot/细纲/_template.md` 获取模板后自行产出细纲再继续
+4. Read `knowledge/plot/细纲/_template.md` 获取模板
+5. Write `knowledge/plot/细纲/chapter-NNN-细纲.md`：
+   - 场景拆分（整体 400 字左右，禁止写成小作文）
+   - 出场人物清单
+   - 伏笔清单（编号 + 状态 + 本章操作）
+   - 知识库更新清单（带 `- [ ]` 勾选框）
 
-4. **查人物**：CharacterSearch 查询细纲中所有出场人物。对每人用 Grep + Read 取各演变日志**最后行**（勿通读整份人物卡）：
-   ```
-   CharacterSearch("陆沉") → path
-   Grep pattern="^\| Ch" search_root="knowledge/characters/陆沉.md"
-   → 各演变日志最后匹配行号 L
-   Read file_path="..." offset=L-1 limit=5
-   ```
-   演变日志首列为章节号，格式 `Ch1`/`Ch31`（对应 `chapters/chapter-001.md`/`chapter-031.md`）。关注：性格演变日志 → 当前性格；关系演变日志 → 当前关系；已知信息演变日志 → POV 信息边界；修为/功法演变日志（如有）→ 当前战力
-
-5. **查称呼与关系**：`RelationQuery(character="出场人物名")` → 获取每个出场人物当前关系与称呼（替代 Read 全文 `_关系与称呼索引.md`）。写作前必须确认本章涉及人物之间的当前称呼和关系状态
-
-6. **追溯因果**：PlotGraph 查询细纲中伏笔关键词的 backward 因果链路
-
-7. **读上一章**（第 2 章起必做；第 1 章跳过）：
-
-   **先判断是否需要读盘**：若上一章 **Tail/Read 的 tool_result 仍在当前对话中**且该文件此后无 Edit/Write，则直接分析上下文即可，**跳过 Tail**。若你对该章做过 Edit/Write，须 Tail 末段或 Read 改动 range **一次**再续写。长章（>200 行）**从不** full Read；与 session cache 无关。
-
-   如需读取：
-   ```
-   Tail(file_path="chapters/chapter-{N-1:03d}.md", lines=100)
-   ```
-   查人物演变日志末行：仍用 CharacterSearch → Grep `^\| Ch` → Read offset/limit（**勿 Tail 人物卡整文件**）。
-   例：写第 5 章 → 读 `chapters/chapter-004.md` 末 100 行。重点关注：
-   - **衔接点**：上章结尾钩子、场景、悬念；本章开篇须自然续接，勿另起炉灶
-   - **叙事视角**：上章末段从哪个角色的「眼睛」写、用什么人称（如第三人称限知）；续写勿无过渡切换视角或人称
-   - **文风**：上章末段句式与高频词；本章勿重复
-
-   若需读取但 `chapter-{N-1}` 不存在：Glob `chapters/chapter-*.md` 确认实际前章；缺章或章号跳跃时 AskUserQuestion。**不得**在不知道上章内容的情况下 Write。
-
-### 按需
-
-8. **题材 Skill**：如本章涉及流派特定规则（仙侠战力体系、科幻科技约束、末世生存规则等），InvokeSkill 加载对应题材 Skill 的完整正文
-
-9. **多世界题材**：如作品涉及多世界（`knowledge/worlds/` 非空），Read 本章所在世界的 `INDEX.md` 及该世界出场人物的人物卡
-
-10. **追踪文件（用 TrackingQuery 替代 Read/Grep）**：以下文件用 `TrackingQuery` 查当前状态——比 Read 全文或 Grep 更高效，直接返回结构化末行数据。不存在时返回空，勿逐一确认文件是否存在：
-    - `TrackingQuery(file="power", operation="current")` — 战力系统当前状态
-    - `TrackingQuery(file="scene", operation="current")` — 场景追踪当前状态
-    - `TrackingQuery(file="prop", operation="current")` — 道具追踪当前状态
-    - 如有势力线：`TrackingQuery(file="faction", operation="current")`
-    - 如有关键时间节点：`TrackingQuery(file="timeline", operation="current")`
-
----
-
-## 第二步：写作中
-
-### 硬性约束
-
-- **称呼**：以写前 `RelationQuery` 返回的当前称呼为准，正文中所有对话和叙述严格对照
-- **POV 信息边界**：正文若跟随某角色视角叙事（POV 角色），只能写该角色**已知信息演变日志**末行所允许的内容——角色不知道的信息不可写入其视角段落（具体视角类型见 `AGENTS.md`）
-- **战力/科技逻辑**：遵守 `TrackingQuery(file="power")` 或 `TrackingQuery(file="ability")` 返回的当前约束规则
-- **场景/道具**：与写前 `TrackingQuery` 返回的场景/道具最后行一致
-- **字数**：2000–4000 字/章，结尾留钩子；写完后用 `Stats(chapter="N")` 核实
-
-### 反 AI 味（正文硬性约束）
-
-Write 本章时对照下表（与 `system.md` §6.3 一致）。**前五项写后可 Grep 快检**，后五项写作时自觉规避。
-
-| 维度 | 典型表现 | 标准 / 改法 |
-|------|----------|------------|
-| **「然后」** | 动作链「他然后…然后…」堆叠 | 单章 **≤3 次**；改分句、逗号 |
-| **「不是…而是…」** | 解释性对比句 | **全章禁用** |
-| **破折号（——）** | 插入说明/转折 | **全章 ≤1 次** |
-| **排比** | 首先/其次/一方面/另一方面；连续同结构句 | **禁止**清单式排比 |
-| **环境描写** | 进场景逐物扫视，与冲突/情绪无关 | **2–3 个**相关细节即可；过渡不铺全景 |
-| **句式** | 句长均匀、密度一致 | 长短句交替 |
-| **情感** | 空贴抽象标签 | 动作、对话、生理反应、具体记忆 |
-| **详略** | 说明书式平滑、过渡冗长 | 冲突细写、过渡略写；可留 1–2 处闲笔 |
-| **套路** | 最安全接龙写法 | 按细纲但拒绝模板化 |
-| **连贯** | 重复上章末段句式 | 接钩子开篇，不复制上章收束（写前已读上章 tail） |
-
----
-
-## 第三步：写后自检
-
-Write 正文完成后逐项确认：
-
-- **上章衔接**（N≥2）：开篇是否承接上章钩子，叙事视角与人称是否连贯；脱节则 Edit 开篇
-- **字数**：`Stats(chapter="N")` 统计本章字数（N=本章号），确认 2000–4000 字；不足 2000 需扩充，超过 4000 **严禁整体压缩**。超标时按以下流程处理：
-  1. **Grep 定位冗余**：`然后` >3、`——` >1、排比句式（`首先|其次|一方面|另一方面`）、环境描写连续 3+ 句——定位超标段落，用 Read range 精读确认
-  2. **Grep 定位重复**：搜索本章高频形容词/句式（统计重复≥3 次的短语），定位可合并或删除的重复表达
-  3. **精修而非压缩**：针对 Grep 命中的冗余段逐段 Edit 删除或改写，每改一段 Read 确认效果。**禁止**全文压缩（如"每段删一句"、"整体缩句"），禁止用 AI 重写全章来缩减字数
-  4. 精修后仍超标 → 征求作者意见是否拆分章节
-- **称呼一致性**：`RelationQuery` 抽查本章出场人物当前称呼，与正文对话和叙述对照
-- **伏笔密度**：本章回收伏笔 ≥3 个时，考虑是否过于密集、应分散到后续章节
-- **角色出场**：检查是否有重要角色已连续 ≥5 章未出场，在汇报中提醒作者
-- **反 AI 味快检**（Grep 前五项）：`然后` >3、`不是.*而是` 出现、`——` >1、`首先|其次|再次|一方面|另一方面` 出现；开篇/转场连续 3+ 句纯环境铺陈且无人物动作 → 须 Edit
-
----
-
-## 第四步：写后更新知识库
+### ★ 立即更新追踪文件（一次性登记计划值，禁止延至正文后）
 
 以下文件如本章涉及变化则 **append**（只追加，不覆写已有行）。Edit 时 `old_string` = 表末行，`new_string` = 末行 + 新行。
 
 | 文件 | 触发条件 | 操作 |
 |------|----------|------|
-| `knowledge/plot/细纲/chapter-NNN-细纲.md` | 每次 | 填写「实际完成」「知识库更新确认」「修订记录」 |
-| `knowledge/plot/大纲.md` | 细纲/正文产出后 | 在对应卷的 `### 章节索引` 表 append 本章行（Ch/标题/核心事件≤30字/POV/所在世界或副本）。方法：Grep `^\| Ch \|` 确认表头 → Grep 本卷表内末行 `^\| N \|` → Read 末行 ±2 行确认 → Edit 以末行为 old_string、末行+新行为 new_string append。**不必**全文 Read。已有多章待补时用 `Corkboard` 批量获取摘要再按卷分批 Edit。写后 KnowledgeAuditor 会核查索引核心事件与正文是否一致 |
+| `knowledge/plot/细纲/chapter-NNN-细纲.md` | 每次 | 知识库更新清单逐条打勾 ✓ |
+| `knowledge/plot/大纲.md` | 每次 | 章节索引表 append 本章行（Ch/标题/核心事件≤30字/POV/所在世界）。Grep `^\| Ch \|` 定位表头 → Grep 本卷表内末行 → Read ±2 行 → Edit append |
+| `knowledge/plot/伏笔追踪.md` | 本章有伏笔操作 | append 每条操作行（章节号=本章，状态=计划中） |
+| `knowledge/plot/因果链.md` | 本章有新增因果边 | append 事件边（章节号=本章） |
+| 各出场人物卡 | 每次 | 出场记录/性格/关系/已知信息演变日志如有计划变化逐表 append（章节号=本章，可在内容中标注 [计划]） |
+| `knowledge/characters/_关系与称呼索引.md` | 计划中称呼或关系变化 | **双向**各 append 一行 |
+| `knowledge/shared-systems/场景追踪.md` | 计划中场景状态变化 | append 变化行 |
+| `knowledge/shared-systems/道具追踪.md` | 计划中道具归属/状态变化 | append 变化行 |
+| `knowledge/shared-systems/势力追踪.md` | 计划中势力关系变化 | append 变化行 |
 | `knowledge/shared-systems/时间线.md` | 本章有关键时间戳 | append 时间戳行 |
-| `knowledge/shared-systems/场景追踪.md` | 场景状态变化 | append 变化行 |
-| `knowledge/shared-systems/道具追踪.md` | 道具归属/状态变化 | append 变化行 |
-| `knowledge/shared-systems/势力追踪.md` | 势力关系变化 | append 变化行 |
-| 各出场人物卡 | 每次 | 出场记录 append；性格/关系/已知信息/修为如有变化逐表 append |
-| `knowledge/characters/_关系与称呼索引.md` | 称呼或关系变化 | **双向**各 append 一行 |
-| `knowledge/plot/伏笔追踪.md` | 伏笔推进/回收/新埋 | append 对应行 |
-| `knowledge/plot/因果链.md` | 新增因果边 | append 边 |
-| `knowledge/INDEX.md` | 每次 | 更新最后出场章列和当前进度段 |
-| `knowledge/shared-systems/功法技能.md` | 新增/揭示功法 | append 百科行 |
-| TodoWrite | 每次 | 本章标记 completed |
+| `knowledge/INDEX.md` | 每次 | 更新进度段 |
+
+### ★ Fork PlanAuditor（不可跳过）
+
+追踪文件更新完成后，Fork PlanAuditor：
+```
+ForkSubAgent(agent_type="PlanAuditor", task="审计细纲 chapter-NNN-细纲.md 的计划质量：大纲对齐、伏笔密度、因果闭合、人物轮换、字数分配、登记完整性")
+```
+
+按报告 Edit 细纲。PlanAuditor 通过后，才可进入正文阶段。
+
+---
+
+## 第二层：正文阶段（写作 → 收尾 → 审计）
+
+### 第一步：写前准备
+
+**必做：**
+
+1. **读细纲**：Read `knowledge/plot/细纲/chapter-NNN-细纲.md` → 场景拆分、出场人物、伏笔清单
+
+2. **查人物**：CharacterSearch 查询细纲中所有出场人物。对每人：
+   ```
+   CharacterSearch("角色名") → path
+   RelationQuery(character="角色名") → 当前关系与称呼
+   Grep pattern="^\| Ch" → Read 各演变日志末行 ±2 行
+   ```
+
+3. **查当前状态（用专用工具，非全文 Read）**：
+   - `TrackingQuery(file="power", operation="current")` — 战力当前状态
+   - `TrackingQuery(file="scene", operation="current")` — 场景当前状态
+   - `TrackingQuery(file="prop", operation="current")` — 道具当前状态
+   - 如有势力线：`TrackingQuery(file="faction", operation="current")`
+   - 如有关键时间节点：`TrackingQuery(file="timeline", operation="current")`
+
+4. **读上一章**（第 2 章起必做；第 1 章跳过）：
+   - 若上章 Tail/Read 的 tool_result 仍在对话中且此后无 Edit/Write → 直接使用
+   - 否则：`Tail(file_path="chapters/chapter-{N-1:03d}.md", lines=100)`
+   - 关注：衔接点（钩子/场景/悬念）、叙事视角连贯性、文风
+
+5. **追溯因果**：PlotGraph 查询细纲中伏笔关键词的 backward 因果链路
+
+**按需：**
+
+6. **题材 Skill**：如本章涉及流派特定规则，InvokeSkill 加载
+
+### 第二步：写作中
+
+**硬性约束：**
+- **严格按细纲场景拆分逐场景写**，不跳场景
+- **正文是连续叙事，不是结构化文档**：场景之间用空行、`※` 分隔符或自然叙事过渡衔接。**禁止**出现序号（一/二/三、1/2/3）、分节标题（如 `## 场景1`）、场景标注（如「场景一：」）——这些是细纲格式，不是正文格式
+- **称呼**：以第一步 RelationQuery 返回的当前称呼为准
+- **POV 信息边界**：正文跟随某角色视角叙事时，只能写该角色已知信息演变日志末行所允许的内容
+- **字数**：2000–4000 字/章（各场景 ~字数合计应在此范围内）
+- **结尾留钩子**
+
+**偏离细纲时的处理（写作中发现更好的写法）：**
+
+| 偏离程度 | 判定 | 处理 |
+|---------|------|------|
+| 微调 | 同一场景内对话/细节不同，核心动作和伏笔操作不变 | 继续写，正文后在细纲「知识库更新确认」标记「已变更」并备注 |
+| 局部偏离 | 单个场景核心动作变化，但不影响后续章因果链 | 暂停→Edit 细纲对应场景→继续写→正文后在追踪文件追加状态更新行 |
+| 重大偏离 | 场景增删、伏笔操作变化、影响后续章走向 | 暂停→AskUserQuestion 确认→更新细纲+追踪文件→重新 Fork PlanAuditor→再继续写 |
+
+**禁止**不经确认的重大偏离——那会导致追踪文件与正文系统性不一致。
+
+**反 AI 味（正文硬性约束——由 ChapterCraftAnalyzer 专项检查）：**
+
+| 维度 | 标准 |
+|------|------|
+| **「然后」串联** | 单章作连接词 ≤3 次 |
+| **「不是…(而)是…」** | 全章禁用（含「不是…而是…」「不是…是…」「并非…而是…」等变体） |
+| **破折号（——）** | 全章 ≤1 次 |
+| **排比** | 禁止清单式排比推进情节 |
+| **环境描写** | 2–3 个相关细节即可；过渡不铺全景 |
+| **结构化序号** | 禁止 `一、`/`1.`/`##`/`场景一：` 等分节格式——正文是连续叙事 |
+| **Markdown 标记** | 禁止 `**加粗**` `*斜体*` 反引号 `~~删除线~~` `__下划线__` ——中文网文不用 Markdown |
+| **句式** | 长短句交替 |
+| **情感** | 用动作、对话、生理反应呈现，不空贴标签 |
+| **详略** | 冲突细写、过渡略写 |
+| **套路** | 按细纲写但拒绝模板化接龙 |
+| **连贯** | 接钩子开篇，不复制上章收束 |
+
+### 第三步：写后自检
+
+Write 正文完成后逐项确认（**反AI味专项由 ChapterCraftAnalyzer 负责，此处仅检查以下项**）：
+
+- **上章衔接**（N≥2）：开篇是否承接上章钩子，叙事视角与人称是否连贯；脱节则 Edit 开篇
+- **字数**：`Stats(chapter="N")` 统计本章字数，确认 2000–4000。
+  **★ 字数调整一律用 Edit 局部修改，禁止 Write 全文重写——重写引入新错误的代价远超局部修。**
+  - **不足 2000 字**：Read 细纲场景拆分 → 定位偏短的场景 → Edit 扩充描写（补充对话/动作/心理/环境细节），不改动已写段落。扩充后 Stats 复验。
+  - **超过 4000 字**：Grep 定位冗余 — `然后` >3、`——` >1、`首先\|其次\|一方面\|另一方面`、Markdown 标记 → 针对命中段逐段 Edit 删除或改写。精修后 Stats 复验；仍超标 → 征求作者意见是否拆分章节。
+- **角色出场**：检查是否有重要角色已连续 ≥5 章未出场，在汇报中提醒作者
+
+### 第四步：写后收尾（轻量，不全量更新追踪文件）
+
+**追踪文件已在细纲阶段一次性更新完毕。正文后仅做以下收尾操作：**
+
+1. 细纲「写后记录」填写：
+   - 字数（Stats 结果）
+   - 核心事件（本章实际发生的主要事件，≤30 字）
+   - 钩子（本章结尾悬念）
+
+2. 细纲「知识库更新确认」逐条标记：
+   - 与计划一致 → 标记「已执行」
+   - 执行方式与计划不同 → 标记「已变更」并备注新方式
+   - 计划了但正文未涉及 → 标记「未执行」并说明原因
+   - 本章不涉及 → 标记「无变化」
+
+3. **★ 状态确认（"计划→实际"转换）：**
+   对细纲「知识库更新确认」中标记为「已变更」或「未执行」的项：
+   - 到对应追踪文件中，在计划条目的**下一行追加**状态更新行（不删除不覆写）
+   - 伏笔追踪示例：计划行 `Ch8, F015, 埋设, 神秘玉佩, 计划中` → 追加 `Ch8, F015, 修正, 玉佩实际出现在街头偶遇场景, 已埋设`
+   - 因果链、人物演变同理
+
+4. **如有执行偏差**：
+   - 在细纲「修订记录」中追加本轮修订行（日期 + 轮次 + 原因 + 范围）
+
+5. **如有意外事件**（正文中发生了细纲未计划的重要事件）：
+   - Edit append 到对应追踪文件
+   - 修订记录中标记
 
 ---
 
 ## 本阶段完成后
 
 1. 确认正文已 Write 至 `chapters/chapter-NNN.md`，`Stats(chapter="N")` 确认字数 2000–4000
-2. 确认上表中有触发条件的文件已全部 append（勿覆写已有行）
-3. InvokeSkill(`post-chapter-checklist`) 逐项核对同步完整性
-4. **同一次 assistant 消息**内并行 Fork **2 项** Subagent（task 均含 `chapters/chapter-NNN.md`；ChapterCraftAnalyzer 含 POV/主角名）：
-   - KnowledgeAuditor · ChapterCraftAnalyzer
-5. 按全部 Subagent 报告 Edit 修复后，向作者汇报：本章摘要、钩子、出场人物、待确认项、审计结论
+2. 确认细纲「写后记录」和「知识库更新确认」已填
+3. **★ 同一次 assistant 消息**内并行 Fork 2 项 Subagent：
+   - **KnowledgeAuditor**：`审计 chapters/chapter-NNN.md 是否忠实执行细纲，收尾是否完整`
+   - **ChapterCraftAnalyzer**：`分析 chapters/chapter-NNN.md：对话质量、叙事节奏、情感轨迹、设定一致性（称呼/POV边界/战力/场景道具）、反AI味指标。POV=XXX`
+4. 按全部 Subagent 报告 Edit 修复后，向作者汇报：本章摘要、钩子、出场人物、待确认项、审计结论
 
-**禁止** 跳过步骤 4 或只跑部分 Subagent 即向作者说「本章完成」。
+**禁止** 跳过步骤 3 或只跑部分 Subagent 即向作者说「本章完成」。
+**禁止** 在正文后重复全量更新追踪文件——追溯文件应在细纲阶段一次性完成。
+
+**下一步：** 审计修复完成 → 回复作者「本章完成」。如需继续写下一章 → 再次 Invoke 本 Skill。如需基于审计报告改稿 → InvokeSkill(`revision`)。如本章是独立写完（非通过本 Skill 的正文阶段）、只需收尾核对 → InvokeSkill(`post-chapter-checklist`)。

@@ -341,13 +341,19 @@ export function useAgent(onTurnComplete?: () => void) {
         parentToolCallId?: string | null;
       }>("sub-agent-started", (event) => {
         const { forkRunId, agentType, taskPreview, source, parentToolCallId } = event.payload;
+        const forkSource =
+          source === "hook" || source === "tool"
+            ? source
+            : parentToolCallId
+              ? "tool"
+              : "hook";
         setForkRuns((prev) => {
           const next = new Map(prev);
           next.set(forkRunId, {
             forkRunId,
             agentType: agentType ?? "",
             taskPreview: taskPreview ?? "",
-            source: source === "hook" ? "hook" : "tool",
+            source: forkSource,
             parentToolCallId: parentToolCallId ?? undefined,
             machine: emptyForkMachine(),
             status: "running",
