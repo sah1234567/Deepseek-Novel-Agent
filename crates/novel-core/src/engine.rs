@@ -596,41 +596,84 @@ impl AgentEngine {
         event_tx: mpsc::UnboundedSender<Event>,
     ) -> Result<TerminalReason, AgentError> {
         while let Some(op) = op_rx.recv().await {
-            match op {
-                Op::SendMessage { content, model } => {
-                    let reason = self
-                        .handle_message_with_events(&content, model.as_deref(), Some(&event_tx))
-                        .await?;
-                    if !matches!(reason, TerminalReason::Completed) {
-                        return Ok(reason);
-                    }
-                }
-                Op::Interrupt => {
-                    self.shared
-                        .abort_controller
-                        .request(crate::InterruptReason::UserCancel);
-                    return Ok(TerminalReason::AbortedStreaming);
-                }
-                Op::ApproveTool { tool_call_id } => {
-                    self.approve_tool(&tool_call_id, Some(&event_tx)).await?;
-                }
-                Op::DenyTool {
-                    tool_call_id,
-                    reason,
-                } => {
-                    self.deny_tool(&tool_call_id, reason, Some(&event_tx))
-                        .await?;
-                }
-                Op::ResumeSession { session_id } => {
-                    if session_id != self.shared.session.id {
-                        return Err(AgentError::Validation(
-                            "resume session id mismatch in run loop".into(),
-                        ));
-                    }
-                }
+            if let Some(reason) = self.dispatch_run_op(op, &event_tx).await? {
+                return Ok(reason);
             }
         }
         Ok(TerminalReason::Completed)
+    }
+
+    /// Handle one `Op` in the non-Tauri run loop. `Some` = exit the loop with that reason.
+    async fn dispatch_run_op(
+        &mut self,
+        op: Op,
+        event_tx: &mpsc::UnboundedSender<Event>,
+    ) -> Result<Option<TerminalReason>, AgentError> {
+        match op {
+            Op::SendMessage { content, model } => {
+                self.run_op_send_message(&content, model.as_deref(), event_tx)
+                    .await
+            }
+            Op::Interrupt => Ok(Some(self.run_op_interrupt())),
+            Op::ApproveTool { tool_call_id } => {
+                self.run_op_approve_tool(&tool_call_id, event_tx).await
+            }
+            Op::DenyTool {
+                tool_call_id,
+                reason,
+            } => self.run_op_deny_tool(&tool_call_id, reason, event_tx).await,
+            Op::ResumeSession { session_id } => self.run_op_resume_session(&session_id),
+        }
+    }
+
+    async fn run_op_send_message(
+        &mut self,
+        content: &str,
+        model: Option<&str>,
+        event_tx: &mpsc::UnboundedSender<Event>,
+    ) -> Result<Option<TerminalReason>, AgentError> {
+        let reason = self
+            .handle_message_with_events(content, model, Some(event_tx))
+            .await?;
+        Ok((!matches!(reason, TerminalReason::Completed)).then_some(reason))
+    }
+
+    fn run_op_interrupt(&self) -> TerminalReason {
+        self.shared
+            .abort_controller
+            .request(crate::InterruptReason::UserCancel);
+        TerminalReason::AbortedStreaming
+    }
+
+    async fn run_op_approve_tool(
+        &mut self,
+        tool_call_id: &str,
+        event_tx: &mpsc::UnboundedSender<Event>,
+    ) -> Result<Option<TerminalReason>, AgentError> {
+        self.approve_tool(tool_call_id, Some(event_tx)).await?;
+        Ok(None)
+    }
+
+    async fn run_op_deny_tool(
+        &mut self,
+        tool_call_id: &str,
+        reason: Option<String>,
+        event_tx: &mpsc::UnboundedSender<Event>,
+    ) -> Result<Option<TerminalReason>, AgentError> {
+        self.deny_tool(tool_call_id, reason, Some(event_tx)).await?;
+        Ok(None)
+    }
+
+    fn run_op_resume_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<TerminalReason>, AgentError> {
+        if session_id != self.shared.session.id {
+            return Err(AgentError::Validation(
+                "resume session id mismatch in run loop".into(),
+            ));
+        }
+        Ok(None)
     }
 }
 
@@ -726,6 +769,66 @@ mod tests {
         }
         assert!(saw_turn);
         assert!(handle.await.unwrap().is_ok());
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn engine_run_interrupt_op() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("skills")).unwrap();
+        let engine = AgentEngine::new(test_config(&tmp)).unwrap();
+        let (op_tx, op_rx) = mpsc::unbounded_channel();
+        let (event_tx, _event_rx) = mpsc::unbounded_channel();
+        op_tx.send(Op::Interrupt).unwrap();
+        drop(op_tx);
+        let reason = engine.run(op_rx, event_tx).await.unwrap();
+        assert!(matches!(reason, TerminalReason::AbortedStreaming));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn engine_run_deny_tool_op() {
+        let _offline = crate::test_env::StripDeepseekApiKey::new();
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("skills")).unwrap();
+        let mut engine = AgentEngine::new(test_config(&tmp)).unwrap();
+        engine.pending_tools.insert(
+            "p2".into(),
+            novel_tools::ToolCallSpec {
+                id: "p2".into(),
+                name: "Write".into(),
+                input: serde_json::json!({"file_path": "settings.json", "content": "x"}),
+            },
+        );
+        let (op_tx, op_rx) = mpsc::unbounded_channel();
+        let (event_tx, _event_rx) = mpsc::unbounded_channel();
+        op_tx
+            .send(Op::DenyTool {
+                tool_call_id: "p2".into(),
+                reason: Some("no".into()),
+            })
+            .unwrap();
+        drop(op_tx);
+        let reason = engine.run(op_rx, event_tx).await.unwrap();
+        assert!(matches!(reason, TerminalReason::Completed));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn engine_run_resume_session_mismatch_errors() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("skills")).unwrap();
+        let engine = AgentEngine::new(test_config(&tmp)).unwrap();
+        let (op_tx, op_rx) = mpsc::unbounded_channel();
+        let (event_tx, _event_rx) = mpsc::unbounded_channel();
+        op_tx
+            .send(Op::ResumeSession {
+                session_id: "wrong-id".into(),
+            })
+            .unwrap();
+        drop(op_tx);
+        let err = engine.run(op_rx, event_tx).await.unwrap_err();
+        assert!(matches!(err, AgentError::Validation(_)));
     }
 
     #[rstest]

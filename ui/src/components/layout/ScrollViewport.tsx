@@ -3,7 +3,6 @@ import {
   ReactNode,
   useCallback,
   useEffect,
-  useImperativeHandle,
   useRef,
   useState,
   type UIEvent,
@@ -48,8 +47,18 @@ export const ScrollViewport = forwardRef(function ScrollViewport(
   },
   ref: React.ForwardedRef<HTMLDivElement>,
 ) {
-  const viewportRef = useRef<HTMLDivElement>(null);
-  useImperativeHandle(ref, () => viewportRef.current);
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const setViewportRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      viewportRef.current = node;
+      if (typeof ref === "function") {
+        ref(node);
+      } else if (ref) {
+        ref.current = node;
+      }
+    },
+    [ref],
+  );
   const holdTimerRef = useRef<number | null>(null);
   const pinnedToBottomRef = useRef(autoScrollTo === "bottom");
   const savedScrollRef = useRef<{ scrollTop: number; pinnedToBottom: boolean } | null>(null);
@@ -173,7 +182,7 @@ export const ScrollViewport = forwardRef(function ScrollViewport(
   return (
     <div className="scroll-viewport">
       <div
-        ref={viewportRef}
+        ref={setViewportRef}
         className={className ? `scroll-viewport-body ${className}` : "scroll-viewport-body"}
         onScroll={onScroll}
       >
