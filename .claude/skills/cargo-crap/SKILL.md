@@ -26,6 +26,8 @@ CRAP(m) = comp(m)² × (1 − cov(m)/100)³ + comp(m)
 
 ## 标准流程
 
+**一键（推荐）**：`bash scripts/ci-crap.sh` — 同一 shell 内先 `llvm-cov nextest` 再 `cargo crap --fail-above`（见 `scripts/README.md`）。
+
 ### 1. 生成 LCOV 覆盖率
 
 ```bash
@@ -41,7 +43,7 @@ cargo llvm-cov nextest --workspace --all-features --lcov --output-path lcov.info
 
 单 crate：`cargo llvm-cov --lcov --output-path lcov.info`，然后 `cargo crap --lcov lcov.info --path crates/<name> --min 30`。
 
-> `lcov.info` 已在 `.gitignore`。用 **nextest** 不要用 `cargo test`；不要把 `run` 写在 `nextest` 与 `--` 之间。
+> **硬性要求：** Rust 测试与覆盖率**只用** `cargo nextest run` / `cargo llvm-cov nextest`，**禁止** `cargo test`。`lcov.info` 已在 `.gitignore`；不要把 `run` 写在 `nextest` 与 `--` 之间。
 >
 > **重构后必须重生 lcov**：目录移动（如 `turn/loop/`、`db/` 拆分）会使旧 `lcov.info` 路径对不上，覆盖率按 0% 计，CRAP 会虚高（曾出现 68 个假阳性，重生后降至 0）。
 
@@ -196,10 +198,8 @@ jobs = 4
 ## 本地清零复验（workspace CRAP ≤ 30）
 
 ```bash
-# 1. 同一 shell 内连续执行（勿复用重构前的 lcov.info）
-cargo llvm-cov nextest --workspace --all-features --lcov --output-path lcov.info   # Windows 见上方 NEXTEST_PROFILE
-cargo crap --lcov lcov.info --workspace --fail-above --threshold 30
-cargo crap --lcov lcov.info --workspace --format json --output crap-baseline.json   # 可选 baseline
+bash scripts/ci-crap.sh
+# 可选 baseline：bash scripts/ci-crap.sh --format json --output crap-baseline.json
 ```
 
 通过标准：`--fail-above` exit 0，且无 `exceed CRAP threshold` 行。

@@ -1,13 +1,16 @@
 ---
 name: post-change-checklist
 description: >-
-  Novel Agent 修改后收尾：清理、Tracing、链路走查、Rust 审查；再按 diff 范围**分别**跑后端 / Tauri 壳 / 前端验证（对应 scripts/ci-*.sh，未触达可跳过）；
-  可选 cargo audit；Skill 与文档同步。在 novel_agent 内完成改动后自动执行。
+  Novel Agent 修改后收尾：自动执行 refactor-cleanup（死代码/兼容层/注释对齐）、Tracing、链路走查、Rust 审查；
+  再按 diff 范围**分别**跑后端 / Tauri 壳 / 前端验证（scripts/ci-*.sh，未触达可跳过）；可选 cargo audit；Skill 与文档同步。
+  在 novel_agent 内完成任意代码修改或重构后自动执行。
 ---
 
 # 修改后收尾清单
 
 在 **novel_agent** 内完成改动后：**先**完成代码稳定（步骤 1→3），**再**按本次 diff 判定要跑哪几条验证（步骤 4–7 可跳过未触达部分）。全部**已执行**项通过后汇报。
+
+**Rust 测试：** 全项目**只用** `cargo nextest run`（及 `cargo llvm-cov nextest` 做覆盖率），**禁止** `cargo test`。
 
 **环境：** 与 GitHub CI 相同脚本，见 [`scripts/README.md`](../../../scripts/README.md)。Windows 用 **Git Bash**（`.\scripts\ci-windows.ps1` 或 `bash scripts/…`），勿用 WSL `bash`。Node **24**（`ui/.nvmrc`；`ci-check-node.sh` 在 npm 步骤前校验）。
 
@@ -57,15 +60,16 @@ description: >-
 
 Agent 根目录无统一 SQLite。API Key **不**写入 per-work DB 或 `settings.json`。废弃：`NOVEL_API_KEY`、`NOVEL_PROJECT_ROOT`、`create_session(project_root)`。
 
-## 1. 代码清理
+## 1. 代码清理（必做 · 读 [`refactor-cleanup`](../refactor-cleanup/SKILL.md)）
 
-清理本次改动产生的废弃内容，**除非用户明确要求保留**：
+**每次**修改或重构后自动执行 [`refactor-cleanup`](../refactor-cleanup/SKILL.md) 全流程，按步骤 0 勾选的触达层（Rust 后端 / `ui` 前端 / Tauri / DB·迁移）扫描本次 diff：
 
-- 已无调用方的函数、模块、配置项、分支
-- 仅为旧行为服务的向后兼容逻辑、适配层、deprecated 别名（`state.db` 的 `api_config` 表已移除，勿写旧路径）
-- 因重构而闲置的 import、常量、测试桩
+- 删除已无调用方的函数、模块、配置项、分支
+- 收敛仅为旧行为服务的向后兼容逻辑、适配层、deprecated 别名（`state.db` 的 `api_config` 表已移除，勿写旧路径）
+- 删除因重构闲置的 import、常量、测试桩
+- **注释与文档**：与代码不一致时**必须改写到反映当前行为**；**严禁删注释掩盖不一致**（细则见 refactor-cleanup §3）
 
-注释与代码逻辑因修改而不一致时，**必须更新注释以反映当前行为**；**严禁通过删除注释来消除不一致**。
+仅文档/注释、无逻辑变更：快速核对后可在汇报中标「无代码清理项」。
 
 ## 1.5 Tracing 埋点（必做）
 

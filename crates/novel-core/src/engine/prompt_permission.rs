@@ -14,18 +14,16 @@ enum PermissionPrefixAction {
 }
 
 fn permission_prefix_action(
+    plan: &crate::permission::ModeTransitionPlan,
     old_mode: &PermissionMode,
     new_mode: &PermissionMode,
     system_has_autonomous: bool,
     pending_prefix: Option<&str>,
 ) -> PermissionPrefixAction {
-    match crate::permission::format_mode_transition_prefix(
-        old_mode,
-        new_mode,
-        system_has_autonomous,
-    ) {
+    match plan.merged_prefix().map(str::to_string) {
         Some(prefix) => PermissionPrefixAction::Set(prefix),
-        None if matches!(new_mode, PermissionMode::Unattended)
+        None if matches!(plan, crate::permission::ModeTransitionPlan::None)
+            && matches!(new_mode, PermissionMode::Unattended)
             && !matches!(old_mode, PermissionMode::Unattended)
             && system_has_autonomous
             && pending_prefix
@@ -148,7 +146,11 @@ impl AgentEngine {
             .filter(|m| m.role == "system")
             .is_some_and(|m| crate::permission::system_contains_autonomous(&m.content));
 
+        let plan =
+            crate::permission::plan_mode_transition(&old_mode, &new_mode, system_has_autonomous);
+
         match permission_prefix_action(
+            &plan,
             &old_mode,
             &new_mode,
             system_has_autonomous,
@@ -161,10 +163,18 @@ impl AgentEngine {
             PermissionPrefixAction::NoChange => {}
         }
 
+        self.shared
+            .session
+            .db
+            .set_session_permission_mode(&self.shared.session.id, new_mode.label())
+            .map_err(AgentError::from)?;
+
         tracing::debug!(
             ?old_mode,
             ?new_mode,
+            ?plan,
             system_has_autonomous,
+            persisted = true,
             "permission_mode_changed"
         );
         Ok(())

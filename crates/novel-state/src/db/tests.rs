@@ -156,6 +156,35 @@ fn invoked_skill_ids_metadata_roundtrip() {
 }
 
 #[test]
+fn permission_mode_metadata_roundtrip() {
+    let db = test_db();
+    let sid = db.create_session("/tmp/proj", "deepseek-chat").unwrap();
+    assert!(db.get_session_permission_mode(&sid).unwrap().is_none());
+    db.set_session_permission_mode(&sid, "unattended").unwrap();
+    assert_eq!(
+        db.get_session_permission_mode(&sid).unwrap().as_deref(),
+        Some("unattended")
+    );
+}
+
+#[test]
+fn set_permission_mode_preserves_other_metadata_keys() {
+    let db = test_db();
+    let sid = db.create_session("/tmp/proj", "deepseek-chat").unwrap();
+    db.set_invoked_skill_ids(&sid, &["plot-grid".into()])
+        .unwrap();
+    db.set_session_permission_mode(&sid, "plan").unwrap();
+    assert_eq!(
+        db.get_invoked_skill_ids(&sid).unwrap(),
+        vec!["plot-grid".to_string()]
+    );
+    assert_eq!(
+        db.get_session_permission_mode(&sid).unwrap().as_deref(),
+        Some("plan")
+    );
+}
+
+#[test]
 fn read_skill_reference_paths_metadata_roundtrip() {
     let db = test_db();
     let sid = db.create_session("/tmp/proj", "deepseek-chat").unwrap();

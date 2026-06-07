@@ -2,8 +2,6 @@
 //! (single `role=user` row). Session boundary Unattended still uses `autonomous-writing.md`
 //! in system — see `SystemPromptBuilder`.
 
-use novel_tools::PermissionMode;
-
 pub const PERMISSION_MODE_ENTER_PREFIX: &str = "[权限模式: 无人值守]";
 pub const PERMISSION_MODE_EXIT_PREFIX: &str = "[权限模式: 已退出无人值守]";
 
@@ -39,24 +37,12 @@ pub fn format_exit_unattended_prefix() -> String {
     PERMISSION_MODE_EXIT_BODY.trim().to_string()
 }
 
-/// Mid-session mode transition: prefix for the next user message, if any.
-pub fn format_mode_transition_prefix(
-    old_mode: &PermissionMode,
-    new_mode: &PermissionMode,
-    system_has_autonomous: bool,
-) -> Option<String> {
-    if matches!(new_mode, PermissionMode::Unattended)
-        && !matches!(old_mode, PermissionMode::Unattended)
-    {
-        if system_has_autonomous {
-            None
-        } else {
-            Some(format_enter_unattended_prefix())
-        }
-    } else if matches!(old_mode, PermissionMode::Unattended)
-        && !matches!(new_mode, PermissionMode::Unattended)
-    {
-        Some(format_exit_unattended_prefix())
+/// `Some(true)` = enter notice, `Some(false)` = exit, `None` = unrelated user text.
+pub(crate) fn permission_notice_direction(content: &str) -> Option<bool> {
+    if content.starts_with(PERMISSION_MODE_ENTER_PREFIX) {
+        Some(true)
+    } else if content.starts_with(PERMISSION_MODE_EXIT_PREFIX) {
+        Some(false)
     } else {
         None
     }
@@ -73,18 +59,15 @@ pub fn prepend_permission_notice(prefix_block: &str, user_content: &str) -> Stri
 }
 
 pub fn is_permission_mode_notice(content: &str) -> bool {
-    content.starts_with(PERMISSION_MODE_ENTER_PREFIX)
-        || content.starts_with(PERMISSION_MODE_EXIT_PREFIX)
+    permission_notice_direction(content).is_some()
 }
 
 /// UI `message_kind` for stored user rows with permission-mode injection.
 pub fn permission_mode_message_kind(content: &str) -> Option<&'static str> {
-    if content.starts_with(PERMISSION_MODE_ENTER_PREFIX) {
-        Some("permissionModeEnter")
-    } else if content.starts_with(PERMISSION_MODE_EXIT_PREFIX) {
-        Some("permissionModeExit")
-    } else {
-        None
+    match permission_notice_direction(content) {
+        Some(true) => Some("permissionModeEnter"),
+        Some(false) => Some("permissionModeExit"),
+        None => None,
     }
 }
 
@@ -125,16 +108,6 @@ mod tests {
             "[权限模式: 已退出无人值守]\nbody"
         ));
         assert!(!is_permission_mode_notice("hello"));
-    }
-
-    #[test]
-    fn format_mode_transition_prefix_covers_transitions() {
-        use PermissionMode::{Auto, Normal, Plan, Unattended};
-        assert!(format_mode_transition_prefix(&Normal, &Unattended, false).is_some());
-        assert!(format_mode_transition_prefix(&Unattended, &Auto, false).is_some());
-        assert!(format_mode_transition_prefix(&Unattended, &Plan, true).is_some());
-        assert!(format_mode_transition_prefix(&Normal, &Unattended, true).is_none());
-        assert!(format_mode_transition_prefix(&Auto, &Plan, false).is_none());
     }
 
     #[test]

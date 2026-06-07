@@ -22,7 +22,7 @@
 **sessions：** UUID 主键，project_root, title, status, model, provider
 - Token 三类：`cache_hit_tokens`, `cache_miss_tokens`, `completion_tokens`（各自独立 `+=`）
 - `context_tokens`：主 Agent 最近一次 API 调用的 `hit+miss+comp` 快照（覆盖写入；SubAgent 计费不累加此字段）
-- `total_turns`、`api_call_count`、`metadata_json`（JSON，含 `system_static_frozen`、`frozen_*`、`compaction_count` 等）
+- `total_turns`、`api_call_count`、`metadata_json`（JSON，含 `system_static_frozen`、`frozen_*`、`compaction_count`、`permission_mode`（`normal`/`plan`/`auto`/`unattended`，session 级 live 模式）、`invoked_skill_ids` 等）
 
 **messages：** API **工作集**（压缩后仅保留 system + context user + retain ReAct + 新轮次）
 - turn/seq 编码：`(0,0)` system → `(0,1)` `[上下文刷新]` user → `turn≥1` 真实对话

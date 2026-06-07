@@ -65,9 +65,13 @@ impl AgentEngine {
         persist_frozen_system_metadata(&session.db, &session.id, &dynamic)
             .map_err(AgentError::from)?;
 
-        let audit = open_audit_logger(&config.project_root, &session.id, &settings.model.model);
-
         let initial_permission_mode = PermissionMode::from_settings_str(&settings.permissions.mode);
+        session
+            .db
+            .set_session_permission_mode(&session.id, initial_permission_mode.label())
+            .map_err(AgentError::from)?;
+
+        let audit = open_audit_logger(&config.project_root, &session.id, &settings.model.model);
 
         let session_llm = new_session_llm(&settings);
         let shared = EngineShared {
@@ -150,6 +154,11 @@ impl AgentEngine {
                 .map_err(AgentError::from)?;
             persist_frozen_system_metadata(&session.db, &session.id, &dynamic)
                 .map_err(AgentError::from)?;
+            let initial = PermissionMode::from_settings_str(&settings.permissions.mode);
+            session
+                .db
+                .set_session_permission_mode(&session.id, initial.label())
+                .map_err(AgentError::from)?;
             (msgs, system_prompt, agents_md)
         } else {
             session
@@ -209,9 +218,20 @@ impl AgentEngine {
             .get_read_skill_reference_paths(session_id)
             .unwrap_or_default();
 
-        let audit = open_audit_logger(&config.project_root, &session.id, &settings.model.model);
+        let initial_permission_mode = crate::permission::resolve_session_permission_mode(
+            &session.db,
+            session_id,
+            &stored,
+            &settings.permissions.mode,
+        )
+        .map_err(AgentError::from)?;
+        tracing::debug!(
+            mode = %initial_permission_mode.label(),
+            session_id = %session_id,
+            "resume_permission_mode"
+        );
 
-        let initial_permission_mode = PermissionMode::from_settings_str(&settings.permissions.mode);
+        let audit = open_audit_logger(&config.project_root, &session.id, &settings.model.model);
 
         let session_llm = new_session_llm(&settings);
         let shared = EngineShared {

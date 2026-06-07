@@ -11,4 +11,8 @@ exclude = [
   "**/build.rs",
   "**/tests/**",
   "tests/integration/**",
+  # Inline #[cfg(test)] modules under src/ (not in LCOV as production paths).
+  "**/engine/tests.rs",
+  "**/turn/loop/tests.rs",
+  "**/db/tests.rs",
 ]

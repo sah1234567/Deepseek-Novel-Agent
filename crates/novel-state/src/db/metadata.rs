@@ -150,4 +150,32 @@ impl Database {
         }
         self.set_session_metadata(session_id, &meta)
     }
+
+    /// Session-scoped permission mode label (`normal` / `plan` / `auto` / `unattended`).
+    pub fn get_session_permission_mode(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<String>, StateError> {
+        Ok(self.get_session_metadata(session_id)?.and_then(|v| {
+            v.get("permission_mode")
+                .and_then(|m| m.as_str().map(String::from))
+        }))
+    }
+
+    pub fn set_session_permission_mode(
+        &self,
+        session_id: &str,
+        mode: &str,
+    ) -> Result<(), StateError> {
+        let mut meta = self
+            .get_session_metadata(session_id)?
+            .unwrap_or_else(|| serde_json::json!({}));
+        if let Some(obj) = meta.as_object_mut() {
+            obj.insert(
+                "permission_mode".into(),
+                serde_json::Value::String(mode.to_string()),
+            );
+        }
+        self.set_session_metadata(session_id, &meta)
+    }
 }

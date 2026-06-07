@@ -243,6 +243,173 @@ fn apply_permission_mode_change_rejects_during_pending_tool() {
 }
 
 #[test]
+fn new_session_persists_permission_mode_to_metadata() {
+    let tmp = TempDir::new().unwrap();
+    std::fs::create_dir_all(tmp.path().join("skills")).unwrap();
+    let engine = AgentEngine::new(test_config(&tmp)).unwrap();
+    assert_eq!(
+        engine
+            .shared
+            .session
+            .db
+            .get_session_permission_mode(&engine.shared.session.id)
+            .unwrap()
+            .as_deref(),
+        Some("normal")
+    );
+}
+
+#[test]
+fn apply_permission_mode_change_persists_and_resume_restores() {
+    use novel_tools::PermissionMode;
+
+    let tmp = TempDir::new().unwrap();
+    std::fs::create_dir_all(tmp.path().join("skills")).unwrap();
+    let cfg = test_config(&tmp);
+    let mut engine = AgentEngine::new(cfg.clone()).unwrap();
+    engine
+        .apply_permission_mode_change(PermissionMode::Plan)
+        .unwrap();
+    let sid = engine.shared.session.id.clone();
+    assert_eq!(
+        engine
+            .shared
+            .session
+            .db
+            .get_session_permission_mode(&sid)
+            .unwrap()
+            .as_deref(),
+        Some("plan")
+    );
+    let resumed = AgentEngine::resume(cfg, &sid).unwrap();
+    assert_eq!(
+        resumed.tool_context().effective_permission_mode(),
+        PermissionMode::Plan
+    );
+}
+
+#[test]
+fn resume_metadata_auto_without_switch() {
+    use novel_tools::PermissionMode;
+
+    let tmp = TempDir::new().unwrap();
+    std::fs::create_dir_all(tmp.path().join("skills")).unwrap();
+    let cfg = test_config(&tmp);
+    let engine = AgentEngine::new(cfg.clone()).unwrap();
+    let sid = engine.shared.session.id.clone();
+    engine
+        .shared
+        .session
+        .db
+        .set_session_permission_mode(&sid, "auto")
+        .unwrap();
+    let resumed = AgentEngine::resume(cfg, &sid).unwrap();
+    assert_eq!(
+        resumed.tool_context().effective_permission_mode(),
+        PermissionMode::Auto
+    );
+    assert!(resumed.pending_permission_user_prefix.is_none());
+}
+
+#[test]
+fn normal_to_unattended_sets_dual_pending_prefix() {
+    use crate::permission::{AUTONOMOUS_MODE_MARKER, PERMISSION_MODE_ENTER_PREFIX};
+    use novel_tools::PermissionMode;
+
+    let tmp = TempDir::new().unwrap();
+    std::fs::create_dir_all(tmp.path().join("skills")).unwrap();
+    let mut engine = AgentEngine::new(test_config(&tmp)).unwrap();
+    engine
+        .apply_permission_mode_change(PermissionMode::Unattended)
+        .unwrap();
+    let prefix = engine
+        .pending_permission_user_prefix
+        .as_ref()
+        .expect("dual inject");
+    assert!(prefix.starts_with(PERMISSION_MODE_ENTER_PREFIX));
+    assert!(prefix.contains(AUTONOMOUS_MODE_MARKER));
+}
+
+#[test]
+fn resume_unattended_switch_normal_sets_exit_prefix() {
+    use crate::permission::PERMISSION_MODE_EXIT_PREFIX;
+    use novel_tools::PermissionMode;
+
+    let tmp = TempDir::new().unwrap();
+    std::fs::create_dir_all(tmp.path().join("skills")).unwrap();
+    let cfg = test_config(&tmp);
+    let mut engine = AgentEngine::new(cfg.clone()).unwrap();
+    engine
+        .apply_permission_mode_change(PermissionMode::Unattended)
+        .unwrap();
+    let sid = engine.shared.session.id.clone();
+    let mut resumed = AgentEngine::resume(cfg, &sid).unwrap();
+    assert_eq!(
+        resumed.tool_context().effective_permission_mode(),
+        PermissionMode::Unattended
+    );
+    resumed
+        .apply_permission_mode_change(PermissionMode::Normal)
+        .unwrap();
+    let prefix = resumed
+        .pending_permission_user_prefix
+        .as_ref()
+        .expect("exit inject");
+    assert!(prefix.starts_with(PERMISSION_MODE_EXIT_PREFIX));
+}
+
+#[test]
+fn plan_to_auto_switch_no_pending_prefix() {
+    use novel_tools::PermissionMode;
+
+    let tmp = TempDir::new().unwrap();
+    std::fs::create_dir_all(tmp.path().join("skills")).unwrap();
+    let mut engine = AgentEngine::new(test_config(&tmp)).unwrap();
+    engine
+        .apply_permission_mode_change(PermissionMode::Plan)
+        .unwrap();
+    engine
+        .apply_permission_mode_change(PermissionMode::Auto)
+        .unwrap();
+    assert!(engine.pending_permission_user_prefix.is_none());
+}
+
+#[rstest]
+#[tokio::test]
+async fn mode_switch_then_send_merges_prefix_and_display_content() {
+    use crate::message::stored_message_display_text;
+    use crate::permission::{PERMISSION_MODE_ENTER_PREFIX, USER_CONTENT_SEPARATOR};
+    use novel_tools::PermissionMode;
+
+    let _offline = crate::test_env::StripDeepseekApiKey::new();
+    let tmp = TempDir::new().unwrap();
+    std::fs::create_dir_all(tmp.path().join("skills")).unwrap();
+    let cfg = test_config(&tmp);
+    let mut engine = AgentEngine::new(cfg.clone()).unwrap();
+    engine
+        .apply_permission_mode_change(PermissionMode::Unattended)
+        .unwrap();
+    engine.handle_message("写第3章").await.unwrap();
+    let sid = engine.shared.session.id.clone();
+    let msgs = engine
+        .shared
+        .session
+        .db
+        .get_session_messages(&sid, Some((1, 1)))
+        .unwrap();
+    let user = msgs
+        .iter()
+        .find(|m| m.role == "user" && m.turn_number == 1)
+        .expect("turn 1 user message");
+    let json = &user.content_json;
+    let content = json.get("content").and_then(|v| v.as_str()).unwrap();
+    assert!(content.starts_with(PERMISSION_MODE_ENTER_PREFIX));
+    assert!(content.contains(USER_CONTENT_SEPARATOR));
+    assert!(content.ends_with("写第3章"));
+    assert_eq!(stored_message_display_text(json), "写第3章");
+}
+
+#[test]
 fn clear_read_file_cache_removes_all_entries() {
     use novel_tools::{ReadCacheEntry, ReadCacheSource};
     use std::path::PathBuf;

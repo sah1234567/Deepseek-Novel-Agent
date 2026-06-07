@@ -433,7 +433,7 @@ useEffect(() => { connectWebSocket(url); }, []);
 
 - 通读待改代码的**全部调用方**，确认每个调用方的使用方式
 - 明确 "改动前这段代码做了什么"——用一句话描述当前行为
-- 如果有测试：先跑一遍确认基线绿。如果没有：补一个最小测试覆盖当前行为
+- 如果有测试：先 `cargo nextest run -p <crate> --profile ci` 确认基线绿（**禁止** `cargo test`）。如果没有：补一个最小测试覆盖当前行为
 
 ### 2. 应用原则（Apply Standards）
 
@@ -458,7 +458,7 @@ useEffect(() => { connectWebSocket(url); }, []);
 ### 4. 自检（Verify）
 
 - 逐行 diff：每一处修改都能说清**为什么改**和**行为是否不变**
-- 重跑步骤 1 的测试：确认基线仍绿
+- 重跑步骤 1 的 nextest：`cargo nextest run -p <crate> --profile ci`（**禁止** `cargo test`），确认基线仍绿
 - 如果有新增逻辑：补测试覆盖新路径
 
 ---
@@ -476,7 +476,7 @@ useEffect(() => { connectWebSocket(url); }, []);
 - [ ] **无嵌套三元**：多条件判断使用 `match`/`switch`/`if-else`，不嵌套 `?:`
 - [ ] **无死代码**：没有注释掉的旧代码、从未调用的函数、仅测试用的 `pub` 导出
 - [ ] **注释恰当**：解释 "为什么"，不解释 "做了什么"；过时注释已更新或删除
-- [ ] **测试覆盖**：改动路径有测试；新增逻辑有测试；重构后原测试仍绿
+- [ ] **测试覆盖**：改动路径有测试；新增逻辑有测试；重构后 `cargo nextest run` 仍绿（**禁止** `cargo test`，与 [`post-change-checklist`](../post-change-checklist/SKILL.md) 一致）
 
 ---
 
