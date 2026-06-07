@@ -62,7 +62,7 @@ bash scripts/ci-security-audit.sh
 
 | 脚本 | 用途 |
 |------|------|
-| `reset-work-databases.ps1` / `.sh` | 清理作品 `state.db` |
+| `reset-work-databases.ps1` / `.sh` | 删除 `works/*/.novel-agent/state.db` 后由应用重建。**升级后若移除旧 transcript/tool 显示兼容层，或 metadata 报 legacy format、无法 resume，须先跑此脚本再开新会话**（与 `novel-state` metadata 策略一致） |
 
 ## Node 24
 

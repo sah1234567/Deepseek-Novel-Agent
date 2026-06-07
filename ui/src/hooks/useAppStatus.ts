@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen, UnlistenFn } from "@tauri-apps/api/event";
+import { listen } from "@tauri-apps/api/event";
+import { IPC_COMMANDS } from "../ipc/commands";
+import { IPC_EVENTS } from "../ipc/events";
+import { mountTauriListeners } from "../utils/tauriEvents";
 
 export interface SessionTodo {
   id: string;
@@ -32,6 +35,7 @@ export interface AppStatus {
   permissionMode: string;
   hookRunning: boolean;
   pendingUserQuestion: boolean;
+  turnInProgress: boolean;
   turnNumber: number;
   projectInitialized: boolean;
   hasInterruptibleToolInProgress?: boolean;
@@ -49,7 +53,7 @@ export function useAppStatus() {
 
   const refresh = useCallback(async () => {
     try {
-      const s = await invoke<AppStatus>("get_app_status");
+      const s = await invoke<AppStatus>(IPC_COMMANDS.getAppStatus);
       setStatus(s);
       setError(null);
     } catch (e) {
@@ -64,66 +68,55 @@ export function useAppStatus() {
   }, [refresh]);
 
   useEffect(() => {
-    const unlisteners: Promise<UnlistenFn>[] = [];
-    unlisteners.push(
-      listen<{
-        cacheHitTokens: number;
-        cacheMissTokens: number;
-        completionTokens: number;
-        contextTokens: number;
-      }>("session-tokens-updated", (event) => {
-        const p = event.payload;
-        setStatus((prev) =>
-          prev
-            ? {
-                ...prev,
-                sessionCacheHit: p.cacheHitTokens,
-                sessionCacheMiss: p.cacheMissTokens,
-                sessionCompletion: p.completionTokens,
-                contextTokens: p.contextTokens,
-              }
-            : prev,
-        );
-      }),
-    );
-    unlisteners.push(
-      listen("turn-complete", () => {
-        void refresh();
-      }),
-    );
-    // ToolCallResult events use phase "result" but omit toolName (see event_payload.rs).
-    // Refresh status (incl. session todos) after any tool completes.
-    unlisteners.push(
-      listen<{ phase?: string }>("tool-call-request", (event) => {
-        if (event.payload.phase === "result") {
-          void refresh();
-        }
-      }),
-    );
-    unlisteners.push(
-      listen("session-resumed", () => {
-        void refresh();
-      }),
-    );
-    unlisteners.push(
-      listen("permission-mode-changed", () => {
-        void refresh();
-      }),
-    );
-    return () => {
-      void Promise.all(unlisteners).then((fns) => fns.forEach((fn) => fn()));
-    };
+    return mountTauriListeners([
+      () =>
+        listen<{
+          cacheHitTokens: number;
+          cacheMissTokens: number;
+          completionTokens: number;
+          contextTokens: number;
+        }>(IPC_EVENTS.sessionTokensUpdated, (event) => {
+          const p = event.payload;
+          setStatus((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  sessionCacheHit: p.cacheHitTokens,
+                  sessionCacheMiss: p.cacheMissTokens,
+                  sessionCompletion: p.completionTokens,
+                  contextTokens: p.contextTokens,
+                }
+              : prev,
+          );
+        }),
+      // ToolCallResult events use phase "result" but omit toolName (see event_payload.rs).
+      () =>
+        listen<{ phase?: string }>(IPC_EVENTS.toolCallRequest, (event) => {
+          if (event.payload.phase === "result") {
+            void refresh();
+          }
+        }),
+      // Turn-end status refresh is driven by `AgentProvider.onTurnComplete` (useAgent).
+      // Session switches refresh via invoke callers (resumeSession / createSession / openWork).
+      () => listen(IPC_EVENTS.permissionModeChanged, () => void refresh()),
+    ]);
   }, [refresh]);
 
   const initProject = useCallback(async () => {
-    await invoke("init_novel_project");
+    await invoke(IPC_COMMANDS.initNovelProject);
     await refresh();
   }, [refresh]);
 
   const setPermissionMode = useCallback(
     async (mode: string) => {
-      await invoke("set_permission_mode", { mode });
-      await refresh();
+      try {
+        await invoke(IPC_COMMANDS.setPermissionMode, { mode });
+        await refresh();
+        setError(null);
+      } catch (e) {
+        setError(String(e));
+        throw e;
+      }
     },
     [refresh],
   );
@@ -131,7 +124,7 @@ export function useAppStatus() {
   const resumeSession = useCallback(
     async (sessionId: string) => {
       try {
-        await invoke("resume_session", { sessionId });
+        await invoke(IPC_COMMANDS.resumeSession, { sessionId });
         await refresh();
         setError(null);
       } catch (e) {
@@ -143,21 +136,21 @@ export function useAppStatus() {
   );
 
   const listSessions = useCallback(async () => {
-    return invoke<SessionSummary[]>("list_sessions");
+    return invoke<SessionSummary[]>(IPC_COMMANDS.listSessions);
   }, []);
 
   const listWorks = useCallback(async () => {
-    return invoke<WorkSummary[]>("list_works");
+    return invoke<WorkSummary[]>(IPC_COMMANDS.listWorks);
   }, []);
 
   const createSession = useCallback(async () => {
-    await invoke("create_session");
+    await invoke(IPC_COMMANDS.createSession);
     await refresh();
   }, [refresh]);
 
   const createWork = useCallback(
     async (name: string) => {
-      await invoke("create_work", { name });
+      await invoke(IPC_COMMANDS.createWork, { name });
       await refresh();
     },
     [refresh],
@@ -165,24 +158,24 @@ export function useAppStatus() {
 
   const openWork = useCallback(
     async (name: string) => {
-      await invoke("open_work", { name });
+      await invoke(IPC_COMMANDS.openWork, { name });
       await refresh();
     },
     [refresh],
   );
 
   const getApiConfig = useCallback(async () => {
-    return invoke<{ api_key: string; api_base: string }>("get_api_config");
+    return invoke<{ api_key: string; api_base: string }>(IPC_COMMANDS.getApiConfig);
   }, []);
 
   const setApiConfig = useCallback(async (apiKey: string, apiBase: string) => {
-    await invoke("set_api_config", { apiKey, apiBase });
+    await invoke(IPC_COMMANDS.setApiConfig, { apiKey, apiBase });
     await refresh();
   }, [refresh]);
 
   const updateSessionTodo = useCallback(
     async (todoId: string, status: string) => {
-      await invoke("update_session_todo", { todoId, status });
+      await invoke(IPC_COMMANDS.updateSessionTodo, { todoId, status });
       await refresh();
     },
     [refresh],

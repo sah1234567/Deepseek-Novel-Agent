@@ -30,7 +30,7 @@ allowed-tools: Read, Write, Edit, Glob, Grep, Bash, CharacterSearch, PlotGraph, 
 
 修订正文时同步清除 AI 味：删改「不是…而是…」、破折号泛滥、「然后/首先/其次」堆砌、句长均匀、情感空标签、说明书式叙述；补入具体细节与闲笔，长短句交替。
 
-**Edit 后读盘**：每文件 Edit 后 Read/Tail **改动段一次**再改下一处；禁止对同一 `offset`/`limit`（或 Tail `lines`）连读两次（引擎返回 stub）。session cache 已更新 ≠ 对话 context 已更新。
+**Edit 后读盘**：每文件 Edit 后 Read/Tail **改动段一次**再改下一处；禁止对同一 `offset`/`limit`（或 Tail `lines`）连读两次——第二次可能读到缓存副本而非落盘最新内容，导致后续 Edit 基于过时文本。
 
 修改优先级（从基础到表层）：
 1. **世界观/战力文件**

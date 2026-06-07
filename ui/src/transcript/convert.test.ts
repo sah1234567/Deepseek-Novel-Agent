@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { UIMessage } from "../hooks/useAgent";
+import type { UIMessage } from "../types/messages";
 import { flatMessagesToTranscript, transcriptToFlatMessages } from "./convert";
 import { dispatchTranscriptEvent } from "./machine";
 import { userMsg } from "../test/fixtures/transcript";

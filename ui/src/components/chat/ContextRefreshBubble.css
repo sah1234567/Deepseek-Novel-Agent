@@ -14,17 +14,55 @@
   word-break: break-word;
 }
 
-.message-context-refresh header {
+.message-context-refresh details {
+  margin: 0;
+}
+
+.context-refresh-toggle {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.context-refresh-toggle::-webkit-details-marker {
+  display: none;
+}
+
+.context-refresh-title {
   font-weight: 600;
-  margin-bottom: 0.5rem;
   color: var(--color-accent-blue, #7eb8ff);
 }
 
-.message-context-refresh details {
-  margin-top: 0.35rem;
+.context-refresh-preview {
+  color: var(--color-text-muted, #9aa0a6);
+  font-size: 0.85rem;
+  line-height: 1.4;
 }
 
-.message-context-refresh summary {
-  cursor: pointer;
-  font-weight: 500;
+.message-context-refresh details:not([open]) .context-refresh-body {
+  display: none;
+}
+
+.message-context-refresh details[open] .context-refresh-preview {
+  display: none;
+}
+
+.context-refresh-skills {
+  font-size: 0.8rem;
+  color: var(--color-text-muted, #9aa0a6);
+}
+
+.context-refresh-body {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid rgba(126, 184, 255, 0.2);
+}
+
+.context-refresh-body-title {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-text-muted, #9aa0a6);
 }

@@ -1,5 +1,5 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TranscriptView } from "../../components/chat/TranscriptView";
 import { createInitialMachine, dispatchTranscriptEvent } from "../../transcript";
 import { transcriptToFlatMessages } from "../../transcript/convert";
@@ -32,11 +32,20 @@ function machineWithLiveToolUnderAgent() {
 }
 
 describe("TranscriptView DOM order", () => {
+  beforeEach(() => {
+    globalThis.IntersectionObserver = class {
+      observe = vi.fn();
+      unobserve = vi.fn();
+      disconnect = vi.fn();
+      constructor(_cb: IntersectionObserverCallback) {}
+    } as unknown as typeof IntersectionObserver;
+  });
+
   it("renders Agent bubble before Tool bubble in live SegmentGroup", () => {
     const machine = machineWithLiveToolUnderAgent();
     const flatMessages = transcriptToFlatMessages(machine);
     const { container } = render(
-      <TranscriptView machine={machine} mode="main" flatMessages={flatMessages} isStreaming />,
+      <TranscriptView machine={machine} mode="main" forkBindingMessages={flatMessages} isStreaming />,
     );
     const assistant = container.querySelector(".message-assistant");
     const tool = container.querySelector(".message-tool");
@@ -69,7 +78,7 @@ describe("TranscriptView DOM order", () => {
       <TranscriptView
         machine={m}
         mode="main"
-        flatMessages={flatMessages}
+        forkBindingMessages={flatMessages}
         pendingQuestion={{
           toolCallId: "ask1",
           questions: [{ id: "q1", prompt: "Pick?", options: [{ id: "o1", label: "A" }] }],
@@ -98,7 +107,7 @@ describe("TranscriptView DOM order", () => {
     });
     const flatMessages = transcriptToFlatMessages(m);
     const { container } = render(
-      <TranscriptView machine={m} mode="fork" flatMessages={flatMessages} isStreaming />,
+      <TranscriptView machine={m} mode="fork" forkBindingMessages={flatMessages} isStreaming />,
     );
     expect(container.querySelector(".message-user")).toBeNull();
     expect(container.querySelector(".message-assistant")).toBeTruthy();
@@ -131,7 +140,7 @@ describe("TranscriptView DOM order", () => {
     const flatMessages = transcriptToFlatMessages(m);
 
     const { container } = render(
-      <TranscriptView machine={m} mode="main" flatMessages={flatMessages} />,
+      <TranscriptView machine={m} mode="main" forkBindingMessages={flatMessages} />,
     );
     const group = container.querySelector(".segment-group");
     expect(group).toBeTruthy();
@@ -139,5 +148,95 @@ describe("TranscriptView DOM order", () => {
     expect(children.length).toBeGreaterThanOrEqual(2);
     expect(children[0].classList.contains("message-assistant")).toBe(true);
     expect(children[1].classList.contains("message-tool")).toBe(true);
+  });
+
+  it("shows latest user bubble when a newer live turn follows a completed turn", () => {
+    let m = createInitialMachine();
+    m = dispatchTranscriptEvent(m, {
+      type: "MERGE_TURNS",
+      bundles: [
+        {
+          turnNumber: 1,
+          messages: [
+            {
+              id: "u1",
+              role: "user",
+              contentBlocks: [{ blockIndex: 0, kind: "text", text: "first" }],
+            },
+            {
+              id: "a1",
+              role: "assistant",
+              contentBlocks: [{ blockIndex: 0, kind: "text", text: "ok" }],
+            },
+          ],
+        },
+      ],
+    });
+    m = dispatchTranscriptEvent(m, {
+      type: "BEGIN_TURN",
+      user: userMsg("u2", "second prompt"),
+    });
+    const flatMessages = transcriptToFlatMessages(m);
+    const layout = {
+      hasContextRefresh: false,
+      active: { minTurn: 1, maxTurn: 1 },
+      archives: [],
+    };
+    const turnSlots = [
+      {
+        slotKey: "a:1",
+        kind: "active" as const,
+        turnNumber: 1,
+        status: "loaded" as const,
+      },
+    ];
+    const { container } = render(
+      <TranscriptView
+        machine={m}
+        mode="main"
+        forkBindingMessages={flatMessages}
+        layout={layout}
+        turnSlots={turnSlots}
+        isStreaming
+      />,
+    );
+    const users = container.querySelectorAll(".message-user");
+    expect(users.length).toBeGreaterThanOrEqual(2);
+    expect(container.textContent).toContain("first");
+    expect(container.textContent).toContain("second prompt");
+  });
+
+  it("idle archive turn slot renders divider and placeholder without message body", () => {
+    const { container } = render(
+      <TranscriptView
+        machine={createInitialMachine()}
+        mode="main"
+        forkBindingMessages={[]}
+        layout={{
+          hasContextRefresh: false,
+          active: { minTurn: 1, maxTurn: 2 },
+          archives: [{ epoch: 1, bounds: { minTurn: 1, maxTurn: 1 } }],
+        }}
+        turnSlots={[
+          {
+            slotKey: "r:1:1",
+            kind: "archive",
+            turnNumber: 1,
+            epoch: 1,
+            status: "idle",
+          },
+          {
+            slotKey: "a:1",
+            kind: "active",
+            turnNumber: 1,
+            status: "loaded",
+          },
+        ]}
+        onLoadTurn={vi.fn()}
+      />,
+    );
+    expect(container.querySelector(".compaction-divider")).toBeTruthy();
+    expect(container.querySelector(".transcript-turn-placeholder")).toBeTruthy();
+    expect(container.querySelector(".transcript-turn")).toBeNull();
   });
 });

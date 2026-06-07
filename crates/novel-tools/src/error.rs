@@ -29,7 +29,7 @@ pub enum ValidationError {
     InvalidField(String),
 }
 
-pub fn require_str(input: &Value, key: &str) -> Result<String, ValidationError> {
+pub(crate) fn require_str(input: &Value, key: &str) -> Result<String, ValidationError> {
     input
         .get(key)
         .and_then(|v| v.as_str())
@@ -37,8 +37,8 @@ pub fn require_str(input: &Value, key: &str) -> Result<String, ValidationError> 
         .ok_or_else(|| ValidationError::MissingField(key.into()))
 }
 
-/// Like `require_str`, but accepts the first matching key (e.g. `skill_id` / `skillId`).
-pub fn require_str_any(input: &Value, keys: &[&str]) -> Result<String, ValidationError> {
+/// Like `require_str`, but accepts the first matching key (e.g. `pattern` / `query` for Grep).
+pub(crate) fn require_str_any(input: &Value, keys: &[&str]) -> Result<String, ValidationError> {
     for key in keys {
         if let Ok(v) = require_str(input, key) {
             return Ok(v);
@@ -48,7 +48,7 @@ pub fn require_str_any(input: &Value, keys: &[&str]) -> Result<String, Validatio
 }
 
 /// First non-empty string among `keys`, or `None` if all absent.
-pub fn optional_str_any(input: &Value, keys: &[&str]) -> Option<String> {
+pub(crate) fn optional_str_any(input: &Value, keys: &[&str]) -> Option<String> {
     for key in keys {
         if let Ok(v) = require_str(input, key) {
             if !v.is_empty() {

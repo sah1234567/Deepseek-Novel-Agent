@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ForkRunState } from "../hooks/useAgent";
+import type { ForkRunState } from "../types/messages";
 import { applyForkDbSnapshot } from "./overlay";
 import { forkRunAcceptsDbSnapshot } from "./transcript";
 import { emptyForkMachine } from "./transcript";

@@ -4,12 +4,45 @@ use crate::ToolError;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PermissionMode {
     Normal,
     Plan,
     Auto,
     Unattended,
+}
+
+impl PermissionMode {
+    /// Parse settings.json `permissions.mode`; unknown values default to `Normal`.
+    pub fn from_settings_str(mode: &str) -> Self {
+        match mode {
+            "plan" => Self::Plan,
+            "auto" => Self::Auto,
+            "unattended" => Self::Unattended,
+            _ => Self::Normal,
+        }
+    }
+
+    /// Stable lowercase label for IPC / status snapshots.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Plan => "plan",
+            Self::Auto => "auto",
+            Self::Unattended => "unattended",
+        }
+    }
+
+    /// Strict parse for IPC (`set_permission_mode`); unknown values are rejected.
+    pub fn try_from_ipc(mode: &str) -> Result<Self, String> {
+        match mode {
+            "normal" => Ok(Self::Normal),
+            "plan" => Ok(Self::Plan),
+            "auto" => Ok(Self::Auto),
+            "unattended" => Ok(Self::Unattended),
+            other => Err(format!("invalid permission mode: {other}")),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

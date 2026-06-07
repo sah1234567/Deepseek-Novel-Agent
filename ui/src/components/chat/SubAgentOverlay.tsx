@@ -1,4 +1,4 @@
-import type { ForkRunState } from "../../hooks/useAgent";
+import type { ForkRunState } from "../../types/messages";
 import { flatMessagesFromMachine } from "../../transcript";
 import { agentLabelFromType } from "../../fork";
 import { ScrollViewport } from "../layout/ScrollViewport";
@@ -26,7 +26,7 @@ export function SubAgentOverlay({
 }: SubAgentOverlayProps) {
   if (!forkRun) return null;
 
-  const flatMessages = flatMessagesFromMachine(forkRun.machine);
+  const forkBindingMessages = flatMessagesFromMachine(forkRun.machine);
   const hasTranscript =
     forkRun.machine.context.turns.length > 0 ||
     forkRun.machine.context.openSegment !== null;
@@ -58,7 +58,7 @@ export function SubAgentOverlay({
         <TranscriptView
           machine={forkRun.machine}
           mode="fork"
-          flatMessages={flatMessages}
+          forkBindingMessages={forkBindingMessages}
           forkRuns={forkRuns}
           onApproveTool={onApproveTool}
           onDenyTool={onDenyTool}

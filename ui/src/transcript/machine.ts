@@ -1,7 +1,14 @@
-import type { ContentBlock, ToolCall, UIMessage } from "../hooks/useAgent";
+import type { ContentBlock, ToolCall } from "../types/messages";
+import {
+  cloneSegment,
+  updateToolSegment,
+  withOpenSegment,
+  type ToolSegmentLocation,
+} from "./mutate";
+import { isLiveOrphanTurn, reconcileOrphanLiveTurns } from "./liveTail";
+import { evictTurnsFromMachine, mergeTurnsIntoMachine } from "./merge";
 import {
   segmentMessageId,
-  SYNTHETIC_USER_ID,
   type LlmSegment,
   type TranscriptContext,
   type TranscriptEvent,
@@ -41,7 +48,13 @@ function cloneContext(ctx: TranscriptContext): TranscriptContext {
   };
 }
 
+/** Prefer live orphan (optimistic tail); must match findLiveTailTurn / merge sort order. */
 function currentTurn(ctx: TranscriptContext): Turn | undefined {
+  for (let i = ctx.turns.length - 1; i >= 0; i--) {
+    if (isLiveOrphanTurn(ctx.turns[i])) {
+      return ctx.turns[i];
+    }
+  }
   return ctx.turns.length > 0 ? ctx.turns[ctx.turns.length - 1] : undefined;
 }
 
@@ -122,18 +135,48 @@ function upsertToolInSegment(segment: LlmSegment, toolCallId: string, patch: Par
 }
 
 function findToolSegment(ctx: TranscriptContext, toolCallId: string): LlmSegment | null {
-  if (ctx.openSegment) {
-    const t = ctx.openSegment.tools.find((x) => x.id === toolCallId);
-    if (t) return ctx.openSegment;
+  const loc = findToolSegmentLocation(ctx, toolCallId);
+  if (!loc) return null;
+  if (loc.kind === "open") return ctx.openSegment;
+  return ctx.turns[loc.turnIndex]?.segments[loc.segmentIndex] ?? null;
+}
+
+function findToolSegmentLocation(
+  ctx: TranscriptContext,
+  toolCallId: string,
+): ToolSegmentLocation | null {
+  if (ctx.openSegment?.tools.some((x) => x.id === toolCallId)) {
+    return { kind: "open" };
   }
-  const turn = currentTurn(ctx);
-  if (!turn) return null;
-  for (let i = turn.segments.length - 1; i >= 0; i--) {
-    if (turn.segments[i].tools.some((x) => x.id === toolCallId)) {
-      return turn.segments[i];
+  for (let ti = ctx.turns.length - 1; ti >= 0; ti--) {
+    const turn = ctx.turns[ti];
+    for (let si = turn.segments.length - 1; si >= 0; si--) {
+      if (turn.segments[si].tools.some((x) => x.id === toolCallId)) {
+        return { kind: "committed", turnIndex: ti, segmentIndex: si };
+      }
     }
   }
   return null;
+}
+
+function createOpenSegmentImmutable(
+  ctx: TranscriptContext,
+  segmentIndex: number,
+  messageId?: string | null,
+): LlmSegment {
+  const turn = currentTurn(ctx);
+  const turnId = turn?.turnId ?? "orphan";
+  const baseId = messageId ?? ctx.streamingMessageId ?? `assistant-${turnId}`;
+  return {
+    segmentId: `${turnId}:${segmentIndex}`,
+    segmentIndex,
+    assistant: {
+      id: segmentMessageId(baseId, segmentIndex),
+      status: "streaming",
+      contentBlocks: [],
+    },
+    tools: [],
+  };
 }
 
 function resolveToolSegment(ctx: TranscriptContext, toolCallId: string): LlmSegment | null {
@@ -182,8 +225,31 @@ function handleToolEvent(machine: TranscriptMachine, event: Extract<TranscriptEv
   }
 
   if (phase === "input_delta") {
-    if (!findToolSegment(ctx, toolCallId)) {
+    let loc = findToolSegmentLocation(machine.context, toolCallId);
+    if (!loc) {
       ensureStreaming();
+      loc = findToolSegmentLocation(ctx, toolCallId);
+      if (!loc) {
+        const seg = resolveToolSegment(ctx, toolCallId);
+        if (!seg) return machine;
+        const existing = seg.tools.find((t) => t.id === toolCallId);
+        if (!existing) return machine;
+        upsertToolInSegment(seg, toolCallId, {
+          unparsedInput: (existing.unparsedInput ?? "") + (event.delta ?? ""),
+        });
+        return { phase: phaseNext, context: ctx };
+      }
+    } else {
+      const seg = findToolSegment(machine.context, toolCallId);
+      if (!seg) return machine;
+      const existing = seg.tools.find((t) => t.id === toolCallId);
+      if (!existing) return machine;
+      const delta = (existing.unparsedInput ?? "") + (event.delta ?? "");
+      return updateToolSegment(machine, loc, (s) => {
+        const copy = cloneSegment(s);
+        upsertToolInSegment(copy, toolCallId, { unparsedInput: delta });
+        return copy;
+      });
     }
     const seg = resolveToolSegment(ctx, toolCallId);
     if (!seg) return machine;
@@ -257,21 +323,24 @@ function handleStreamChunk(
     return machine;
   }
 
-  const ctx = cloneContext(machine.context);
-  ctx.streamingMessageId = event.messageId;
-
   let phase = machine.phase;
-  if (machine.phase === "segmentCommitted") {
+  const ctx = machine.context;
+  let openSegment = ctx.openSegment;
+
+  if (phase === "segmentCommitted" || !openSegment) {
     const segIdx = nextSegmentIndex(ctx);
-    ensureOpenSegment(ctx, segIdx, event.messageId);
-    phase = "segmentStreaming";
-  } else if (!ctx.openSegment) {
-    const segIdx = nextSegmentIndex(ctx);
-    ensureOpenSegment(ctx, segIdx, event.messageId);
+    openSegment = createOpenSegmentImmutable(
+      { ...ctx, streamingMessageId: event.messageId },
+      segIdx,
+      event.messageId,
+    );
+    if (phase === "segmentCommitted") {
+      phase = "segmentStreaming";
+    }
   }
 
-  const seg = ctx.openSegment!;
   const kind = event.kind === "thinking" ? "thinking" : "text";
+  const seg = cloneSegment(openSegment);
   const blocks = [...seg.assistant.contentBlocks];
   const last = blocks[blocks.length - 1];
   if (last && last.kind === kind) {
@@ -281,7 +350,7 @@ function handleStreamChunk(
   }
   seg.assistant = { ...seg.assistant, status: "streaming", contentBlocks: blocks };
 
-  return { phase, context: ctx };
+  return withOpenSegment(machine, phase, seg, event.messageId);
 }
 
 export function dispatchTranscriptEvent(
@@ -291,6 +360,7 @@ export function dispatchTranscriptEvent(
   switch (event.type) {
     case "BEGIN_TURN": {
       const ctx = cloneContext(machine.context);
+      ctx.turns = reconcileOrphanLiveTurns(ctx.turns, machine.phase);
       ctx.turns.push({
         turnId: event.user.id,
         user: event.user,
@@ -366,10 +436,22 @@ export function dispatchTranscriptEvent(
       return { phase: "idle", context: ctx };
     }
 
-    case "HYDRATE": {
-      const { machine: hydrated } = flatMessagesToMachine(event.flatMessages);
-      return hydrated;
+    case "RESET_TRANSCRIPT":
+      return createInitialMachine();
+
+    case "MERGE_TURNS": {
+      const merged = mergeTurnsIntoMachine(machine, event.bundles, event.archiveEpoch);
+      return {
+        ...merged,
+        context: {
+          ...merged.context,
+          turns: reconcileOrphanLiveTurns(merged.context.turns, merged.phase),
+        },
+      };
     }
+
+    case "EVICT_TURNS":
+      return evictTurnsFromMachine(machine, event.turns);
 
     case "PATCH_TOOL": {
       if (machine.phase === "idle") return machine;
@@ -383,97 +465,4 @@ export function dispatchTranscriptEvent(
     default:
       return machine;
   }
-}
-
-export function flatMessagesToMachine(flatMessages: UIMessage[]): {
-  machine: TranscriptMachine;
-} {
-  const ctx: TranscriptContext = {
-    turns: [],
-    openSegment: null,
-    streamingMessageId: null,
-  };
-
-  let currentTurn: Turn | null = null;
-  let currentSegment: LlmSegment | null = null;
-  let segmentIndex = 0;
-
-  for (const msg of flatMessages) {
-    if (msg.role === "user") {
-      currentTurn = {
-        turnId: msg.id,
-        user: msg,
-        segments: [],
-        reports: [],
-      };
-      ctx.turns.push(currentTurn);
-      currentSegment = null;
-      segmentIndex = 0;
-      continue;
-    }
-    if (msg.role === "subAgentReport") {
-      if (currentTurn) currentTurn.reports.push(msg);
-      continue;
-    }
-    if (msg.role === "assistant") {
-      if (!currentTurn) {
-        currentTurn = {
-          turnId: SYNTHETIC_USER_ID,
-          user: { id: SYNTHETIC_USER_ID, role: "user", contentBlocks: [] },
-          segments: [],
-          reports: [],
-        };
-        ctx.turns.push(currentTurn);
-      }
-      const hasContent = assistantHasContent(msg.contentBlocks);
-      currentSegment = {
-        segmentId: `${currentTurn.turnId}:${segmentIndex}`,
-        segmentIndex,
-        assistant: {
-          id: msg.id,
-          status: hasContent ? "committed" : "placeholder",
-          contentBlocks: msg.contentBlocks,
-        },
-        tools: [],
-      };
-      currentTurn.segments.push(currentSegment);
-      segmentIndex++;
-      continue;
-    }
-    if (msg.role === "tool") {
-      if (!currentTurn) {
-        currentTurn = {
-          turnId: SYNTHETIC_USER_ID,
-          user: { id: SYNTHETIC_USER_ID, role: "user", contentBlocks: [] },
-          segments: [],
-          reports: [],
-        };
-        ctx.turns.push(currentTurn);
-      }
-      if (!currentSegment) {
-        currentSegment = {
-          segmentId: `${currentTurn.turnId}:${segmentIndex}`,
-          segmentIndex,
-          assistant: {
-            id: `placeholder-${segmentIndex}`,
-            status: "placeholder",
-            contentBlocks: [],
-          },
-          tools: [],
-        };
-        currentTurn.segments.push(currentSegment);
-        segmentIndex++;
-      }
-      const toolId = msg.id.replace(/^tool-/, "");
-      upsertToolInSegment(currentSegment, toolId, {
-        name: msg.toolName ?? "Tool",
-        input: msg.toolInput ?? {},
-        status: (msg.toolStatus as ToolCall["status"]) ?? "done",
-        needsApproval: !!msg.needsApproval,
-        result: msg.contentBlocks[0]?.text,
-      });
-    }
-  }
-
-  return { machine: { phase: "idle", context: ctx } };
 }

@@ -44,6 +44,7 @@
   min-width: 0;
 }
 
+/* Live-tail turn: minHeight set in ChatPanel; content stacks from top (user → assistant/tools). */
 .transcript-turn-anchor {
   flex-shrink: 0;
 }
@@ -158,6 +159,26 @@
 .thinking-stream p {
   font-style: italic;
   color: var(--color-text-muted);
+}
+
+.transcript-archived-placeholder {
+  min-height: 2rem;
+  padding: 0.25rem 0;
+  color: var(--text-muted, #888);
+  font-size: 0.85rem;
+}
+
+.archive-loading {
+  opacity: 0.85;
+}
+
+.archive-error {
+  color: var(--warn, #c90);
+}
+
+.streaming-text-plain {
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .streaming-text {

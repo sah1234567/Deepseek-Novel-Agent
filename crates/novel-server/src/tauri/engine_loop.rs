@@ -2,8 +2,13 @@ use crate::AppConfig;
 use novel_config::ensure_work_under_works;
 use novel_core::{AbortController, AgentEngine, AgentError, EngineStatus, Event, TerminalReason};
 use novel_state::SessionTodo;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, RwLock};
+
+fn sync_turn_in_progress_flag(flag: &AtomicBool, engine: &AgentEngine) {
+    flag.store(engine.is_turn_in_progress(), Ordering::Release);
+}
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -20,6 +25,7 @@ pub struct AppStatus {
     pub permission_mode: String,
     pub hook_running: bool,
     pub pending_user_question: bool,
+    pub turn_in_progress: bool,
     pub turn_number: u32,
     pub project_initialized: bool,
     pub has_interruptible_tool_in_progress: bool,
@@ -83,22 +89,19 @@ fn build_app_status(engine: &AgentEngine, active_work_name: &str) -> AppStatus {
         permission_mode,
         hook_running,
         pending_user_question,
+        turn_in_progress,
         turn_number,
         project_initialized,
         has_interruptible_tool_in_progress,
     } = engine.status_snapshot();
-    let todos = engine
-        .shared
-        .session
-        .db
-        .list_session_todos(&session_id)
-        .unwrap_or_default();
+    let todos = engine.list_session_todos();
     let (hit, miss, comp, ctx) = engine.session_token_summary();
     AppStatus {
         session_id,
         permission_mode,
         hook_running,
         pending_user_question,
+        turn_in_progress,
         turn_number,
         project_initialized,
         has_interruptible_tool_in_progress,
@@ -116,6 +119,7 @@ pub fn spawn_engine_loop(
     mut cmd_rx: mpsc::UnboundedReceiver<EngineCommand>,
     config: Arc<RwLock<AppConfig>>,
     abort_controller: Arc<AbortController>,
+    turn_in_progress: Arc<AtomicBool>,
 ) {
     tauri::async_runtime::spawn(async move {
         let mut engine = engine;
@@ -128,6 +132,7 @@ pub fn spawn_engine_loop(
                     reply,
                 } => {
                     tracing::debug!(content_len = content.len(), "engine_command SendMessage");
+                    turn_in_progress.store(true, Ordering::Release);
                     engine.clear_interrupt();
                     let result = engine
                         .handle_message_with_events(&content, model.as_deref(), event_tx.as_ref())
@@ -137,6 +142,7 @@ pub fn spawn_engine_loop(
                             e.to_string()
                         });
                     engine.clear_interrupt();
+                    sync_turn_in_progress_flag(&turn_in_progress, &engine);
                     let _ = reply.send(result);
                 }
                 EngineCommand::ApproveTool {
@@ -145,6 +151,7 @@ pub fn spawn_engine_loop(
                     reply,
                 } => {
                     tracing::debug!(%tool_call_id, "engine_command ApproveTool");
+                    turn_in_progress.store(true, Ordering::Release);
                     let result = engine
                         .approve_tool(&tool_call_id, event_tx.as_ref())
                         .await
@@ -152,6 +159,7 @@ pub fn spawn_engine_loop(
                             tracing::warn!(error = %e, %tool_call_id, "engine_command ApproveTool failed");
                             e.to_string()
                         });
+                    sync_turn_in_progress_flag(&turn_in_progress, &engine);
                     let _ = reply.send(result);
                 }
                 EngineCommand::DenyTool {
@@ -161,6 +169,7 @@ pub fn spawn_engine_loop(
                     reply,
                 } => {
                     tracing::debug!(%tool_call_id, "engine_command DenyTool");
+                    turn_in_progress.store(true, Ordering::Release);
                     let result = engine
                         .deny_tool(&tool_call_id, reason, event_tx.as_ref())
                         .await
@@ -168,6 +177,7 @@ pub fn spawn_engine_loop(
                             tracing::warn!(error = %e, %tool_call_id, "engine_command DenyTool failed");
                             e.to_string()
                         });
+                    sync_turn_in_progress_flag(&turn_in_progress, &engine);
                     let _ = reply.send(result);
                 }
                 EngineCommand::AnswerQuestion {
@@ -177,6 +187,7 @@ pub fn spawn_engine_loop(
                     reply,
                 } => {
                     tracing::debug!(%tool_call_id, "engine_command AnswerQuestion");
+                    turn_in_progress.store(true, Ordering::Release);
                     let result = engine
                         .answer_question(&tool_call_id, answers, event_tx.as_ref())
                         .await
@@ -184,6 +195,7 @@ pub fn spawn_engine_loop(
                             tracing::warn!(error = %e, %tool_call_id, "engine_command AnswerQuestion failed");
                             e.to_string()
                         });
+                    sync_turn_in_progress_flag(&turn_in_progress, &engine);
                     let _ = reply.send(result);
                 }
                 EngineCommand::GetStatus { reply } => {
@@ -194,9 +206,12 @@ pub fn spawn_engine_loop(
                 }
                 EngineCommand::SetPermissionMode { mode, reply } => {
                     tracing::debug!(%mode, "engine_command SetPermissionMode");
-                    let result = super::session_api::parse_permission_mode(&mode).map(|parsed| {
-                        engine.set_permission_mode_override(parsed);
-                    });
+                    let result =
+                        super::session_api::parse_permission_mode(&mode).and_then(|parsed| {
+                            engine
+                                .apply_permission_mode_change(parsed)
+                                .map_err(|e| e.to_string())
+                        });
                     let _ = reply.send(result);
                 }
                 EngineCommand::ResumeSession { session_id, reply } => {
@@ -209,8 +224,9 @@ pub fn spawn_engine_loop(
                         Arc::clone(&abort_controller),
                     ) {
                         Ok(e) => {
-                            let sid = e.shared.session.id.clone();
+                            let sid = e.session_id().to_string();
                             engine = e;
+                            sync_turn_in_progress_flag(&turn_in_progress, &engine);
                             Ok(sid)
                         }
                         Err(e) => {
@@ -227,8 +243,9 @@ pub fn spawn_engine_loop(
                     let result =
                         match AgentEngine::new_with_abort(ecfg, Arc::clone(&abort_controller)) {
                             Ok(e) => {
-                                let sid = e.shared.session.id.clone();
+                                let sid = e.session_id().to_string();
                                 engine = e;
+                                sync_turn_in_progress_flag(&turn_in_progress, &engine);
                                 Ok(sid)
                             }
                             Err(e) => {
@@ -262,8 +279,9 @@ pub fn spawn_engine_loop(
                     let result =
                         match AgentEngine::new_with_abort(ecfg, Arc::clone(&abort_controller)) {
                             Ok(e) => {
-                                let sid = e.shared.session.id.clone();
+                                let sid = e.session_id().to_string();
                                 engine = e;
+                                sync_turn_in_progress_flag(&turn_in_progress, &engine);
                                 Ok(sid)
                             }
                             Err(e) => {

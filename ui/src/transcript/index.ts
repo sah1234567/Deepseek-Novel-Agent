@@ -15,6 +15,7 @@ export {
 } from "./mapEvents";
 export {
   flatMessagesFromMachine,
+  forkBindingSnapshotKey,
   hasPendingApproval,
   isStreamingPhase,
   isTurnInProgress,
@@ -28,6 +29,15 @@ export {
   type RenderNode,
   type RenderPlanOptions,
 } from "./renderPlan";
+export {
+  isInBottomAnchorZone,
+  planMemoryReconcile,
+  planMemoryWindow,
+  protectedMaxTurnKey,
+  type MemoryReconcilePlan,
+  type MemoryWindowContext,
+  type VisibleTimelineEnvelope,
+} from "./turnMemoryPolicy";
 export {
   isSyntheticUser,
   segmentMessageId,

@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
-import { listen, UnlistenFn } from "@tauri-apps/api/event";
+import { listen } from "@tauri-apps/api/event";
+import { emitCompactionDone } from "../ipc/compactionDone";
+import { IPC_EVENTS } from "../ipc/events";
+import { mountTauriListeners } from "../utils/tauriEvents";
 import {
   compactionProgressVariant,
   type CompactionAction,
@@ -26,30 +29,28 @@ export function useCompactionProgress(): CompactionBannerState {
   const [state, setState] = useState<CompactionBannerState>(HIDDEN);
 
   useEffect(() => {
-    const unlisteners: Promise<UnlistenFn>[] = [];
-    unlisteners.push(
-      listen<CompactionProgressPayload>("compaction-progress", (event) => {
-        const p = event.payload;
-        const variant = compactionProgressVariant(p.action);
-        setState({
-          visible: true,
-          action: p.action,
-          attempt: p.attempt,
-          tokensBefore: p.tokensBefore,
-          tokensAfter: p.tokensAfter,
-          reason: p.reason,
-          variant,
-        });
-        if (p.action === "done") {
-          window.setTimeout(() => setState(HIDDEN), 3000);
-        } else if (p.action === "failed") {
-          window.setTimeout(() => setState(HIDDEN), 5000);
-        }
-      }),
-    );
-    return () => {
-      void Promise.all(unlisteners).then((fns) => fns.forEach((fn) => fn()));
-    };
+    return mountTauriListeners([
+      () =>
+        listen<CompactionProgressPayload>(IPC_EVENTS.compactionProgress, (event) => {
+          const p = event.payload;
+          const variant = compactionProgressVariant(p.action);
+          setState({
+            visible: true,
+            action: p.action,
+            attempt: p.attempt,
+            tokensBefore: p.tokensBefore,
+            tokensAfter: p.tokensAfter,
+            reason: p.reason,
+            variant,
+          });
+          if (p.action === "done") {
+            emitCompactionDone();
+            window.setTimeout(() => setState(HIDDEN), 3000);
+          } else if (p.action === "failed") {
+            window.setTimeout(() => setState(HIDDEN), 5000);
+          }
+        }),
+    ]);
   }, []);
 
   return state;

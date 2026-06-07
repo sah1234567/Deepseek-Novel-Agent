@@ -1,17 +1,62 @@
-//! Work-directory listing helpers (no Tauri `AppHandle`).
+//! Session and work-directory helpers (no Tauri `AppHandle`).
 
+use novel_state::{Database, StateError, StoredMessage};
 use novel_tools::PermissionMode;
 use std::path::Path;
 
-/// Parse UI / IPC permission mode strings.
-pub(crate) fn parse_permission_mode(mode: &str) -> Result<PermissionMode, String> {
-    match mode {
-        "normal" => Ok(PermissionMode::Normal),
-        "plan" => Ok(PermissionMode::Plan),
-        "auto" => Ok(PermissionMode::Auto),
-        "unattended" => Ok(PermissionMode::Unattended),
-        other => Err(format!("invalid permission mode: {other}")),
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TurnMessageSource {
+    Active,
+    Archive(i32),
+}
+
+pub(crate) fn load_turn_range_messages(
+    db: &Database,
+    session_id: &str,
+    from_turn: i32,
+    to_turn: i32,
+    source: TurnMessageSource,
+) -> Result<Vec<StoredMessage>, StateError> {
+    let range = Some((from_turn, to_turn));
+    match source {
+        TurnMessageSource::Active => db.get_session_messages(session_id, range),
+        TurnMessageSource::Archive(epoch) => {
+            db.get_archived_messages_turn_range(session_id, epoch, range)
+        }
     }
+}
+
+pub(crate) fn trace_turn_bundles_loaded(
+    session_id: &str,
+    source: TurnMessageSource,
+    from_turn: i32,
+    to_turn: i32,
+    bundle_count: usize,
+) {
+    match source {
+        TurnMessageSource::Active => tracing::debug!(
+            session_id = %session_id,
+            from_turn,
+            to_turn,
+            bundle_count,
+            "get_session_message_turns"
+        ),
+        TurnMessageSource::Archive(epoch) => tracing::debug!(
+            session_id = %session_id,
+            epoch,
+            from_turn,
+            to_turn,
+            bundle_count,
+            "get_session_archive_turns"
+        ),
+    }
+}
+
+/// Strict permission mode parse for IPC (`set_permission_mode`): unknown values are rejected.
+///
+/// Settings file load uses `PermissionMode::from_settings_str` (unknown → `Normal`).
+pub(crate) fn parse_permission_mode(mode: &str) -> Result<PermissionMode, String> {
+    PermissionMode::try_from_ipc(mode)
 }
 
 /// Sorted work directory names under `works_root` (non-hidden directories only).
@@ -85,5 +130,26 @@ mod tests {
         let f = tmp.path().join("file");
         fs::write(&f, "x").unwrap();
         assert!(list_work_dirs(&f).is_empty());
+    }
+
+    #[test]
+    fn load_turn_range_messages_reads_active_turns() {
+        let tmp = TempDir::new().unwrap();
+        let db = novel_state::Database::open(tmp.path().join("t.db")).unwrap();
+        let sid = db
+            .create_session(tmp.path().to_str().unwrap(), "m")
+            .unwrap();
+        db.insert_message(
+            &sid,
+            1,
+            0,
+            "user",
+            &serde_json::json!({"content": "hi"}),
+            None,
+        )
+        .unwrap();
+        let msgs = load_turn_range_messages(&db, &sid, 1, 1, TurnMessageSource::Active).unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].turn_number, 1);
     }
 }

@@ -114,7 +114,7 @@ mod novel_tools_tests {
                 &crate::ToolCallSpec {
                     id: "1".into(),
                     name: "ForeshadowTracker".into(),
-                    input: json!({"current_chapter": "Ch8", "warningThreshold": 5}),
+                    input: json!({"current_chapter": "Ch8", "warning_threshold": 5}),
                 },
                 &ctx,
             )
@@ -259,7 +259,7 @@ mod permission_tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn write_accepts_file_path_alias() {
+    async fn write_accepts_file_path() {
         let tmp = TempDir::new().unwrap();
         let reg = Arc::new(default_registry());
         let ex = ToolExecutor::new(reg);

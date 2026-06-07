@@ -6,62 +6,32 @@ mod test_env;
 
 mod agent;
 mod context;
-mod context_ext;
-mod dynamic_context;
 mod engine;
 mod error;
-mod fork;
-pub mod fork_transcript;
 mod hooks;
 mod interrupt;
-mod interrupt_finalize;
-mod llm_abort;
-mod llm_stream_turn;
-mod message_bridge;
-mod messages;
-mod prompt_loader;
-mod session;
-mod session_llm;
-mod stream_result_apply;
-mod streaming_tool_dispatch;
+mod message;
+mod permission;
 mod subagent;
-mod subagent_helpers;
-mod subagent_llm_turn;
-mod subagent_overflow;
-mod subagent_react;
-mod subagent_runner;
-mod system_prompt;
-mod tool_stream_results;
 mod turn;
-mod turn_loop;
-mod types;
+pub(crate) mod types;
 
-pub use agent::{AgentDefinition, AgentType, FORKABLE_AGENT_TYPE_NAMES};
-pub use context::ContextManager;
-pub use dynamic_context::{
-    build_dynamic_context, dedupe_reference_paths, dedupe_skill_ids,
-    filter_loadable_reference_paths, filter_loadable_skill_ids, format_activated_skill_block,
-    frozen_static_from_dynamic, load_frozen_static_from_metadata, load_memory, load_progress,
-    load_skill_reference_body, parse_skill_reference_path, persist_frozen_system_metadata,
-    refresh_system_dynamic_context, FrozenStaticContext,
-};
-pub use engine::{AgentEngine, EngineConfig, EngineShared, EngineStatus};
+// ── Public API (novel-server / integration tests) ─────────────────
+pub use agent::{AgentType, FORKABLE_AGENT_TYPE_NAMES};
+pub use engine::{AgentEngine, EngineConfig, EngineStatus};
 pub use error::AgentError;
-pub use fork::{ConversationFork, ForkError, ForkedAgentContext};
-pub use interrupt::{AbortController, InterruptReason, ERROR_MESSAGE_USER_ABORT};
-pub use messages::yield_missing_tool_result_blocks;
-pub use prompt_loader::{format_fork_task, load_agent_prompt};
-pub use session::SessionHandle;
-pub use session_llm::SessionLlmSnapshot;
-pub use subagent::{build_fork_child, SubagentJob, SubagentJobKind};
-pub use subagent_overflow::{
-    build_partial_report, task_preview_120, OVERFLOW_KIND_INPUT_REJECTED,
-    OVERFLOW_KIND_OUTPUT_TRUNCATED,
+pub use interrupt::{AbortController, InterruptReason};
+pub use message::stored_message_display_text;
+pub use permission::{
+    format_enter_unattended_prefix, permission_mode_message_kind, prepend_permission_notice,
 };
-pub use system_prompt::{system_static_sha256, DynamicContext, StaticPrompt, SystemPromptBuilder};
-pub use turn::{
-    TurnContext, MSG_SEQ_APPROVE, MSG_SEQ_CONTINUE, MSG_SEQ_DENY, MSG_SEQ_TOOL_BASE, MSG_SEQ_USER,
-};
-pub use types::{
-    ChatMessage, CompactionAction, ContentBlockKind, Event, Op, TerminalReason, ToolCallRecord,
-};
+pub use subagent::ForkError;
+pub use types::{CompactionAction, ContentBlockKind, Event, Op, TerminalReason};
+
+// Internal ergonomics for `use crate::Type` within this crate.
+pub(crate) use agent::AgentDefinition;
+pub(crate) use context::{ContextManager, DynamicContext, SystemPromptBuilder};
+pub(crate) use engine::EngineShared;
+pub(crate) use engine::SessionHandle;
+pub(crate) use subagent::ForkedAgentContext;
+pub(crate) use types::{ChatMessage, ToolCallRecord};

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ForkRunState } from "../hooks/useAgent";
+import type { ForkRunState } from "../types/messages";
 import { createInitialMachine } from "../transcript";
 import {
   reportContentByForkRunId,

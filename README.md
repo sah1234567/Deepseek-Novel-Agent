@@ -114,6 +114,7 @@ cargo tauri build
 
 - 用户 / Agent / Subagent 为全宽气泡；问答为全宽卡片；普通工具为全宽外层 + 内嵌虚线 `ToolUseCard`；`ForkSubAgent` 与 Agent 同构卡片。长文本在边界处强制换行
 - 当前轮对话占满视口高度，较早内容需上滚查看；顶部 **Sticky 条** 显示本轮用户提问，点击回到该位置
+- 历史 turn 按需懒加载（DB 全量保留）；深浏览时前端自动卸载不可见 turn 正文以控内存，回到底部后收缩为最近约 5 轮驻留
 - 流式回复、工具批准/拒绝、`AskUserQuestion` 全宽问答卡、SubAgent overlay（与主聊天共用 `TranscriptView`）
 - 上下文压缩时 **CompactionBanner** 显示在对话区顶部
 

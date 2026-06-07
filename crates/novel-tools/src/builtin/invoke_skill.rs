@@ -1,4 +1,4 @@
-use crate::{require_str_any, Tool, ToolContext, ToolError, ToolOutput};
+use crate::{require_str, Tool, ToolContext, ToolError, ToolOutput};
 use async_trait::async_trait;
 use novel_skills::load_skill;
 use serde_json::{json, Value};
@@ -60,7 +60,7 @@ impl Tool for InvokeSkillTool {
     }
 
     async fn call(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
-        let skill_id = require_str_any(&input, &["skill_id", "skillId"])?;
+        let skill_id = require_str(&input, "skill_id")?;
         let path = resolve_skill_path(&ctx.project_root, ctx.skills_dir.as_deref(), &skill_id)
             .ok_or_else(|| {
                 ToolError::Execution(format!("skill not found: skills/{skill_id}/SKILL.md"))

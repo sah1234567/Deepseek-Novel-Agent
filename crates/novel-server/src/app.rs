@@ -81,7 +81,7 @@ impl NovelApp {
     }
 
     pub fn session_id(&self) -> &str {
-        &self.engine.shared.session.id
+        self.engine.session_id()
     }
 
     pub async fn run_loop(

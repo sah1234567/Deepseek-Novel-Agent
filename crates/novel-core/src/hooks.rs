@@ -13,7 +13,7 @@ pub fn default_hook_config() -> HookConfig {
 }
 
 /// Run PostToolUse hooks matching the tool name and optional file path.
-pub fn run_post_tool_use_hooks(
+pub(crate) fn run_post_tool_use_hooks(
     hooks: &HookConfig,
     tool_name: &str,
     tool_input: Option<&Value>,

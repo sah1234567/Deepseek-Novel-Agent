@@ -1,4 +1,4 @@
-import type { ContentBlock, ForkRunState, UIMessage } from "../hooks/useAgent";
+import type { ContentBlock, ForkRunState, UIMessage } from "../types/messages";
 import { emptyForkMachine, forkRunAcceptsDbSnapshot, hydrateForkMachine } from "./transcript";
 
 /** Ensure `forkRuns` contains a shell entry when the overlay opens. */

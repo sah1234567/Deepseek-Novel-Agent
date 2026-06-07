@@ -1,11 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { UIMessage } from "../hooks/useAgent";
+import type { UIMessage } from "../types/messages";
 import { flatMessagesToTranscript, transcriptToFlatMessages } from "./convert";
-import {
-  createInitialMachine,
-  dispatchTranscriptEvent,
-  flatMessagesToMachine,
-} from "./machine";
+import { createInitialMachine, dispatchTranscriptEvent } from "./machine";
+import { flatMessagesToMachine } from "./flatParse";
+import { hydrateAllForTest } from "./testHelpers";
 import { SYNTHETIC_USER_ID } from "./types";
 import { userMsg } from "../test/fixtures/transcript";
 
@@ -329,23 +327,20 @@ describe("dispatchTranscriptEvent", () => {
     expect(JSON.stringify(m.context)).toBe(before);
   });
 
-  it("HYDRATE replaces entire machine state", () => {
+  it("MERGE_TURNS via hydrateAllForTest replaces entire machine state", () => {
     let m = createInitialMachine();
     m = dispatchTranscriptEvent(m, { type: "BEGIN_TURN", user: userMsg("u1") });
-    m = dispatchTranscriptEvent(m, {
-      type: "HYDRATE",
-      flatMessages: [
-        userMsg("hydrated"),
-        { id: "a1", role: "assistant", contentBlocks: [{ blockIndex: 0, kind: "text", text: "x" }] },
-      ],
-    });
+    m = hydrateAllForTest(m, [
+      userMsg("hydrated"),
+      { id: "a1", role: "assistant", contentBlocks: [{ blockIndex: 0, kind: "text", text: "x" }] },
+    ]);
     expect(m.context.turns[0].user.id).toBe("hydrated");
     expect(m.phase).toBe("idle");
   });
 });
 
 describe("flatMessagesToTranscript", () => {
-  it("HYDRATE deduplicates tool rows by toolCallId in one segment", () => {
+  it("flatMessagesToMachine deduplicates tool rows by toolCallId in one segment", () => {
     const flat: UIMessage[] = [
       userMsg("u1"),
       { id: "a1", role: "assistant", contentBlocks: [{ blockIndex: 0, kind: "text", text: "hi" }] },
@@ -371,7 +366,7 @@ describe("flatMessagesToTranscript", () => {
     expect(machine.context.turns[0].segments[0].tools[0].result).toBe("second");
   });
 
-  it("T8: HYDRATE round-trip preserves order", () => {
+  it("T8: hydrateAllForTest round-trip preserves order", () => {
     const flat: UIMessage[] = [
       userMsg("u1"),
       { id: "a1", role: "assistant", contentBlocks: [{ blockIndex: 0, kind: "text", text: "hi" }] },
@@ -384,7 +379,7 @@ describe("flatMessagesToTranscript", () => {
         toolInput: {},
       },
     ];
-    const m = flatMessagesToTranscript(flat);
+    const m = hydrateAllForTest(createInitialMachine(), flat);
     const back = transcriptToFlatMessages(m);
     expect(back.map((x) => x.id)).toEqual(flat.map((x) => x.id));
   });

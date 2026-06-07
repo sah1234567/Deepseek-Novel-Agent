@@ -26,7 +26,8 @@ pub use builtin::{AskQuestion, AskUserQuestionPayload};
 pub use context::{
     PendingSubagentWork, PermissionMode, PermissionResult, SubagentWorkQueue, ToolContext,
 };
-pub use error::{optional_str_any, require_str, require_str_any, ToolError, ValidationError};
+pub(crate) use error::{optional_str_any, require_str, require_str_any};
+pub use error::{ToolError, ValidationError};
 pub use executor::{StreamingToolExecutor, ToolCallSpec, ToolExecutor};
 pub use paths::{
     extract_file_path, normalize_chapter_progress_path, normalize_rel_path, optional_file_path,

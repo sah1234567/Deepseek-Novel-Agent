@@ -1,130 +1,38 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen, UnlistenFn } from "@tauri-apps/api/event";
-import { apiMessagesToUi, type ApiUiMessage } from "../utils/messages";
+import { IPC_COMMANDS } from "../ipc/commands";
+import type { AppStatusSnapshot } from "../transcript/eventPayloads";
+import type {
+  ContentBlock,
+  ForkRunState,
+  PendingQuestion,
+  UIMessage,
+} from "../types/messages";
+import { useAgentTauriListeners } from "./useAgentTauriListeners";
+
+export type {
+  AskQuestionOption,
+  ContentBlock,
+  ForkRunState,
+  PendingQuestion,
+  ToolCall,
+  UIMessage,
+} from "../types/messages";
+import { apiMessagesToUi } from "../utils/messages";
 import {
   createInitialMachine,
   dispatchTranscriptEvent,
   flatMessagesFromMachine,
-  hasPendingApproval,
+  forkBindingSnapshotKey,
   isTurnInProgress as transcriptTurnInProgress,
-  mapSegmentComplete,
-  mapStreamChunk,
-  mapToolCallRequest,
 } from "../transcript";
 import {
   applyForkDbToMap,
   dispatchForkEvent,
-  emptyForkMachine,
   mergeForkRunOnOpen,
 } from "../fork";
-import type { TranscriptMachine } from "../transcript/types";
-import { shouldShowTurnError } from "../constants/interrupt";
-
-export interface ArchivedEpoch {
-  epoch: number;
-  flatMessages: UIMessage[];
-}
-
-interface SessionTranscriptResponse {
-  archives: Array<{ epoch: number; messages: ApiUiMessage[] }>;
-  active: ApiUiMessage[];
-}
-
-export interface ContentBlock {
-  blockIndex: number;
-  kind: string;
-  text: string;
-}
-
-export interface UIMessage {
-  id: string;
-  role: "user" | "assistant" | "tool" | "subAgentReport";
-  contentBlocks: ContentBlock[];
-  toolName?: string;
-  toolInput?: unknown;
-  toolStatus?: ToolCall["status"];
-  needsApproval?: boolean;
-  forkRunId?: string;
-  messageKind?: string;
-}
-
-export interface ToolCall {
-  id: string;
-  name: string;
-  input: unknown;
-  status: "streaming-args" | "pending" | "running" | "done" | "denied";
-  needsApproval: boolean;
-  result?: string;
-  progressDescription?: string;
-  unparsedInput?: string;
-  parsedInput?: unknown;
-}
-
-export interface AskQuestionOption {
-  id: string;
-  label: string;
-}
-
-export interface PendingQuestion {
-  toolCallId: string;
-  questions: Array<{
-    id: string;
-    prompt: string;
-    options: AskQuestionOption[];
-    allowMultiple?: boolean;
-    allowCustom?: boolean;
-  }>;
-}
-
-/** Live + persisted transcript for one fork instance (tool or PostToolUse hook path). */
-export interface ForkRunState {
-  forkRunId: string;
-  agentType: string;
-  taskPreview: string;
-  source: "tool" | "hook";
-  /** Main-session ForkSubAgent `tool_call_id` (tool path only). */
-  parentToolCallId?: string;
-  machine: TranscriptMachine;
-  status: "running" | "complete";
-  reportOutput?: string;
-}
-
-interface StreamChunk {
-  messageId: string;
-  blockIndex: number;
-  delta: string;
-  kind: string;
-}
-
-interface ToolCallRequest {
-  toolCallId?: string;
-  toolName?: string;
-  input?: unknown;
-  needsApproval?: boolean;
-  phase?: string;
-  delta?: string;
-  content?: string;
-  status?: string;
-  description?: string;
-}
-
-interface TurnComplete {
-  cacheHitTokens?: number;
-  cacheMissTokens?: number;
-  completionTokens?: number;
-  turnHitTokens?: number;
-  turnMissTokens?: number;
-  turnCompTokens?: number;
-  phase?: string;
-  message?: string;
-  wasInterrupted?: boolean;
-}
-
-interface AppStatusSnapshot {
-  hasInterruptibleToolInProgress?: boolean;
-  pendingUserQuestion?: boolean;
-}
+import type { TranscriptEvent, TranscriptMachine } from "../transcript/types";
+import { createRafBatcher } from "../utils/rafDispatch";
 
 export function useAgent(onTurnComplete?: () => void) {
   const onTurnCompleteRef = useRef(onTurnComplete);
@@ -133,7 +41,6 @@ export function useAgent(onTurnComplete?: () => void) {
   const [transcriptMachine, setTranscriptMachine] = useState<TranscriptMachine>(
     createInitialMachine(),
   );
-  const [archivedEpochs, setArchivedEpochs] = useState<ArchivedEpoch[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   // Turn-level streaming flag from Tauri events (turn-complete / ask-user-question), not FSM phase.
   const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion | null>(null);
@@ -143,6 +50,8 @@ export function useAgent(onTurnComplete?: () => void) {
   const [hasInterruptibleToolInProgress, setHasInterruptibleToolInProgress] = useState(false);
   const [forkRuns, setForkRuns] = useState<Map<string, ForkRunState>>(new Map());
   const [openForkRunId, setOpenForkRunId] = useState<string | null>(null);
+  const openForkRunIdRef = useRef<string | null>(null);
+  openForkRunIdRef.current = openForkRunId;
   const [model, setModel] = useState<string>("deepseek-v4-pro");
   const modelRef = useRef(model);
   modelRef.current = model;
@@ -155,35 +64,59 @@ export function useAgent(onTurnComplete?: () => void) {
   const pendingQuestionRef = useRef(pendingQuestion);
   pendingQuestionRef.current = pendingQuestion;
 
-  const flatMessages = useMemo(
+  const forkBindingKey = forkBindingSnapshotKey(transcriptMachine);
+  const forkBindingMessages = useMemo(
     () => flatMessagesFromMachine(transcriptMachine),
-    [transcriptMachine],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed recompute avoids per-chunk scans
+    [forkBindingKey],
   );
 
-  const dispatchMain = useCallback((event: Parameters<typeof dispatchTranscriptEvent>[1]) => {
+  const streamChunkBatchRef = useRef(
+    createRafBatcher<TranscriptEvent>((events) => {
+      setTranscriptMachine((m) =>
+        events.reduce((acc, ev) => dispatchTranscriptEvent(acc, ev), m),
+      );
+    }),
+  );
+  const forkStreamBatchRef = useRef(
+    createRafBatcher<{ forkRunId: string; event: TranscriptEvent }>((items) => {
+      setForkRuns((prev) => {
+        let next: Map<string, ForkRunState> | null = null;
+        for (const { forkRunId, event } of items) {
+          const source: Map<string, ForkRunState> = next ?? prev;
+          const run = source.get(forkRunId);
+          if (!run) continue;
+          if (!next) next = new Map(source);
+          next.set(forkRunId, {
+            ...run,
+            machine: dispatchForkEvent(run.machine, event),
+          });
+        }
+        return next ?? prev;
+      });
+    }),
+  );
+
+  const flushStreamBatches = useCallback(() => {
+    streamChunkBatchRef.current.flushNow();
+    forkStreamBatchRef.current.flushNow();
+  }, []);
+
+  const dispatchMain = useCallback((event: TranscriptEvent) => {
+    streamChunkBatchRef.current.flushNow();
     setTranscriptMachine((m) => dispatchTranscriptEvent(m, event));
   }, []);
 
-  const hydrateMessages = useCallback(async (sessionId?: string, keepPendingQuestion = false) => {
-    try {
-      const transcript = await invoke<SessionTranscriptResponse>("get_session_transcript", {
-        sessionId: sessionId ?? null,
-      });
-      const archives = transcript.archives.map((arch) => ({
-        epoch: arch.epoch,
-        flatMessages: apiMessagesToUi(arch.messages),
-      }));
-      setArchivedEpochs(archives);
-      const activeUi = apiMessagesToUi(transcript.active);
-      setTranscriptMachine((m) =>
-        dispatchTranscriptEvent(m, { type: "HYDRATE", flatMessages: activeUi }),
-      );
-      if (!keepPendingQuestion) {
-        setPendingQuestion(null);
+  const reloadActiveTailRef = useRef<(() => Promise<void>) | undefined>(undefined);
+
+  /** Register lazy-loader tail reload; returns cleanup. Called from ChatPanel. */
+  const registerReloadActiveTail = useCallback((reloadActiveTail: () => Promise<void>) => {
+    reloadActiveTailRef.current = reloadActiveTail;
+    return () => {
+      if (reloadActiveTailRef.current === reloadActiveTail) {
+        reloadActiveTailRef.current = undefined;
       }
-    } catch (e) {
-      setQuestionError(String(e));
-    }
+    };
   }, []);
 
   isStreamingRef.current = isStreaming;
@@ -194,7 +127,7 @@ export function useAgent(onTurnComplete?: () => void) {
       return;
     }
     try {
-      const s = await invoke<AppStatusSnapshot>("get_app_status");
+      const s = await invoke<AppStatusSnapshot>(IPC_COMMANDS.getAppStatus);
       setHasInterruptibleToolInProgress(!!s.hasInterruptibleToolInProgress);
     } catch {
       setHasInterruptibleToolInProgress(false);
@@ -204,7 +137,7 @@ export function useAgent(onTurnComplete?: () => void) {
   const drainMessageQueue = useCallback(() => {
     const next = messageQueueRef.current.shift();
     if (next) {
-      void invoke<string>("send_message", { content: next, model: modelRef.current }).catch((e) => {
+      void invoke<string>(IPC_COMMANDS.sendMessage, { content: next, model: modelRef.current }).catch((e) => {
         setQuestionError(String(e));
         setIsStreaming(false);
       });
@@ -231,7 +164,7 @@ export function useAgent(onTurnComplete?: () => void) {
         dispatchMain({ type: "INTERRUPT" });
         setIsStreaming(false);
         try {
-          await invoke("interrupt", { reason: "user-cancel" });
+          await invoke(IPC_COMMANDS.interrupt, { reason: "user-cancel" });
         } catch (err) {
           setQuestionError(String(err));
         }
@@ -241,218 +174,28 @@ export function useAgent(onTurnComplete?: () => void) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [dispatchMain]);
 
-  useEffect(() => {
-    const unlisteners: Promise<UnlistenFn>[] = [];
-
-    unlisteners.push(
-      listen<{ segmentIndex: number; forkRunId?: string }>("assistant-segment-complete", (event) => {
-        const { segmentIndex, forkRunId } = event.payload;
-        if (forkRunId) {
-          setForkRuns((prev) => {
-            const run = prev.get(forkRunId);
-            if (!run) return prev;
-            const next = new Map(prev);
-            next.set(forkRunId, {
-              ...run,
-              machine: dispatchForkEvent(run.machine, mapSegmentComplete(segmentIndex ?? 0)),
-            });
-            return next;
-          });
-          return;
-        }
-        dispatchMain(mapSegmentComplete(segmentIndex ?? 0));
-      }),
-    );
-
-    unlisteners.push(
-      listen<StreamChunk>("stream-chunk", (event) => {
-        dispatchMain(mapStreamChunk(event.payload));
-      }),
-    );
-
-    unlisteners.push(
-      listen<ToolCallRequest>("tool-call-request", (event) => {
-        const mapped = mapToolCallRequest(event.payload);
-        if (!mapped) return;
-        dispatchMain(mapped);
-        void refreshInterruptibleStatus();
-      }),
-    );
-
-    unlisteners.push(
-      listen<PendingQuestion>("ask-user-question", (event) => {
-        dispatchMain({ type: "ASK_USER_QUESTION" });
-        setPendingQuestion(event.payload);
-        setQuestionSelections({});
-        setQuestionCustomText({});
-        setQuestionError(null);
-        setIsStreaming(false);
-      }),
-    );
-
-    unlisteners.push(
-      listen<TurnComplete>("turn-complete", (event) => {
-        const p = event.payload;
-        if (p.phase === "error") {
-          dispatchMain({ type: "INTERRUPT" });
-          if (shouldShowTurnError(p)) {
-            setQuestionError(p.message ?? "Agent 出错");
-          }
-          setIsStreaming(false);
-          setHasInterruptibleToolInProgress(false);
-          drainMessageQueue();
-          return;
-        }
-        if (p.wasInterrupted === true) {
-          dispatchMain({ type: "INTERRUPT" });
-          setIsStreaming(false);
-          setHasInterruptibleToolInProgress(false);
-          drainMessageQueue();
-          return;
-        }
-        if (p.phase === "start") return;
-        if (p.turnHitTokens !== undefined || p.cacheHitTokens !== undefined) {
-          dispatchMain({ type: "TURN_COMPLETE" });
-          setIsStreaming(false);
-          setHasInterruptibleToolInProgress(false);
-          void (async () => {
-            if (pendingQuestionRef.current) return;
-            if (hasPendingApproval(transcriptMachineRef.current)) return;
-            try {
-              const s = await invoke<AppStatusSnapshot>("get_app_status");
-              if (s.pendingUserQuestion) return;
-            } catch {
-              // Fall through to normal turn end if status is unavailable.
-            }
-            onTurnCompleteRef.current?.();
-            void hydrateMessages();
-            drainMessageQueue();
-          })();
-        }
-      }),
-    );
-
-    unlisteners.push(
-      listen<{
-        forkRunId: string;
-        agentType: string;
-        taskPreview?: string;
-        source?: string;
-        parentToolCallId?: string | null;
-      }>("sub-agent-started", (event) => {
-        const { forkRunId, agentType, taskPreview, source, parentToolCallId } = event.payload;
-        const forkSource =
-          source === "hook" || source === "tool"
-            ? source
-            : parentToolCallId
-              ? "tool"
-              : "hook";
-        setForkRuns((prev) => {
-          const next = new Map(prev);
-          next.set(forkRunId, {
-            forkRunId,
-            agentType: agentType ?? "",
-            taskPreview: taskPreview ?? "",
-            source: forkSource,
-            parentToolCallId: parentToolCallId ?? undefined,
-            machine: emptyForkMachine(),
-            status: "running",
-          });
-          return next;
-        });
-      }),
-    );
-
-    unlisteners.push(
-      listen<{ forkRunId: string; messageId?: string; delta: string; kind: string }>(
-        "sub-agent-stream",
-        (event) => {
-          const { forkRunId, delta, kind, messageId } = event.payload;
-          setForkRuns((prev) => {
-            const run = prev.get(forkRunId);
-            if (!run) return prev;
-            const chunk = mapStreamChunk({
-              messageId: messageId ?? `fork-${forkRunId}`,
-              delta,
-              kind,
-            });
-            const next = new Map(prev);
-            next.set(forkRunId, {
-              ...run,
-              machine: dispatchForkEvent(run.machine, chunk),
-            });
-            return next;
-          });
-        },
-      ),
-    );
-
-    unlisteners.push(
-      listen<ToolCallRequest & { forkRunId: string }>("sub-agent-tool", (event) => {
-        const { forkRunId, ...p } = event.payload;
-        const mapped = mapToolCallRequest(p);
-        if (!mapped) return;
-        setForkRuns((prev) => {
-          const run = prev.get(forkRunId);
-          if (!run) return prev;
-          const next = new Map(prev);
-          next.set(forkRunId, {
-            ...run,
-            machine: dispatchForkEvent(run.machine, mapped),
-          });
-          return next;
-        });
-      }),
-    );
-
-    unlisteners.push(
-      listen<{ forkRunId: string; agentId?: string; output?: string }>(
-        "sub-agent-complete",
-        (event) => {
-          const { forkRunId, output } = event.payload;
-          setForkRuns((prev) => {
-            const run = prev.get(forkRunId);
-            if (!run) return prev;
-            const next = new Map(prev);
-            next.set(forkRunId, {
-              ...run,
-              machine: dispatchForkEvent(run.machine, { type: "TURN_COMPLETE" }),
-              status: "complete",
-              reportOutput: output ?? run.reportOutput,
-            });
-            return next;
-          });
-        },
-      ),
-    );
-
-    unlisteners.push(
-      listen("session-resumed", () => {
-        messageQueueRef.current = [];
-        setIsStreaming(false);
-        setHasInterruptibleToolInProgress(false);
-        setPendingQuestion(null);
-        setQuestionSelections({});
-        setQuestionCustomText({});
-        setQuestionError(null);
-        setForkRuns(new Map());
-        setOpenForkRunId(null);
-        setTranscriptMachine(createInitialMachine());
-        void (async () => {
-          try {
-            const s = await invoke<AppStatusSnapshot>("get_app_status");
-            void hydrateMessages(undefined, !!s.pendingUserQuestion);
-          } catch {
-            void hydrateMessages();
-          }
-        })();
-      }),
-    );
-
-    return () => {
-      void Promise.all(unlisteners).then((fns) => fns.forEach((fn) => fn()));
-    };
-  }, [dispatchMain, drainMessageQueue, refreshInterruptibleStatus, hydrateMessages]);
+  useAgentTauriListeners({
+    dispatchMain,
+    drainMessageQueue,
+    refreshInterruptibleStatus,
+    flushStreamBatches,
+    streamChunkBatchRef,
+    forkStreamBatchRef,
+    pendingQuestionRef,
+    transcriptMachineRef,
+    openForkRunIdRef,
+    messageQueueRef,
+    reloadActiveTailRef,
+    onTurnCompleteRef,
+    setForkRuns,
+    setPendingQuestion,
+    setQuestionSelections,
+    setQuestionCustomText,
+    setQuestionError,
+    setIsStreaming,
+    setHasInterruptibleToolInProgress,
+    setOpenForkRunId,
+  });
 
   const submitAnswer = useCallback(
     async (selections: Record<string, string[]>, customText: Record<string, string>) => {
@@ -461,7 +204,7 @@ export function useAgent(onTurnComplete?: () => void) {
       setQuestionError(null);
       setIsStreaming(true);
       try {
-        await invoke("answer_question", {
+        await invoke(IPC_COMMANDS.answerQuestion, {
           toolCallId: pq.toolCallId,
           answers: { selections, customText },
         });
@@ -489,7 +232,7 @@ export function useAgent(onTurnComplete?: () => void) {
       dispatchMain({ type: "BEGIN_TURN", user: userMsg });
       setIsStreaming(true);
       setQuestionError(null);
-      void invoke<string>("send_message", { content: trimmed, model: modelRef.current }).catch((e) => {
+      void invoke<string>(IPC_COMMANDS.sendMessage, { content: trimmed, model: modelRef.current }).catch((e) => {
         setQuestionError(String(e));
         setIsStreaming(false);
       });
@@ -514,7 +257,7 @@ export function useAgent(onTurnComplete?: () => void) {
       messageQueueRef.current.push(trimmed);
       setQuestionError(null);
       try {
-        await invoke("interrupt", { reason: "interrupt" });
+        await invoke(IPC_COMMANDS.interrupt, { reason: "interrupt" });
       } catch (e) {
         messageQueueRef.current.pop();
         setQuestionError(String(e));
@@ -528,7 +271,7 @@ export function useAgent(onTurnComplete?: () => void) {
     setIsStreaming(false);
     setHasInterruptibleToolInProgress(false);
     try {
-      await invoke("interrupt", { reason: "user-cancel" });
+      await invoke(IPC_COMMANDS.interrupt, { reason: "user-cancel" });
     } catch (e) {
       setQuestionError(String(e));
     }
@@ -542,7 +285,12 @@ export function useAgent(onTurnComplete?: () => void) {
         toolCallId,
         patch: { status: "running", needsApproval: false },
       });
-      await invoke("approve_tool", { toolCallId });
+      try {
+        await invoke(IPC_COMMANDS.approveTool, { toolCallId });
+      } catch (e) {
+        setQuestionError(String(e));
+        setIsStreaming(false);
+      }
     },
     [dispatchMain],
   );
@@ -555,7 +303,12 @@ export function useAgent(onTurnComplete?: () => void) {
         patch: { status: "denied", needsApproval: false },
       });
       setIsStreaming(true);
-      await invoke("deny_tool", { toolCallId, reason });
+      try {
+        await invoke(IPC_COMMANDS.denyTool, { toolCallId, reason });
+      } catch (e) {
+        setQuestionError(String(e));
+        setIsStreaming(false);
+      }
     },
     [dispatchMain],
   );
@@ -594,7 +347,7 @@ export function useAgent(onTurnComplete?: () => void) {
           toolName?: string;
           forkRunId?: string;
         }>
-      >("get_fork_messages", { runId: forkRunId });
+      >(IPC_COMMANDS.getForkMessages, { runId: forkRunId });
       const ui = apiMessagesToUi(raw);
       setForkRuns((prev) => applyForkDbToMap(prev, forkRunId, ui));
     } catch (e) {
@@ -608,8 +361,7 @@ export function useAgent(onTurnComplete?: () => void) {
 
   return {
     transcriptMachine,
-    archivedEpochs,
-    flatMessages,
+    forkBindingMessages,
     isStreaming,
     forkRuns,
     openForkRunId,
@@ -626,7 +378,8 @@ export function useAgent(onTurnComplete?: () => void) {
     toggleQuestionOption,
     setQuestionCustomText,
     answerQuestion,
-    hydrateMessages,
+    dispatchTranscript: dispatchMain,
+    registerReloadActiveTail,
     clearQuestionError,
     openForkOverlay,
     closeForkOverlay,

@@ -53,6 +53,8 @@ pub struct SubAgentCompletePayload {
 
 pub fn emit_core_event(app: &AppHandle, event: Event, message_id: &str) {
     if let Some((name, payload)) = event_payload::core_event_payload(&event, message_id) {
-        let _ = app.emit(&name, payload);
+        if let Err(e) = app.emit(&name, payload) {
+            tracing::warn!(event = %name, error = %e, "tauri emit failed");
+        }
     }
 }

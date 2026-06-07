@@ -104,9 +104,10 @@ pub fn load_skills_dir(dir: impl AsRef<Path>) -> Result<Vec<SkillDefinition>, Sk
                     skills.push(skill);
                 }
                 Err(e) => {
-                    eprintln!(
-                        "Warning: failed to load skill in {}: {e}",
-                        entry.path().display()
+                    tracing::warn!(
+                        path = %entry.path().display(),
+                        %e,
+                        "failed to load skill directory"
                     );
                 }
             }

@@ -1,4 +1,4 @@
-import type { ForkRunState, UIMessage } from "../hooks/useAgent";
+import type { ForkRunState, UIMessage } from "../types/messages";
 
 export function stripSubAgentReportPrefix(content: string): string {
   return content.replace(/^\[子 Agent 完成:\s*\w+\]\s*\n?/, "").trim();

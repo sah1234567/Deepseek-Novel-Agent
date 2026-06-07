@@ -12,8 +12,8 @@ describe("extractToolPath", () => {
 });
 
 describe("formatToolSummary", () => {
-  it("includes path for Read tool", () => {
-    expect(formatToolSummary("Read", { path: "knowledge/INDEX.md" })).toBe(
+  it("includes file_path for Read tool", () => {
+    expect(formatToolSummary("Read", { file_path: "knowledge/INDEX.md" })).toBe(
       "Read: knowledge/INDEX.md",
     );
   });
@@ -37,8 +37,8 @@ describe("formatToolSummary", () => {
 
 describe("formatToolInput", () => {
   it("formats Read with offset and limit", () => {
-    expect(formatToolInput("Read", { path: "a.md", offset: 10, limit: 20 })).toContain("a.md");
-    expect(formatToolInput("Read", { path: "a.md", offset: 10, limit: 20 })).toContain("L10");
+    expect(formatToolInput("Read", { file_path: "a.md", offset: 10, limit: 20 })).toContain("a.md");
+    expect(formatToolInput("Read", { file_path: "a.md", offset: 10, limit: 20 })).toContain("L10");
   });
 
   it("formats ForkSubAgent with agent and task preview", () => {

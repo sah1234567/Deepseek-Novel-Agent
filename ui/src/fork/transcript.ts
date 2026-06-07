@@ -1,6 +1,6 @@
-import type { ForkRunState, UIMessage } from "../hooks/useAgent";
+import type { ForkRunState, UIMessage } from "../types/messages";
 import { createInitialMachine, dispatchTranscriptEvent } from "../transcript";
-import { flatMessagesToMachine } from "../transcript/machine";
+import { flatMessagesToMachine } from "../transcript/flatParse";
 import type { TranscriptEvent, TranscriptMachine } from "../transcript/types";
 import { SYNTHETIC_USER_ID } from "../transcript/types";
 

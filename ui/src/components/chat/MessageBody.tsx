@@ -1,6 +1,6 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { ContentBlock } from "../../hooks/useAgent";
+import type { ContentBlock } from "../../types/messages";
 import "./MessageBody.css";
 
 export function MessageBody({ blocks }: { blocks: ContentBlock[] }) {

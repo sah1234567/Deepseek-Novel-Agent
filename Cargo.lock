@@ -2431,6 +2431,7 @@ dependencies = [
  "serde_yaml",
  "tempfile",
  "thiserror 1.0.69",
+ "tracing",
  "walkdir",
 ]
 
@@ -2448,6 +2449,7 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
+ "tracing",
  "uuid",
 ]
 

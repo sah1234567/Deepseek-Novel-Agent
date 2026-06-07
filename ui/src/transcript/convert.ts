@@ -1,5 +1,5 @@
-import type { ToolCall, UIMessage } from "../hooks/useAgent";
-import { flatMessagesToMachine } from "./machine";
+import type { ToolCall, UIMessage } from "../types/messages";
+import { flatMessagesToMachine } from "./flatParse";
 import type { TranscriptMachine } from "./types";
 
 export function flatMessagesToTranscript(flatMessages: UIMessage[]): TranscriptMachine {

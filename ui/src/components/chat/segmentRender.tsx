@@ -1,9 +1,10 @@
+import { memo } from "react";
 import ReactMarkdown from "react-markdown";
-import type { ForkRunState, ToolCall, UIMessage } from "../../hooks/useAgent";
+import type { ForkRunState, ToolCall, UIMessage } from "../../types/messages";
 import type { LlmSegment, SegmentAssistant } from "../../transcript/types";
 import { reportContentByForkRunId, resolveForkRunIdForToolCard } from "../../fork";
 import { formatToolInput } from "../../utils/tools";
-import { isContextRefreshUser } from "../../transcript/types";
+import { isContextRefreshUser } from "../../transcript/contextRefresh";
 import { MessageBody } from "./MessageBody";
 import { ContextRefreshBubble } from "./ContextRefreshBubble";
 import { SubAgentForkCard, type SubAgentForkStatus } from "./SubAgentForkCard";
@@ -75,14 +76,16 @@ export function AgentBubble({
         {thinking && (
           <details className="thinking-stream" open={isStreaming}>
             <summary>{isStreaming ? "思考中…" : "思考过程"}</summary>
-            <ReactMarkdown>{thinking}</ReactMarkdown>
+            {isStreaming ? (
+              <div className="streaming-text streaming-text-plain">{thinking}</div>
+            ) : (
+              <ReactMarkdown>{thinking}</ReactMarkdown>
+            )}
           </details>
         )}
         {text ? (
           isStreaming ? (
-            <div className="streaming-text">
-              <ReactMarkdown>{text}</ReactMarkdown>
-            </div>
+            <div className="streaming-text streaming-text-plain">{text}</div>
           ) : (
             <MessageBody blocks={assistant.contentBlocks} />
           )
@@ -96,14 +99,14 @@ export function AgentBubble({
 
 export function ToolBubble({
   tool,
-  flatMessages,
+  forkBindingMessages,
   forkRuns,
   onApprove,
   onDeny,
   onOpenForkOverlay,
 }: {
   tool: ToolCall;
-  flatMessages: UIMessage[];
+  forkBindingMessages: UIMessage[];
   forkRuns?: Map<string, ForkRunState>;
   onApprove?: (id: string) => void;
   onDeny?: (id: string, reason?: string) => void;
@@ -112,8 +115,8 @@ export function ToolBubble({
   if (tool.name === "ForkSubAgent") {
     const toolMsgId = `tool-${tool.id}`;
     const runs = forkRuns ?? new Map();
-    const reports = reportContentByForkRunId(flatMessages);
-    const forkRunId = resolveForkRunIdForToolCard(toolMsgId, runs, flatMessages);
+    const reports = reportContentByForkRunId(forkBindingMessages);
+    const forkRunId = resolveForkRunIdForToolCard(toolMsgId, runs, forkBindingMessages);
     const run = forkRunId ? runs.get(forkRunId) : undefined;
     const agentType =
       (typeof tool.input === "object" &&
@@ -163,11 +166,11 @@ export function ToolBubble({
   );
 }
 
-export function SegmentGroup({
+export const SegmentGroup = memo(function SegmentGroup({
   segment,
   variant,
   isStreaming = false,
-  flatMessages,
+  forkBindingMessages,
   forkRuns,
   onApproveTool,
   onDenyTool,
@@ -176,7 +179,7 @@ export function SegmentGroup({
   segment: LlmSegment;
   variant: "committed" | "live";
   isStreaming?: boolean;
-  flatMessages: UIMessage[];
+  forkBindingMessages: UIMessage[];
   forkRuns?: Map<string, ForkRunState>;
   onApproveTool?: (id: string) => void;
   onDenyTool?: (id: string, reason?: string) => void;
@@ -197,7 +200,7 @@ export function SegmentGroup({
         <ToolBubble
           key={tool.id}
           tool={tool}
-          flatMessages={flatMessages}
+          forkBindingMessages={forkBindingMessages}
           forkRuns={forkRuns}
           onApprove={onApproveTool}
           onDeny={onDenyTool}
@@ -206,7 +209,7 @@ export function SegmentGroup({
       ))}
     </div>
   );
-}
+});
 
 export function UserBubble({
   user,

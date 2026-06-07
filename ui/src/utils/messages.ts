@@ -1,4 +1,4 @@
-import type { ContentBlock, UIMessage } from "../hooks/useAgent";
+import type { ContentBlock, UIMessage } from "../types/messages";
 
 export interface ApiUiMessage {
   id: string;

@@ -20,7 +20,7 @@ export interface RenderPlanOptions {
   includeQuestion?: boolean;
 }
 
-/** Mirrors TranscriptView render order without DOM — for structural acceptance tests. */
+/** Structural acceptance subset of TranscriptView order (no archive epochs / intersection lazy load). */
 export function buildTranscriptRenderPlan(
   machine: TranscriptMachine,
   opts: RenderPlanOptions,

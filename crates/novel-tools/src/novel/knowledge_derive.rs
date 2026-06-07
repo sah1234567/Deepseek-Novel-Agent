@@ -56,10 +56,10 @@ pub(crate) fn run_knowledge_derive_op(
     input: &Value,
 ) -> Result<ToolOutput, ToolError> {
     match operation {
-        "characterSnapshot" => derive_character_snapshot_op(store, input),
-        "foreshadowCategories" => derive_foreshadow_categories_op(store),
-        "relationIndex" => derive_relation_index_op(store),
-        "rebuildIndex" => rebuild_knowledge_index_op(store),
+        "character_snapshot" => derive_character_snapshot_op(store, input),
+        "foreshadow_categories" => derive_foreshadow_categories_op(store),
+        "relation_index" => derive_relation_index_op(store),
+        "rebuild_index" => rebuild_knowledge_index_op(store),
         _ => Err(ToolError::Execution(format!(
             "unknown operation: {operation}"
         ))),
@@ -80,7 +80,7 @@ impl Tool for KnowledgeDeriveTool {
             "properties": {
                 "operation": {
                     "type": "string",
-                    "enum": ["characterSnapshot", "foreshadowCategories", "relationIndex", "rebuildIndex"]
+                    "enum": ["character_snapshot", "foreshadow_categories", "relation_index", "rebuild_index"]
                 },
                 "character_path": {"type": "string", "description": "Relative path for characterSnapshot, e.g. knowledge/characters/林若烟.md"}
             },
@@ -114,7 +114,7 @@ mod tests {
             ..ToolContext::new(tmp.path().to_path_buf())
         };
         let out = KnowledgeDeriveTool
-            .call(json!({"operation": "rebuildIndex"}), &ctx)
+            .call(json!({"operation": "rebuild_index"}), &ctx)
             .await
             .unwrap();
         assert!(out.content.contains("知识库索引"));
@@ -157,7 +157,7 @@ povCharacter: true
         let store = KnowledgeStore::new(tmp.path());
         let out = run_knowledge_derive_op(
             &store,
-            "characterSnapshot",
+            "character_snapshot",
             &json!({"character_path": "knowledge/characters/林若烟.md"}),
         )
         .unwrap();
@@ -184,7 +184,7 @@ povCharacter: true
         let tmp = TempDir::new().unwrap();
         std::fs::create_dir_all(tmp.path().join("knowledge/plot")).unwrap();
         let store = KnowledgeStore::new(tmp.path());
-        let out = run_knowledge_derive_op(&store, "foreshadowCategories", &json!({})).unwrap();
+        let out = run_knowledge_derive_op(&store, "foreshadow_categories", &json!({})).unwrap();
         assert!(!out.is_error);
     }
 }

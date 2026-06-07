@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AppStatus, SessionSummary, SessionTodo, WorkSummary } from "../hooks/useAppStatus";
-import { useAgentContext } from "../context/AgentContext";
 import {
   countIncompleteTodos,
   groupTodosForDisplay,
@@ -10,6 +9,7 @@ import "./StatusBar.css";
 
 interface StatusBarProps {
   status: AppStatus | null;
+  isStreaming: boolean;
   listWorks: () => Promise<WorkSummary[]>;
   listSessions: () => Promise<SessionSummary[]>;
   onOpenWork: (name: string) => Promise<void>;
@@ -145,6 +145,7 @@ function TokenGroup({
 
 export function StatusBar({
   status,
+  isStreaming,
   listWorks,
   listSessions,
   onOpenWork,
@@ -155,7 +156,6 @@ export function StatusBar({
   onCycleTodo,
   onSessionError,
 }: StatusBarProps) {
-  const { isStreaming } = useAgentContext();
   const [todoOpen, setTodoOpen] = useState(false);
   const prevIncompleteRef = useRef(0);
   useEffect(() => {
@@ -179,19 +179,19 @@ export function StatusBar({
     try {
       const list = await listWorks();
       setWorks(list);
-    } catch {
-      /* surfaced via ErrorBanner */
+    } catch (e) {
+      onSessionError?.(String(e));
     }
-  }, [listWorks]);
+  }, [listWorks, onSessionError]);
 
   const loadSessions = useCallback(async () => {
     try {
       const list = await listSessions();
       setSessions(list);
-    } catch {
-      /* list failure surfaced elsewhere */
+    } catch (e) {
+      onSessionError?.(String(e));
     }
-  }, [listSessions]);
+  }, [listSessions, onSessionError]);
 
   useEffect(() => {
     void loadWorks();
@@ -323,8 +323,14 @@ export function StatusBar({
           <select
             className="session-select session-select-session"
             value={status?.sessionId ?? ""}
-            disabled={!status?.sessionId || sessionBusy || isStreaming}
-            title={currentSessionLabel || undefined}
+            disabled={!status?.sessionId || isStreaming}
+            title={
+              sessionBusy
+                ? "切换中…"
+                : isStreaming
+                  ? "请等待当前任务完成"
+                  : currentSessionLabel || undefined
+            }
             onChange={(e) => {
               if (sessionBusy || isStreaming) return;
               void handleSessionChange(e.target.value);

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { transcriptToFlatMessages } from "../../transcript/convert";
 import { dispatchTranscriptEvent } from "../../transcript/machine";
+import { hydrateAllForTest } from "../../transcript/testHelpers";
 import {
   buildTranscriptRenderPlan,
   questionFollowsSegmentTools,
@@ -179,7 +180,7 @@ describe("manual acceptance — structural render plan", () => {
       { type: "TURN_COMPLETE" },
     ]);
     const flat = transcriptToFlatMessages(m);
-    m = dispatchTranscriptEvent(m, { type: "HYDRATE", flatMessages: flat });
+    m = hydrateAllForTest(m, flat);
     const plan = assertPlanHealthy(m);
     expect(plan.filter((n) => n.kind === "segment")).toHaveLength(1);
     expect(transcriptToFlatMessages(m).map((x) => x.id)).toEqual(flat.map((x) => x.id));

@@ -1,13 +1,22 @@
 import { FormEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { ForkRunState, PendingQuestion } from "../../hooks/useAgent";
+import type { ForkRunState } from "../../types/messages";
+import { AskUserQuestionBlock } from "./AskUserQuestionBlock";
+import { ChatInputBar } from "./ChatInputBar";
 import { useAgentContext } from "../../context/AgentContext";
 import { APP_DISPLAY_NAME } from "../../constants/app";
 import { isSyntheticUser } from "../../transcript";
-import { isContextRefreshUser } from "../../transcript/types";
-import { ScrollViewport } from "../layout/ScrollViewport";
+import { isContextRefreshUser } from "../../transcript/contextRefresh";
+import {
+  ScrollViewport,
+  type ScrollViewportAutoScrollControl,
+} from "../layout/ScrollViewport";
 import { FilePreviewOverlay, type FilePreviewState } from "./FilePreviewOverlay";
 import { TranscriptView } from "./TranscriptView";
 import { CompactionBanner } from "./CompactionBanner";
+import { useSlotVisibility } from "../../hooks/useSlotVisibility";
+import { useTranscriptLoader } from "../../hooks/useTranscriptLoader";
+import { useViewportContentFill } from "../../hooks/useViewportContentFill";
+import type { TurnSlot } from "../../transcript/buildTurnSlots";
 import { useCompactionProgress } from "../../hooks/useCompactionProgress";
 import { SubAgentOverlay } from "./SubAgentOverlay";
 import { SubAgentForkCard } from "./SubAgentForkCard";
@@ -15,88 +24,6 @@ import { listHookForkRuns } from "../../fork";
 import "./ChatPanel.css";
 import "./DialogOverlays.css";
 import "./SubAgentForkCard.css";
-
-const MODE_TOOLTIPS: Record<string, string> = {
-  normal: "常规模式：读取文件自动执行，写入/编辑文件需作者确认",
-  plan: "策划模式：可只读全书；Write/Edit 仅允许 plan/ 目录（类似 Cursor Plan）。写 knowledge/、chapters/ 请切回其他模式",
-  auto: "自动模式：所有操作自动批准，但关键决策问题仍会弹出询问作者",
-  unattended: "无人值守模式：全自动执行。关键决策问题不再弹窗，Agent 自行分析选项并决策，决策过程在对话中可见",
-};
-
-function AskUserQuestionBlock({
-  pendingQuestion,
-  questionSelections,
-  questionCustomText,
-  questionError,
-  isStreaming,
-  toggleQuestionOption,
-  setQuestionCustomText,
-  answerQuestion,
-}: {
-  pendingQuestion: PendingQuestion;
-  questionSelections: Record<string, string[]>;
-  questionCustomText: Record<string, string>;
-  questionError: string | null;
-  isStreaming: boolean;
-  toggleQuestionOption: (qid: string, oid: string, multi?: boolean) => void;
-  setQuestionCustomText: (value: Record<string, string>) => void;
-  answerQuestion: () => Promise<void>;
-}) {
-  const allAnswered = pendingQuestion.questions.every((q) => {
-    if (questionSelections[q.id]?.length) return true;
-    if (q.allowCustom && questionCustomText[q.id]?.trim()) return true;
-    return false;
-  });
-  return (
-    <article className="ask-user-question">
-      <header>Agent 需要你的选择</header>
-      {questionError && <p className="question-error">{questionError}</p>}
-      {pendingQuestion.questions.map((q) => (
-        <div key={q.id} className="question-block">
-          <p className="question-prompt">{q.prompt}</p>
-          <div className="question-options">
-            {q.options.map((opt) => {
-              const selected = questionSelections[q.id]?.includes(opt.id);
-              return (
-                <button
-                  key={opt.id}
-                  type="button"
-                  className={selected ? "option selected" : "option"}
-                  onClick={() => toggleQuestionOption(q.id, opt.id, q.allowMultiple)}
-                >
-                  {opt.label}
-                </button>
-              );
-            })}
-          </div>
-          {q.allowCustom && (
-            <input
-              type="text"
-              className="question-custom-input"
-              placeholder="或输入自定义内容..."
-              value={questionCustomText[q.id] ?? ""}
-              onChange={(e) =>
-                setQuestionCustomText({
-                  ...questionCustomText,
-                  [q.id]: e.target.value,
-                })
-              }
-              disabled={isStreaming}
-            />
-          )}
-        </div>
-      ))}
-      <button
-        type="button"
-        className="btn-confirm"
-        disabled={!allAnswered || isStreaming}
-        onClick={() => void answerQuestion()}
-      >
-        确认选择
-      </button>
-    </article>
-  );
-}
 
 function HookForkCards({
   forkRuns,
@@ -126,23 +53,28 @@ function HookForkCards({
 
 export function ChatPanel({
   permissionMode,
+  appTurnInProgress = false,
+  sessionId,
   onSetPermissionMode,
   overlayActive = false,
   filePreview = null,
   subAgentForkRun,
   onCloseSubAgent,
+  onTranscriptBootstrapError,
 }: {
   permissionMode: string;
+  appTurnInProgress?: boolean;
+  sessionId?: string;
   onSetPermissionMode: (mode: string) => Promise<void>;
   overlayActive?: boolean;
   filePreview?: FilePreviewState | null;
   subAgentForkRun?: ForkRunState;
   onCloseSubAgent?: () => void;
+  onTranscriptBootstrapError?: (message: string | null) => void;
 }) {
   const {
     transcriptMachine,
-    archivedEpochs,
-    flatMessages,
+    forkBindingMessages,
     isStreaming,
     pendingQuestion,
     questionSelections,
@@ -162,28 +94,69 @@ export function ChatPanel({
     setModel,
     forkRuns,
     turnInProgress,
+    dispatchTranscript,
+    registerReloadActiveTail,
   } = useAgentContext();
 
+  const turnSlotsRef = useRef<TurnSlot[]>([]);
+  const isBottomAnchoredRef = useRef(false);
+  const scheduleReconcileRef = useRef<(() => void) | null>(null);
+  const compactionPausedRef = useRef(false);
+  compactionPausedRef.current = isStreaming || turnInProgress || appTurnInProgress;
+
+  const slotVisibility = useSlotVisibility(turnSlotsRef, () => {
+    scheduleReconcileRef.current?.();
+  });
+
+  const scrollViewportRef = useRef<HTMLDivElement>(null);
+  const contentUnderflowRef = useViewportContentFill(
+    scrollViewportRef,
+    isBottomAnchoredRef,
+    () => scheduleReconcileRef.current?.(),
+  );
+
+  const transcriptLoader = useTranscriptLoader(sessionId, dispatchTranscript, {
+    visibleSlotKeysRef: slotVisibility.visibleSlotKeysRef,
+    envelopeRef: slotVisibility.envelopeRef,
+    isBottomAnchoredRef,
+    contentUnderflowRef,
+    compactionPausedRef,
+  });
+  turnSlotsRef.current = transcriptLoader.turnSlots;
+  scheduleReconcileRef.current = transcriptLoader.scheduleReconcile;
+
+  useEffect(() => {
+    onTranscriptBootstrapError?.(transcriptLoader.bootstrapError);
+  }, [onTranscriptBootstrapError, transcriptLoader.bootstrapError]);
+
+  useEffect(
+    () => registerReloadActiveTail(transcriptLoader.reloadActiveTail),
+    [registerReloadActiveTail, transcriptLoader.reloadActiveTail],
+  );
   const compaction = useCompactionProgress();
   const [input, setInput] = useState("");
   const [stickyPrompt, setStickyPrompt] = useState<string | null>(null);
   const [stickyDismissed, setStickyDismissed] = useState(false);
   const [userAnchorVersion, setUserAnchorVersion] = useState(0);
-  const scrollViewportRef = useRef<HTMLDivElement>(null);
   const turnAnchorRef = useRef<HTMLDivElement>(null);
   const userMsgRef = useRef<HTMLElement | null>(null);
+  const autoScrollControlRef = useRef<ScrollViewportAutoScrollControl | null>(null);
+  const suspendAutoScrollRef = useRef(false);
 
   const lastUserMsg = [...transcriptMachine.context.turns]
     .reverse()
     .find((t) => !isSyntheticUser(t.user) && !isContextRefreshUser(t.user))?.user;
+  const modeSwitchBlocked = turnInProgress || appTurnInProgress;
   const lastUserMsgText = (() => {
     const raw = lastUserMsg?.contentBlocks?.[0]?.text ?? "";
-    const trimmed = raw.trimStart();
-    const paraEnd = trimmed.search(/\n\s*\n/);
-    const collapsed =
-      paraEnd >= 0 ? trimmed.slice(0, paraEnd) : trimmed;
-    return collapsed.slice(0, 200).replace(/\s+/g, " ").trim();
+    return raw.trim().slice(0, 200).replace(/\s+/g, " ").trim();
   })();
+
+  const applyTurnFoldMinHeight =
+    transcriptMachine.phase === "idle" &&
+    !isStreaming &&
+    !turnInProgress &&
+    !appTurnInProgress;
 
   useLayoutEffect(() => {
     const viewport = scrollViewportRef.current;
@@ -193,6 +166,10 @@ export function ChatPanel({
       return;
     }
     const applyMinHeight = () => {
+      if (!applyTurnFoldMinHeight) {
+        anchor.style.removeProperty("min-height");
+        return;
+      }
       anchor.style.minHeight = `${viewport.clientHeight}px`;
     };
     applyMinHeight();
@@ -202,7 +179,16 @@ export function ChatPanel({
       observer.disconnect();
       anchor?.style.removeProperty("min-height");
     };
-  }, [transcriptMachine, archivedEpochs, pendingQuestion, forkRuns]);
+  }, [
+    applyTurnFoldMinHeight,
+    transcriptMachine,
+    transcriptLoader.turnSlots,
+    pendingQuestion,
+    forkRuns,
+    isStreaming,
+    turnInProgress,
+    appTurnInProgress,
+  ]);
 
   useLayoutEffect(() => {
     setStickyDismissed(false);
@@ -227,6 +213,7 @@ export function ChatPanel({
         setStickyPrompt(lastUserMsgText);
       } else if (userVisible) {
         setStickyPrompt(null);
+        setStickyDismissed(true);
       }
     };
 
@@ -252,20 +239,46 @@ export function ChatPanel({
     const root = scrollViewportRef.current;
     const el = userMsgRef.current;
     if (!root || !el) return;
-    setStickyDismissed(true);
-    setStickyPrompt(null);
+
+    autoScrollControlRef.current?.unpin();
+    suspendAutoScrollRef.current = true;
+
+    const releaseAutoScroll = () => {
+      suspendAutoScrollRef.current = false;
+    };
+
     const top =
       el.getBoundingClientRect().top -
       root.getBoundingClientRect().top +
       root.scrollTop;
     root.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+
+    if ("onscrollend" in root) {
+      const onScrollEnd = () => {
+        root.removeEventListener("scrollend", onScrollEnd);
+        releaseAutoScroll();
+      };
+      root.addEventListener("scrollend", onScrollEnd, { once: true });
+    } else {
+      window.setTimeout(releaseAutoScroll, 400);
+    }
   }, []);
 
   const hasInput = input.trim().length > 0;
   const canSubmitInterrupt = isStreaming && hasInput && hasInterruptibleToolInProgress;
   const submitBlockedByTools = isStreaming && hasInput && !hasInterruptibleToolInProgress;
 
-  const autoScrollDeps = [transcriptMachine, archivedEpochs, pendingQuestion, forkRuns, isStreaming];
+  const autoScrollDeps = [
+    transcriptMachine,
+    transcriptLoader.isBootstrapping ? null : transcriptLoader.turnSlots,
+    transcriptLoader.isBootstrapping ? null : transcriptLoader.layout,
+    pendingQuestion,
+    forkRuns,
+    isStreaming,
+    turnInProgress,
+    lastUserMsg?.id,
+    transcriptLoader.isBootstrapping,
+  ];
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -277,23 +290,17 @@ export function ChatPanel({
       return;
     }
     await sendMessage(text);
+    autoScrollControlRef.current?.pinAndScrollToBottom();
   }
 
-  function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-      e.preventDefault();
-      void onSubmit(e as unknown as FormEvent);
-    }
-  }
+  const anchorUserId = lastUserMsg?.id;
+  const anchorUserRef = useCallback((el: HTMLElement | null) => {
+    userMsgRef.current = el;
+  }, []);
 
-  const renderUserRef = useCallback(
-    (user: (typeof flatMessages)[0], el: HTMLElement | null) => {
-      if (user !== lastUserMsg) return;
-      userMsgRef.current = el;
-      if (el) setUserAnchorVersion((v) => v + 1);
-    },
-    [lastUserMsg],
-  );
+  useLayoutEffect(() => {
+    setUserAnchorVersion((v) => v + 1);
+  }, [anchorUserId]);
 
   const questionSlot = pendingQuestion ? (
     <AskUserQuestionBlock
@@ -309,7 +316,8 @@ export function ChatPanel({
   ) : null;
 
   const hasTranscript =
-    archivedEpochs.length > 0 ||
+    transcriptLoader.isBootstrapping ||
+    transcriptLoader.turnSlots.length > 0 ||
     transcriptMachine.context.turns.length > 0 ||
     transcriptMachine.context.openSegment !== null;
 
@@ -336,24 +344,33 @@ export function ChatPanel({
           }
           autoScrollTo="bottom"
           autoScrollDeps={autoScrollDeps}
+          resetScrollKey={sessionId}
           overlayActive={overlayActive}
+          autoScrollControlRef={autoScrollControlRef}
+          suspendAutoScrollRef={suspendAutoScrollRef}
+          onBottomAnchorChange={transcriptLoader.onBottomAnchorChange}
         >
           {!hasTranscript && !pendingQuestion && (
             <p className="placeholder">发送消息开始与 {APP_DISPLAY_NAME} 对话…</p>
           )}
           <TranscriptView
             machine={transcriptMachine}
-            archivedEpochs={archivedEpochs}
+            layout={transcriptLoader.layout}
+            turnSlots={transcriptLoader.turnSlots}
             mode="main"
             pendingQuestion={pendingQuestion}
             questionSlot={questionSlot}
             forkRuns={forkRuns}
-            flatMessages={flatMessages}
+            forkBindingMessages={forkBindingMessages}
             onApproveTool={(id) => void approveTool(id)}
             onDenyTool={(id, reason) => void denyTool(id, reason)}
             onOpenForkOverlay={(id) => void openForkOverlay(id)}
-            renderUserRef={renderUserRef}
+            anchorUserId={anchorUserId}
+            anchorUserRef={anchorUserRef}
             turnAnchorRef={turnAnchorRef}
+            scrollRootRef={scrollViewportRef}
+            onLoadTurn={transcriptLoader.onLoadTurn}
+            setSlotVisibility={slotVisibility.setSlotVisibility}
             isStreaming={isStreaming}
           />
 
@@ -373,78 +390,23 @@ export function ChatPanel({
         )}
       </div>
 
-      <form className="input-box" onSubmit={onSubmit}>
-        <textarea
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={onKeyDown}
-          placeholder={
-            pendingQuestion
-              ? "请先回答上方问题…"
-              : isStreaming
-                ? "可输入下一条指令（Ctrl+Enter 发送）…"
-                : "输入创作指令… (Ctrl+Enter 发送)"
-          }
-          rows={3}
-          disabled={!!pendingQuestion}
-        />
-        <div className="actions">
-          <select
-            className="mode-select"
-            value={permissionMode}
-            onChange={(e) => void onSetPermissionMode(e.target.value)}
-            disabled={turnInProgress}
-            title={MODE_TOOLTIPS[permissionMode] ?? permissionMode}
-          >
-            <option value="normal">常规</option>
-            <option value="plan">策划</option>
-            <option value="auto">自动</option>
-            <option value="unattended">无人值守</option>
-          </select>
-          <select
-            className="model-select"
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-            disabled={turnInProgress}
-            title={
-              turnInProgress
-                ? "当前轮次进行中，结束后才可切换模型"
-                : "选择模型（切换模型将导致 KV Cache 失效）"
-            }
-          >
-            <option value="deepseek-v4-pro">v4-pro</option>
-            <option value="deepseek-v4-flash">v4-flash</option>
-          </select>
-          {isStreaming && !hasInput && (
-            <button type="button" className="interrupt-btn" onClick={() => void interrupt()}>
-              中断
-            </button>
-          )}
-          {isStreaming && hasInput && (
-            <>
-              <button type="button" className="interrupt-btn" onClick={() => void interrupt()}>
-                中断
-              </button>
-              <button
-                type="submit"
-                disabled={!canSubmitInterrupt}
-                title={
-                  submitBlockedByTools
-                    ? "当前工具执行中，请等待或使用「中断」"
-                    : "发送并打断当前轮次"
-                }
-              >
-                发送
-              </button>
-            </>
-          )}
-          {!isStreaming && (
-            <button type="submit" disabled={!input.trim() || !!pendingQuestion}>
-              发送
-            </button>
-          )}
-        </div>
-      </form>
+      <ChatInputBar
+        input={input}
+        setInput={setInput}
+        onSubmit={onSubmit}
+        pendingQuestion={!!pendingQuestion}
+        isStreaming={isStreaming}
+        hasInput={hasInput}
+        canSubmitInterrupt={canSubmitInterrupt}
+        submitBlockedByTools={submitBlockedByTools}
+        permissionMode={permissionMode}
+        modeSwitchBlocked={modeSwitchBlocked}
+        onSetPermissionMode={onSetPermissionMode}
+        model={model}
+        setModel={setModel}
+        turnInProgress={turnInProgress}
+        onInterrupt={() => void interrupt()}
+      />
     </section>
   );
 }

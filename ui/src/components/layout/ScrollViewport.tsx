@@ -7,19 +7,24 @@ import {
   useState,
   type UIEvent,
 } from "react";
+import { BOTTOM_ANCHOR_THRESHOLD_PX } from "../../transcript/loadPolicy";
+import { isInBottomAnchorZone } from "../../transcript/turnMemoryPolicy";
 import "./ScrollViewport.css";
 
-const NEAR_EDGE_PX = 64;
+const NEAR_TOP_PX = 64;
 const SCROLL_STEP_PX = 120;
 const HOLD_INTERVAL_MS = 50;
 
-function isNearBottom(el: HTMLElement, threshold = NEAR_EDGE_PX) {
-  return el.scrollHeight - el.scrollTop - el.clientHeight <= threshold;
-}
-
-function isNearTop(el: HTMLElement, threshold = NEAR_EDGE_PX) {
+function isNearTop(el: HTMLElement, threshold = NEAR_TOP_PX) {
   return el.scrollTop <= threshold;
 }
+
+export type ScrollViewportAutoScrollControl = {
+  /** Stop following the bottom while the user reads earlier content. */
+  unpin: () => void;
+  /** Pin to bottom and scroll instantly (e.g. after send). */
+  pinAndScrollToBottom: () => void;
+};
 
 export const ScrollViewport = forwardRef(function ScrollViewport(
   {
@@ -31,6 +36,9 @@ export const ScrollViewport = forwardRef(function ScrollViewport(
     initialScrollTop = 0,
     overlayActive = false,
     onScrollPositionChange,
+    onBottomAnchorChange,
+    autoScrollControlRef,
+    suspendAutoScrollRef,
   }: {
     children: ReactNode;
     className?: string;
@@ -44,6 +52,12 @@ export const ScrollViewport = forwardRef(function ScrollViewport(
     /** While true, freeze auto-scroll and restore prior position when it becomes false. */
     overlayActive?: boolean;
     onScrollPositionChange?: (scrollTop: number) => void;
+    /** Fires when bottom-anchor zone membership changes (for tail compaction). */
+    onBottomAnchorChange?: (anchored: boolean) => void;
+    /** Imperative hook to unpin bottom-following before programmatic scroll. */
+    autoScrollControlRef?: React.MutableRefObject<ScrollViewportAutoScrollControl | null>;
+    /** While true, skip ResizeObserver / deps auto-scroll (e.g. sticky-prompt jump). */
+    suspendAutoScrollRef?: React.MutableRefObject<boolean>;
   },
   ref: React.ForwardedRef<HTMLDivElement>,
 ) {
@@ -63,16 +77,62 @@ export const ScrollViewport = forwardRef(function ScrollViewport(
   const pinnedToBottomRef = useRef(autoScrollTo === "bottom");
   const savedScrollRef = useRef<{ scrollTop: number; pinnedToBottom: boolean } | null>(null);
   const prevOverlayActiveRef = useRef(overlayActive);
+  const prevAnchoredRef = useRef<boolean | null>(null);
   const [canScrollUp, setCanScrollUp] = useState(false);
   const [canScrollDown, setCanScrollDown] = useState(false);
+
+  const notifyBottomAnchor = useCallback(
+    (el: HTMLElement) => {
+      if (!onBottomAnchorChange || autoScrollTo !== "bottom") return;
+      const anchored = isInBottomAnchorZone(el, BOTTOM_ANCHOR_THRESHOLD_PX);
+      if (prevAnchoredRef.current === anchored) return;
+      prevAnchoredRef.current = anchored;
+      onBottomAnchorChange(anchored);
+    },
+    [autoScrollTo, onBottomAnchorChange],
+  );
+
+  const scrollToBottomInstant = useCallback((el: HTMLElement) => {
+    el.scrollTop = el.scrollHeight;
+  }, []);
+
+  const followBottomIfAnchored = useCallback(() => {
+    if (overlayActive || suspendAutoScrollRef?.current || autoScrollTo !== "bottom") {
+      return;
+    }
+    const el = viewportRef.current;
+    if (!el) return;
+
+    const wasNearBottom =
+      pinnedToBottomRef.current || isInBottomAnchorZone(el, BOTTOM_ANCHOR_THRESHOLD_PX);
+    if (!wasNearBottom) return;
+
+    scrollToBottomInstant(el);
+    pinnedToBottomRef.current = true;
+    requestAnimationFrame(() => {
+      const node = viewportRef.current;
+      if (!node) return;
+      scrollToBottomInstant(node);
+      notifyBottomAnchor(node);
+    });
+  }, [
+    autoScrollTo,
+    overlayActive,
+    notifyBottomAnchor,
+    scrollToBottomInstant,
+    suspendAutoScrollRef,
+  ]);
 
   const updateScrollState = useCallback(() => {
     const el = viewportRef.current;
     if (!el) return;
     const overflowing = el.scrollHeight > el.clientHeight + 1;
     setCanScrollUp(overflowing && !isNearTop(el));
-    setCanScrollDown(overflowing && !isNearBottom(el));
-  }, []);
+    setCanScrollDown(
+      overflowing && !isInBottomAnchorZone(el, BOTTOM_ANCHOR_THRESHOLD_PX),
+    );
+    notifyBottomAnchor(el);
+  }, [notifyBottomAnchor]);
 
   const scrollBy = useCallback((delta: number) => {
     viewportRef.current?.scrollBy({ top: delta, behavior: "auto" });
@@ -105,7 +165,9 @@ export const ScrollViewport = forwardRef(function ScrollViewport(
     const el = viewportRef.current;
     if (!el) return;
     el.scrollTo({ top: initialScrollTop, behavior: "auto" });
-    pinnedToBottomRef.current = autoScrollTo === "bottom" && isNearBottom(el);
+    pinnedToBottomRef.current =
+      autoScrollTo === "bottom" && isInBottomAnchorZone(el, BOTTOM_ANCHOR_THRESHOLD_PX);
+    prevAnchoredRef.current = null;
     updateScrollState();
   }, [resetScrollKey, initialScrollTop, autoScrollTo, updateScrollState]);
 
@@ -138,43 +200,97 @@ export const ScrollViewport = forwardRef(function ScrollViewport(
     }
   }, [overlayActive, updateScrollState, scrollToBottom]);
 
+  const pinAndScrollToBottom = useCallback(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+    pinnedToBottomRef.current = true;
+    scrollToBottomInstant(el);
+    requestAnimationFrame(() => {
+      const node = viewportRef.current;
+      if (!node) return;
+      scrollToBottomInstant(node);
+      notifyBottomAnchor(node);
+    });
+  }, [notifyBottomAnchor, scrollToBottomInstant]);
+
+  useEffect(() => {
+    if (!autoScrollControlRef) return;
+    autoScrollControlRef.current = {
+      unpin: () => {
+        pinnedToBottomRef.current = false;
+      },
+      pinAndScrollToBottom,
+    };
+    return () => {
+      autoScrollControlRef.current = null;
+    };
+  }, [autoScrollControlRef, pinAndScrollToBottom]);
+
   useEffect(() => {
     const el = viewportRef.current;
     if (!el || overlayActive) return;
     updateScrollState();
-    if (autoScrollTo === "bottom" && pinnedToBottomRef.current) {
-      scrollToBottom("auto");
-    }
+    followBottomIfAnchored();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [...autoScrollDeps, overlayActive]);
+  }, [...autoScrollDeps, overlayActive, followBottomIfAnchored]);
 
   useEffect(() => {
     const el = viewportRef.current;
     if (!el) return;
-    const observer = new ResizeObserver(() => {
+
+    const onResize = () => {
       updateScrollState();
-      if (!overlayActive && autoScrollTo === "bottom" && pinnedToBottomRef.current) {
-        scrollToBottom("auto");
+      followBottomIfAnchored();
+    };
+
+    const observer = new ResizeObserver(onResize);
+    const observed = new Set<Element>();
+
+    const observeEl = (node: Element) => {
+      if (observed.has(node)) return;
+      observer.observe(node);
+      observed.add(node);
+    };
+
+    const observeScrollContent = () => {
+      observeEl(el);
+      for (const child of el.children) {
+        observeEl(child);
+      }
+    };
+
+    observeScrollContent();
+
+    // Live tail / tool cards mount as later siblings — not firstElementChild.
+    const mo = new MutationObserver((records) => {
+      for (const record of records) {
+        for (const node of record.addedNodes) {
+          if (node instanceof Element) observeEl(node);
+        }
       }
     });
-    observer.observe(el);
-    for (const child of el.children) {
-      observer.observe(child);
-    }
-    return () => observer.disconnect();
-  }, [updateScrollState, children, overlayActive, autoScrollTo, scrollToBottom]);
+    mo.observe(el, { childList: true });
+
+    return () => {
+      observer.disconnect();
+      mo.disconnect();
+    };
+  }, [updateScrollState, followBottomIfAnchored]);
 
   useEffect(() => () => stopHoldScroll(), [stopHoldScroll]);
 
   function onScroll(e: UIEvent<HTMLDivElement>) {
     const el = e.currentTarget;
     if (autoScrollTo === "bottom") {
-      pinnedToBottomRef.current = isNearBottom(el);
+      pinnedToBottomRef.current = isInBottomAnchorZone(el, BOTTOM_ANCHOR_THRESHOLD_PX);
+      notifyBottomAnchor(el);
     }
     onScrollPositionChange?.(el.scrollTop);
     const overflowing = el.scrollHeight > el.clientHeight + 1;
     setCanScrollUp(overflowing && !isNearTop(el));
-    setCanScrollDown(overflowing && !isNearBottom(el));
+    setCanScrollDown(
+      overflowing && !isInBottomAnchorZone(el, BOTTOM_ANCHOR_THRESHOLD_PX),
+    );
   }
 
   const showControls = canScrollUp || canScrollDown;

@@ -17,6 +17,10 @@ function AppShell({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [fileTreeCollapsed, setFileTreeCollapsed] = useState(false);
   const [errorDismissed, setErrorDismissed] = useState(false);
+  const [transcriptBootstrapError, setTranscriptBootstrapError] = useState<string | null>(
+    null,
+  );
+  const [statusBarError, setStatusBarError] = useState<string | null>(null);
 
   const {
     status,
@@ -71,15 +75,13 @@ function AppShell({
     projectFiles.clearPreview();
   }
 
-  useEffect(() => {
-    if (status?.sessionId) {
-      void agent.hydrateMessages();
-    }
-  }, [status?.sessionId, agent.hydrateMessages]);
-
   const bannerError = errorDismissed
     ? null
-    : error ?? agent.questionError ?? projectFiles.error;
+    : error ??
+      agent.questionError ??
+      projectFiles.error ??
+      transcriptBootstrapError ??
+      statusBarError;
 
   return (
     <div className="app">
@@ -95,6 +97,7 @@ function AppShell({
       />
       <StatusBar
         status={status}
+        isStreaming={agent.isStreaming}
         listWorks={listWorks}
         listSessions={listSessions}
         onOpenWork={async (name) => {
@@ -126,7 +129,10 @@ function AppShell({
         onCycleTodo={(todoId, nextStatus) =>
           void updateSessionTodo(todoId, nextStatus)
         }
-        onSessionError={() => setErrorDismissed(false)}
+        onSessionError={(message) => {
+          setStatusBarError(message);
+          setErrorDismissed(false);
+        }}
       />
       <main className="app-main">
         <FileTreePanel
@@ -142,6 +148,8 @@ function AppShell({
         <div className="chat-panel-wrapper">
           <ChatPanel
             permissionMode={status?.permissionMode ?? "normal"}
+            sessionId={status?.sessionId}
+            appTurnInProgress={status?.turnInProgress ?? false}
             onSetPermissionMode={setPermissionMode}
             overlayActive={overlayActive}
             filePreview={
@@ -160,6 +168,7 @@ function AppShell({
             }
             subAgentForkRun={subAgentOverlayOpen ? openForkRun : undefined}
             onCloseSubAgent={agent.closeForkOverlay}
+            onTranscriptBootstrapError={setTranscriptBootstrapError}
           />
         </div>
       </main>

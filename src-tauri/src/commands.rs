@@ -125,23 +125,39 @@ pub async fn resume_session(
 }
 
 #[tauri::command]
-pub async fn get_session_transcript(
+pub async fn get_session_transcript_layout(
     state: State<'_, AppState>,
     app: AppHandle,
     session_id: Option<String>,
-) -> Result<novel_server::tauri::SessionTranscript, String> {
+) -> Result<novel_server::tauri::SessionTranscriptLayout, String> {
     let ctx = state.command_context(app);
-    novel_server::tauri::get_session_transcript(&ctx, session_id).await
+    novel_server::tauri::get_session_transcript_layout(&ctx, session_id).await
 }
 
 #[tauri::command]
-pub async fn get_session_messages(
+pub async fn get_session_message_turns(
     state: State<'_, AppState>,
     app: AppHandle,
     session_id: Option<String>,
-) -> Result<Vec<novel_server::tauri::UiMessage>, String> {
+    from_turn: i32,
+    to_turn: i32,
+) -> Result<Vec<novel_server::tauri::UiTurnBundle>, String> {
     let ctx = state.command_context(app);
-    novel_server::tauri::get_session_messages(&ctx, session_id).await
+    novel_server::tauri::get_session_message_turns(&ctx, session_id, from_turn, to_turn).await
+}
+
+#[tauri::command]
+pub async fn get_session_archive_turns(
+    state: State<'_, AppState>,
+    app: AppHandle,
+    session_id: Option<String>,
+    epoch: i32,
+    from_turn: i32,
+    to_turn: i32,
+) -> Result<Vec<novel_server::tauri::UiTurnBundle>, String> {
+    let ctx = state.command_context(app);
+    novel_server::tauri::get_session_archive_turns(&ctx, session_id, epoch, from_turn, to_turn)
+        .await
 }
 
 #[tauri::command]

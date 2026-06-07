@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { listen } from "@tauri-apps/api/event";
+import { IPC_COMMANDS } from "../ipc/commands";
+import { IPC_EVENTS } from "../ipc/events";
+import { mountTauriListeners } from "../utils/tauriEvents";
 
 export interface ProjectFileEntry {
   path: string;
@@ -29,7 +32,9 @@ export function useProjectFiles(enabled: boolean, activeWorkName?: string) {
     }
     setLoading(true);
     try {
-      const list = await invoke<(ProjectFileEntry & { is_dir?: boolean })[]>("list_project_files");
+      const list = await invoke<(ProjectFileEntry & { is_dir?: boolean })[]>(
+        IPC_COMMANDS.listProjectFiles,
+      );
       setFiles(list.map(normalizeProjectFileEntry));
       setError(null);
     } catch (e) {
@@ -47,7 +52,7 @@ export function useProjectFiles(enabled: boolean, activeWorkName?: string) {
     }
     setPreviewPath(path);
     try {
-      const content = await invoke<string>("read_project_file", { path });
+      const content = await invoke<string>(IPC_COMMANDS.readProjectFile, { path });
       setPreviewContent(content);
       setError(null);
     } catch (e) {
@@ -62,17 +67,10 @@ export function useProjectFiles(enabled: boolean, activeWorkName?: string) {
 
   useEffect(() => {
     if (!enabled) return;
-    const unlisteners: Promise<UnlistenFn>[] = [
-      listen("session-resumed", () => {
-        void refresh();
-      }),
-      listen("turn-complete", () => {
-        void refresh();
-      }),
-    ];
-    return () => {
-      void Promise.all(unlisteners).then((fns) => fns.forEach((fn) => fn()));
-    };
+    return mountTauriListeners([
+      () => listen(IPC_EVENTS.sessionResumed, () => void refresh()),
+      () => listen(IPC_EVENTS.turnComplete, () => void refresh()),
+    ]);
   }, [enabled, refresh]);
 
   const clearPreview = useCallback(() => {

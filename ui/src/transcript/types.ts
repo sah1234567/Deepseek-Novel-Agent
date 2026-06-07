@@ -1,4 +1,4 @@
-import type { ContentBlock, ToolCall, UIMessage } from "../hooks/useAgent";
+import type { ContentBlock, ToolCall, UIMessage } from "../types/messages";
 
 export type AssistantStatus = "streaming" | "committed" | "placeholder";
 
@@ -23,6 +23,10 @@ export interface LlmSegment {
 
 export interface Turn {
   turnId: string;
+  /** DB `turn_number`; omitted on live streaming turn until tail reload. */
+  turnNumber?: number;
+  /** Set when this turn was loaded from `message_archive` (disambiguates turn numbers). */
+  archiveEpoch?: number;
   user: UIMessage;
   segments: LlmSegment[];
   reports: UIMessage[];
@@ -60,40 +64,19 @@ export type TranscriptEvent =
   | { type: "ANSWER_QUESTION" }
   | { type: "TURN_COMPLETE" }
   | { type: "INTERRUPT" }
-  | { type: "HYDRATE"; flatMessages: UIMessage[] }
+  | { type: "RESET_TRANSCRIPT" }
+  | {
+      type: "MERGE_TURNS";
+      bundles: import("./service").UiTurnBundle[];
+      archiveEpoch?: number;
+    }
+  | {
+      type: "EVICT_TURNS";
+      turns: { turnNumber: number; archiveEpoch?: number }[];
+    }
   | { type: "PATCH_TOOL"; toolCallId: string; patch: Partial<ToolCall> };
 
 export const SYNTHETIC_USER_ID = "__synthetic_user__";
-export const CONTEXT_REFRESH_PREFIX = "[上下文刷新]";
-
-export function isContextRefreshUser(user: UIMessage): boolean {
-  if (user.messageKind === "contextRefresh") return true;
-  const text = user.contentBlocks.find((b) => b.kind === "text")?.text ?? "";
-  return text.startsWith(CONTEXT_REFRESH_PREFIX);
-}
-
-export function parseContextRefreshSections(text: string): { skill: string; summary: string } {
-  const body = text.startsWith(CONTEXT_REFRESH_PREFIX)
-    ? text.slice(CONTEXT_REFRESH_PREFIX.length).trimStart()
-    : text;
-  const skillMarker = "## 激活 Skill";
-  const summaryMarker = "## 会话历史摘要";
-  const summaryIdx = body.indexOf(summaryMarker);
-  let skill = "";
-  let summary = "";
-  if (summaryIdx >= 0) {
-    summary = body.slice(summaryIdx + summaryMarker.length).trimStart();
-    const skillSection = body.slice(0, summaryIdx);
-    if (skillSection.includes(skillMarker)) {
-      skill = skillSection.slice(skillSection.indexOf(skillMarker) + skillMarker.length).trim();
-    }
-  } else if (body.includes(skillMarker)) {
-    skill = body.slice(body.indexOf(skillMarker) + skillMarker.length).trim();
-  } else {
-    summary = body.trim();
-  }
-  return { skill, summary };
-}
 
 export function isSyntheticUser(user: UIMessage): boolean {
   return user.id === SYNTHETIC_USER_ID;

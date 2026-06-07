@@ -116,14 +116,6 @@ impl AgentType {
         }
     }
 
-    pub fn all_forkable_names() -> &'static [&'static str] {
-        FORKABLE_AGENT_TYPE_NAMES
-    }
-
-    pub fn is_forkable(name: &str) -> bool {
-        Self::parse(name).is_some()
-    }
-
     pub fn max_react_loops(self) -> u32 {
         self.definition().max_react_loops
     }
@@ -220,9 +212,9 @@ mod tests {
 
     #[test]
     fn forkable_names_include_plan_auditor() {
-        assert!(AgentType::all_forkable_names().contains(&"PlanAuditor"));
-        assert!(AgentType::is_forkable("PlanAuditor"));
-        assert!(AgentType::is_forkable("plan-auditor"));
+        assert!(FORKABLE_AGENT_TYPE_NAMES.contains(&"PlanAuditor"));
+        assert!(AgentType::parse("PlanAuditor").is_some());
+        assert!(AgentType::parse("plan-auditor").is_some());
     }
 
     #[test]
@@ -237,10 +229,10 @@ mod tests {
 
     #[test]
     fn forkable_names_include_existing_agents() {
-        assert!(AgentType::all_forkable_names().contains(&"KnowledgeAuditor"));
-        assert!(AgentType::all_forkable_names().contains(&"GeneralPurpose"));
-        assert!(AgentType::is_forkable("KnowledgeAuditor"));
-        assert!(AgentType::is_forkable("ChapterCraftAnalyzer"));
+        assert!(FORKABLE_AGENT_TYPE_NAMES.contains(&"KnowledgeAuditor"));
+        assert!(FORKABLE_AGENT_TYPE_NAMES.contains(&"GeneralPurpose"));
+        assert!(AgentType::parse("KnowledgeAuditor").is_some());
+        assert!(AgentType::parse("ChapterCraftAnalyzer").is_some());
     }
 
     #[test]

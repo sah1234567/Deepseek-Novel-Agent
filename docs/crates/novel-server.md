@@ -21,6 +21,15 @@ React (ui/) ──invoke/listen──► src-tauri/commands.rs
 
 **无 `Mutex<AgentEngine>`：** 所有命令经 `mpsc::UnboundedSender<EngineCommand>` 入队，`engine_loop` 串行处理，避免 IPC 持锁与审批死锁。
 
+**Tauri 模块布局（`novel-server/src/tauri/`）：**
+
+| 路径 | 职责 |
+|------|------|
+| `commands/` | 按域拆分 session / turn / settings；`engine_ipc.rs` 统一 `cmd_tx.send` + oneshot 回复与 `session-resumed` / `permission-mode-changed` emit |
+| `dto.rs` | `detect_message_kind` + `message_row_to_ui`；`stored_messages_to_ui` 与 fork 路径共用转换 |
+| `event_payload/` | `stream` / `tool` / `compaction` / `subagent` 子模块；`serialize_payload` 失败打 `warn!` |
+| `events.rs` | Tauri 事件名与 serde payload 类型 |
+
 **启动校验（`main.rs` setup）：** 创建 `works/`、`.novel-agent/`；校验 `templates/` 存在；若 `works/default` 不存在则自动 scaffold；注册 `AppState`。
 
 ### 1.2 AppState
@@ -84,7 +93,7 @@ React (ui/) ──invoke/listen──► src-tauri/commands.rs
 | `interrupt` | 中断当前 turn | Esc / 发送中断 |
 | `approve_tool` / `deny_tool` | 工具批准/拒绝 | ChatPanel |
 | `answer_question` | AskUserQuestion | 问答 UI |
-| `get_app_status` | 轮询状态（30s）+ 事件即时刷新 | `useAppStatus` |
+| `get_app_status` | 轮询状态（30s）+ `permission-mode-changed` / `tool-call-request`(result) 刷新；turn 结束经 `AgentProvider.onTurnComplete` 单次 refresh；会话切换由 invoke 调用方 refresh | `useAppStatus` |
 | `set_permission_mode` | 权限模式 | ChatPanel 底栏 |
 | `list_works` | 作品列表 | StatusBar 下拉 |
 | `create_work(name)` | 新建作品 + 切换 + 新 session | StatusBar |
@@ -92,21 +101,25 @@ React (ui/) ──invoke/listen──► src-tauri/commands.rs
 | `create_session` | 当前作品新建 session | StatusBar `+` |
 | `resume_session` | 恢复/切换会话 | StatusBar 下拉 · SettingsPanel |
 | `list_sessions` | 当前作品会话列表（`last_active_at` 降序） | StatusBar · SettingsPanel |
-| `get_session_transcript` | 历史 hydrate（`{ archives, active }`） | `useAgent.hydrateMessages` |
-| `get_session_messages` | 仅 active 工作集（兼容 IPC） | 内部 / 调试 |
+| `get_session_transcript_layout` | active/archive turn 边界 + `hasContextRefresh` | `useTranscriptLoader` bootstrap |
+| `get_session_message_turns` | active 工作集按 turn 范围 | `transcript/service.fetchActiveTurns` |
+| `get_session_archive_turns` | 单 epoch 归档按 turn 范围 | `transcript/service.fetchArchiveTurns` |
 | `get_fork_messages` | 子 Agent transcript 回放 | `useAgent.openForkOverlay`（打开 overlay 时 hydrate） |
+
+**前端 Turn 内存（纯 UI，无额外 IPC）：** `useTranscriptLoader` bootstrap 加载 turn 0（若有）+ active 尾部 6 轮（`TAIL_LOADED_TURNS`）；上滑 `IntersectionObserver` 懒加载；浏览 VIEW 6 轮滑动窗口、超 18 轮 loaded 时 `planMemoryWindow` 溢出淘汰；贴底欠填时 `planTailContentFill` 向上预取；贴底区稳定后 `planMemoryReconcile` 收缩回 TAIL 6。策略常量见 `ui/src/transcript/loadPolicy.ts`；计划函数见 `turnLoadPlan` / `turnMemoryPolicy`。详见 [FRAMEWORK §2.5 Turn 级懒加载](../../FRAMEWORK.md#25-前端状态与-ipc)。
 | `init_novel_project` | 当前作品 scaffold | SettingsPanel |
 | `list_project_files` / `read_project_file` | 文件树 | FileTreePanel |
 | `update_session_todo` | Todo 状态 | StatusBar Todo 下拉 |
 | `get_api_config` / `set_api_config` | 全局 API（json） | SettingsPanel |
 
-共 **22** 个 Tauri command（见 `src-tauri/src/main.rs` `generate_handler!`）。
+共 **23** 个 Tauri command（见 `src-tauri/src/main.rs` `generate_handler!`）。
 
 **Tauri invoke 参数命名：** 前端使用 camelCase，Rust 命令参数为 snake_case。示例：
 
 ```typescript
 invoke("resume_session", { sessionId });
-invoke("get_session_transcript", { sessionId: null });
+invoke("get_session_transcript_layout", { sessionId: null });
+invoke("get_session_message_turns", { sessionId: null, fromTurn: 1, toTurn: 5 });
 invoke("update_session_todo", { todoId, status });
 invoke("approve_tool", { toolCallId });
 ```
@@ -138,9 +151,9 @@ invoke("approve_tool", { toolCallId });
 |------------|------|
 | `stream-chunk` | ContentBlockDelta |
 | `ask-user-question` | AskUserQuestion；`questions[]` 经 `ask_questions_for_ui` 输出 **camelCase**（`allowMultiple` / `allowCustom`） |
-| `turn-complete` | TurnComplete（含 `wasInterrupted`）/ TurnStart / Error（`phase: "error"`）；**含 turn 级 token 字段，触发 `useAppStatus` 全量 refresh** |
+| `turn-complete` | TurnComplete（含 `wasInterrupted`）/ TurnStart / Error（`phase: "error"`）；**含 turn 级 token 字段；`useAgent` 在 turn 结束时调用 `onTurnComplete` → `useAppStatus` 单次 refresh** |
 | `session-tokens-updated` | SessionTokensUpdated；**`useAppStatus` 局部 patch token 四字段**（不调用 `get_app_status`） |
-| `session-resumed` | create/open work、create/resume session |
+| `session-resumed` | create/open work、create/resume session；`useAgent` 清 streaming；`useProjectFiles` refresh；**不**触发 `useAppStatus` refresh（避免与 invoke 竞态） |
 | `permission-mode-changed` | SetPermissionMode → `useAppStatus` refresh |
 | `sub-agent-started` / `sub-agent-complete` | 子 Agent；payload 含 `forkRunId`、`agentType`、`parentToolCallId`（前端据其推断 `source`: tool \| hook） |
 | `sub-agent-stream` / `sub-agent-tool` | 子 Agent overlay 流式正文与工具 |
@@ -151,7 +164,7 @@ invoke("approve_tool", { toolCallId });
 
 ### 1.10 API 配置
 
-`get_api_config` / `set_api_config` 读写 `{agent_root}/.novel-agent/api_config.json`（Key 脱敏）。主会话 LLM 客户端经 `novel-core::session_llm::build_chat_client`（Key：`DEEPSEEK_API_KEY` env > json；构造：`ChatClient::from_api_key_or_env`）；无 Key 时 `llm = None` → 离线 mock。旧版 per-work `state.db` 内 `api_config` 表已移除。
+`get_api_config` / `set_api_config` 读写 `{agent_root}/.novel-agent/api_config.json`（Key 脱敏）。主会话 LLM 客户端经 `novel-core` 内部 `engine/session_llm::build_chat_client`（Key：`DEEPSEEK_API_KEY` env > json；构造：`ChatClient::from_api_key_or_env`）；无 Key 时 `llm = None` → 离线 mock。旧版 per-work `state.db` 内 `api_config` 表已移除。
 
 ### 1.11 前端构建衔接
 

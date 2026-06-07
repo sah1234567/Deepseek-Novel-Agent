@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { ToolCall } from "../../hooks/useAgent";
+import type { ToolCall } from "../../types/messages";
 import { formatToolSummary, formatToolInput } from "../../utils/tools";
 import "./ToolUseCard.css";
 

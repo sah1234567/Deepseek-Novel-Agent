@@ -68,17 +68,18 @@ Claude Code 文件夹格式：`skills/<id>/SKILL.md` + 可选 `references/`。
 | StatusBar 作品 | `list_works` 下拉 + 新建作品；切换作品会 **新建 session**（不自动恢复上次会话） |
 | StatusBar 会话 | `list_sessions` 下拉 + `resume_session` 切换；`+` → `create_session`；标签显示 **对话轮数** + **最后 LLM 活跃时间**；流式中（`isStreaming`）禁用切换 |
 | StatusBar Todo | **按钮常驻**（StatusBar 最左）；`TodoWrite` → DB → `get_app_status.todos`；下拉按 **进行中 / 未进行 / 已完成** 分组；空列表显示「暂无待办事项」；`update_session_todo` 点击循环状态；未完成数 **0→>0** 时自动展开；**工具 result 后即时 refresh** |
-| StatusBar Token | 会话累计三分类 + 当前上下文；**30s** 轮询 `get_app_status` + `turn-complete` / `session-resumed` / `permission-mode-changed` / `tool-call-request`(result) 全量 refresh；`session-tokens-updated` 局部 patch token 字段 |
+| StatusBar Token | 会话累计三分类 + 当前上下文；**30s** 轮询 `get_app_status` + `turn-complete` / `permission-mode-changed` / `tool-call-request`(result) 全量 refresh；会话切换由 invoke 调用方 refresh；`session-tokens-updated` 局部 patch token 字段 |
 | 设置 · 会话列表 | 同 `list_sessions`；元数据含 **对话 N 轮 · API M 次** |
 | 权限 / 模型 | ChatPanel 底栏：normal / plan / auto / unattended；flash/pro；**turn 进行中禁用** |
 | **聊天区布局** | Agent/用户/Subagent 全宽 `message`；问答全宽卡片；普通工具 `message-tool` + `ToolUseCard`；`word-break` 边界换行 |
-| **Turn 折叠 + Sticky** | 最后一轮 `transcript-turn-anchor` 最小高度 = 视口；用户提问滚出上方时 **sticky-prompt-header**；点击滚回本轮起点 |
-| **Transcript FSM** | `ui/src/transcript/`：`dispatchTranscriptEvent` 管理 Turn / LlmSegment / openSegment；Tauri 事件经 `mapEvents` 适配 |
+| **Turn 折叠 + Sticky** | 最后一轮 `transcript-turn-anchor` 最小高度 = 视口（折叠较早轮）；用户气泡紧挨上一轮、流式内容向下生长；近底跟随 + 发送 `pinAndScrollToBottom`；用户提问滚出上方时 **sticky-prompt-header** |
+| **Turn 内存与滚动** | `loadPolicy` 三档（TAIL **6** / VIEW **6** / MAX **18**）；`planMemoryReconcile` 统一预取与淘汰；贴底欠填向上预取；`useTranscriptLoader` 编排 `EVICT_TURNS`（仅 FSM，DB 保留）；`ScrollViewport` 近底跟随（128px）+ `onBottomAnchorChange` 防抖收缩 |
+| **Transcript FSM** | `ui/src/transcript/`：`dispatchTranscriptEvent` 管理 Turn / LlmSegment / openSegment；Tauri 事件经 `mapEvents` 适配；`liveTail` 处理流式 orphan 尾轮 |
 | **SegmentGroup 渲染** | `TranscriptView` 唯一入口；`segmentRender.tsx` 成组 Agent + Tool；主聊天、AskUserQuestion、SubAgent overlay 共用 |
 | **SubAgentForkCard** | tool 路径：段内 `ForkSubAgent`；hook 路径：`HookForkCards` 列在滚动区底部。与 Agent 同构（`Subagent · {类型}`）；**进入** → `SubAgentOverlay`（`mode=fork`，含 `forkRuns` 与 approve/deny） |
 | 流式 Tool | `ToolUseCard`（虚线内卡）显示 pending / running / done；`ForkSubAgent` 走 `SubAgentForkCard` 而非 `ToolUseCard` |
 | AskUserQuestion | 全宽卡片；插在 `pauseAfterSegmentId` 段 tools 之后；事件 payload `allowMultiple` / `allowCustom`（camelCase） |
-| **CompactionDivider / ContextRefreshBubble** | archive 区分隔线；`[上下文刷新]` 单气泡（Skill + 摘要两节） |
+| **CompactionDivider / ContextRefreshBubble** | archive 区分隔线；`[上下文刷新]` 单气泡默认折叠（摘要预览 + Skill 名一行），展开仅会话摘要 |
 | 压缩进度 | `compaction-progress` → **CompactionBanner**（`dialog-viewport` 顶部） |
 
 **会话术语：** 见 [novel-state §1.4](crates/novel-state.md#14-sessionsummary)（`total_turns` vs `api_call_count` vs `context_tokens` vs `last_active_at`）。
@@ -103,7 +104,7 @@ assistant-segment-complete → 主聊天或 fork overlay 分段 finalize
 ask-user-question → questions[] 含 allowMultiple / allowCustom（camelCase）
 turn-complete → useAppStatus 全量 refresh；useAgent 若 pending 工具/问答则跳过 hydrate
 session-tokens-updated → useAppStatus 局部 patch token（非全量 get_app_status）
-session-resumed / turn-complete（无 pending）→ useAgent hydrate（get_session_transcript）
+session-resumed → useAgent 清 streaming；status.sessionId 更新 / compaction done → useTranscriptLoader.resetAndBootstrap；turn-complete → reloadActiveTail（get_session_message_turns 尾轮）；懒加载按时间轴相邻 idle 窗口预取（`turnLoadPlan`），跨 compact 并行分段 IPC（archive / active）；`planMemoryReconcile`（TAIL 6 / VIEW 6 / MAX 18，视口感知溢出淘汰）；贴底欠填 `TAIL_CONTENT_UNDERFLOW_PX` 向上预取；贴底区（`BOTTOM_ANCHOR_THRESHOLD_PX`）稳定后防抖收缩至 TAIL 6 轮；`ScrollViewport` 近底区内容增长时自动置底
 ```
 
 详见 [novel-server §1.9](crates/novel-server.md#19-前端事件eventsrs) 与 [novel-core §1.10](crates/novel-core.md#110-流式-tool-调度streamingtooldispatch)。

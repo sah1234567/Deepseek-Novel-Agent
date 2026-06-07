@@ -2,18 +2,14 @@ export function extractSearchRoot(input: unknown): string | null {
   if (!input || typeof input !== "object") return null;
   const obj = input as Record<string, unknown>;
   if (typeof obj.search_root === "string" && obj.search_root.trim()) return obj.search_root;
-  // Older persisted tool args may use `path` instead of `search_root` (Grep/Glob hydrate).
-  if (typeof obj.path === "string" && obj.path.trim()) return obj.path;
   return null;
 }
 
 export function extractToolPath(input: unknown): string | null {
   if (!input || typeof input !== "object") return null;
   const obj = input as Record<string, unknown>;
-  for (const key of ["file_path", "path", "target_file", "notebook_path"]) {
-    const v = obj[key];
-    if (typeof v === "string" && v.trim()) return v;
-  }
+  const v = obj.file_path;
+  if (typeof v === "string" && v.trim()) return v;
   return null;
 }
 
@@ -110,9 +106,7 @@ export function formatToolInput(name: string, input: unknown): string {
       return "因果图遍历: " + dir + ", 深度 " + depth;
     }
     case "InvokeSkill": {
-      // Accept snake_case (schema) and legacy camelCase from older payloads.
-      const id = typeof obj.skill_id === "string" ? obj.skill_id
-               : typeof obj.skillId === "string" ? obj.skillId : "?";
+      const id = typeof obj.skill_id === "string" ? obj.skill_id : "?";
       return "加载 Skill: " + id;
     }
     case "TodoWrite": {

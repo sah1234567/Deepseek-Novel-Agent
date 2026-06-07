@@ -1,7 +1,7 @@
 #[derive(Debug, thiserror::Error)]
 pub enum AgentError {
     #[error("Fork error: {0}")]
-    Fork(#[from] crate::fork::ForkError),
+    Fork(#[from] crate::subagent::ForkError),
     #[error("Validation error: {0}")]
     Validation(String),
     #[error("Nested fork prohibited")]
@@ -16,4 +16,6 @@ pub enum AgentError {
     Llm(#[from] novel_deepseek::LlmError),
     #[error("Compaction error: {0}")]
     Compaction(#[from] novel_compaction::CompactionError),
+    #[error("Config error: {0}")]
+    Config(#[from] novel_config::ConfigError),
 }

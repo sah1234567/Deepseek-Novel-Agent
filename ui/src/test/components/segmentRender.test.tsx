@@ -49,7 +49,7 @@ describe("segmentRender", () => {
     render(
       <ToolBubble
         tool={tool}
-        flatMessages={[
+        forkBindingMessages={[
           {
             id: "tool-fork-1",
             role: "tool",
@@ -81,6 +81,22 @@ describe("segmentRender", () => {
     expect(screen.getByRole("button", { name: "进入" })).toBeInTheDocument();
   });
 
+  it("ToolBubble shows checkmark when tool status is done", () => {
+    const tool: ToolCall = {
+      id: "r1",
+      name: "Read",
+      input: { path: "ch.md" },
+      status: "done",
+      needsApproval: false,
+      result: "ok",
+    };
+    const { container } = render(
+      <ToolBubble tool={tool} forkBindingMessages={[]} />,
+    );
+    expect(container.querySelector(".tool-done")).toBeTruthy();
+    expect(screen.getByText("✓")).toBeInTheDocument();
+  });
+
   it("ToolBubble shows approve buttons for pending Write", () => {
     const onApprove = vi.fn();
     const onDeny = vi.fn();
@@ -94,7 +110,7 @@ describe("segmentRender", () => {
     render(
       <ToolBubble
         tool={tool}
-        flatMessages={[]}
+        forkBindingMessages={[]}
         onApprove={onApprove}
         onDeny={onDeny}
       />,

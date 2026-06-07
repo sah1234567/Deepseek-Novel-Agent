@@ -1,30 +1,37 @@
-import { useState } from "react";
 import ReactMarkdown from "react-markdown";
-import type { UIMessage } from "../../hooks/useAgent";
-import { parseContextRefreshSections } from "../../transcript/types";
+import type { UIMessage } from "../../types/messages";
+import {
+  extractActivatedSkillLabels,
+  parseContextRefreshSections,
+  summaryPreview,
+} from "../../transcript/contextRefresh";
 import "./ContextRefreshBubble.css";
 
 export function ContextRefreshBubble({ user }: { user: UIMessage }) {
   const text = user.contentBlocks.find((b) => b.kind === "text")?.text ?? "";
   const { skill, summary } = parseContextRefreshSections(text);
-  const [skillOpen, setSkillOpen] = useState(true);
-  const [summaryOpen, setSummaryOpen] = useState(true);
+  const skillLabels = extractActivatedSkillLabels(skill);
+  const preview = summaryPreview(summary);
 
   return (
     <article className="message message-context-refresh">
-      <header>上下文刷新</header>
-      {skill && (
-        <details open={skillOpen} onToggle={(e) => setSkillOpen(e.currentTarget.open)}>
-          <summary>激活 Skill</summary>
-          <ReactMarkdown>{skill}</ReactMarkdown>
-        </details>
-      )}
-      {summary && (
-        <details open={summaryOpen} onToggle={(e) => setSummaryOpen(e.currentTarget.open)}>
-          <summary>会话历史摘要</summary>
-          <ReactMarkdown>{summary}</ReactMarkdown>
-        </details>
-      )}
+      <details>
+        <summary className="context-refresh-toggle">
+          <span className="context-refresh-title">上下文已刷新</span>
+          {preview && <span className="context-refresh-preview">{preview}</span>}
+          {skillLabels.length > 0 && (
+            <span className="context-refresh-skills">
+              已激活 Skill：{skillLabels.join("、")}
+            </span>
+          )}
+        </summary>
+        {summary && (
+          <div className="context-refresh-body">
+            <h3 className="context-refresh-body-title">会话历史摘要</h3>
+            <ReactMarkdown>{summary}</ReactMarkdown>
+          </div>
+        )}
+      </details>
     </article>
   );
 }

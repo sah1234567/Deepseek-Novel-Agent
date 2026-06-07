@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createInitialMachine } from "../../transcript/machine";
 import { transcriptToFlatMessages } from "../../transcript/convert";
 import { dispatchTranscriptEvent } from "../../transcript/machine";
+import { hydrateAllForTest } from "../../transcript/testHelpers";
 import { mapStreamChunk } from "../../transcript/mapEvents";
 import { hydrateForkMachine } from "../../fork/transcript";
 import {
@@ -74,7 +75,7 @@ describe("main session flows (useAgent parity)", () => {
     expect(m.context.turns[1].user.contentBlocks[0].text).toBe("next");
   });
 
-  it("session-resumed: reset to initial then HYDRATE", () => {
+  it("session switch: RESET_TRANSCRIPT then MERGE_TURNS hydrate", () => {
     let m = createInitialMachine();
     m = runForkLifecycle("x");
     m = createInitialMachine();
@@ -82,7 +83,7 @@ describe("main session flows (useAgent parity)", () => {
       { id: "u1", role: "user" as const, contentBlocks: [{ blockIndex: 0, kind: "text", text: "restored" }] },
       { id: "a1", role: "assistant" as const, contentBlocks: [{ blockIndex: 0, kind: "text", text: "hi" }] },
     ];
-    m = dispatchTranscriptEvent(m, { type: "HYDRATE", flatMessages: flat });
+    m = hydrateAllForTest(m, flat);
     expect(m.context.turns[0].user.contentBlocks[0].text).toBe("restored");
     expect(m.phase).toBe("idle");
   });

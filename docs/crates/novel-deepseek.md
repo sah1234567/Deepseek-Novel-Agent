@@ -42,7 +42,7 @@
 - `parse_tool_arguments(raw)` — trim；empty → `{}`；strict JSON，**无 repair 启发式**
 - `ToolParseError` — `EmptyArguments` / `InvalidJson`
 
-`novel-core::message_bridge::parse_tool_call_input` 统一消费上述解析，parse 失败 fallback 为 `{}` 并打 warn。
+`novel-core::message::parse_tool_call_input` 统一消费上述解析，parse 失败 fallback 为 `{}` 并打 warn。
 
 ### 1.3 Token 与 Cache 追踪
 
