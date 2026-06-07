@@ -103,6 +103,12 @@ export function ChatPanel({
   const scheduleReconcileRef = useRef<(() => void) | null>(null);
   const compactionPausedRef = useRef(false);
   compactionPausedRef.current = isStreaming || turnInProgress || appTurnInProgress;
+  const isStreamingRef = useRef(false);
+  isStreamingRef.current = isStreaming;
+  const turnInProgressRef = useRef(false);
+  turnInProgressRef.current = turnInProgress;
+  const appTurnInProgressRef = useRef(false);
+  appTurnInProgressRef.current = appTurnInProgress;
 
   const slotVisibility = useSlotVisibility(turnSlotsRef, () => {
     scheduleReconcileRef.current?.();
@@ -121,6 +127,9 @@ export function ChatPanel({
     isBottomAnchoredRef,
     contentUnderflowRef,
     compactionPausedRef,
+    isStreamingRef,
+    turnInProgressRef,
+    appTurnInProgressRef,
   });
   turnSlotsRef.current = transcriptLoader.turnSlots;
   scheduleReconcileRef.current = transcriptLoader.scheduleReconcile;

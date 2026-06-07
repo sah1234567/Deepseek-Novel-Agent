@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { userMsg } from "../test/fixtures/transcript";
 import {
+  contextRefreshPreview,
   extractActivatedSkillLabels,
+  extractAuditStatusSection,
   isContextRefreshUser,
   parseContextRefreshSections,
   summaryPreview,
@@ -21,7 +23,20 @@ describe("contextRefresh", () => {
     expect(parseContextRefreshSections(text)).toEqual({
       skill: "skill body",
       summary: "summary body",
+      auditStatus: "",
     });
+  });
+
+  it("extractAuditStatusSection pulls audit block from summary", () => {
+    const summary = "## 创作进度\nwriting\n\n## 审计状态\nCh1 PA 已通过\n\n## 情节与正文\nplot";
+    const { audit, restSummary } = extractAuditStatusSection(summary);
+    expect(audit).toContain("Ch1 PA");
+    expect(restSummary).not.toContain("审计状态");
+    expect(restSummary).toContain("创作进度");
+  });
+
+  it("contextRefreshPreview prefers audit line", () => {
+    expect(contextRefreshPreview("Ch5 待审", "long summary")).toMatch(/^审计：/);
   });
 
   it("extractActivatedSkillLabels reads skill headings", () => {

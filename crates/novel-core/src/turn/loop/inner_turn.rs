@@ -3,7 +3,7 @@ use crate::message::{assistant_from_completion, to_llm_messages_traced, RepairTr
 use crate::subagent::{clear_subagent_queue, drain_subagent_jobs};
 use crate::turn::llm_stream::{should_continue_inner_after_completion, LlmCallOutcome};
 use crate::turn::TurnContext;
-use crate::{AgentEngine, AgentError, ChatMessage, Event, TerminalReason};
+use crate::{AgentEngine, AgentError, Event, TerminalReason};
 use novel_deepseek::LlmCompletion;
 use tokio::sync::mpsc;
 
@@ -11,15 +11,8 @@ pub(crate) const MAIN_MAX_INNER_TURNS: u32 = 80;
 
 impl AgentEngine {
     /// Prefix for sub-agent reports injected mid-turn (role stays `user` for the LLM).
-    pub(crate) const SUB_AGENT_REPORT_PREFIX: &'static str = "[子 Agent 完成:";
+    pub(crate) const SUB_AGENT_REPORT_PREFIX: &'static str = crate::turn::SUB_AGENT_REPORT_PREFIX;
 
-    fn is_sub_agent_report(msg: &ChatMessage) -> bool {
-        msg.content.starts_with(Self::SUB_AGENT_REPORT_PREFIX)
-    }
-
-    pub(in crate::turn::r#loop) fn is_mid_turn_user_injection(msg: &ChatMessage) -> bool {
-        Self::is_sub_agent_report(msg)
-    }
     pub(in crate::turn::r#loop) fn resume_inner_turn_from_messages(&self) -> u32 {
         self.messages
             .iter()

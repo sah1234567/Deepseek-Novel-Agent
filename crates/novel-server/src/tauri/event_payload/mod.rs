@@ -75,6 +75,9 @@ mod tests {
             action: novel_core::CompactionAction::Done {
                 tokens_before: 100,
                 tokens_after: 40,
+                epoch: 2,
+                retained_min_turn: Some(46),
+                retained_max_turn: Some(50),
             },
         };
         let (name, payload) = core_event_payload(&event, "msg-1").unwrap();
@@ -82,6 +85,9 @@ mod tests {
         assert_eq!(payload["action"], "done");
         assert_eq!(payload["tokensBefore"], 100);
         assert_eq!(payload["tokensAfter"], 40);
+        assert_eq!(payload["epoch"], 2);
+        assert_eq!(payload["retainedMinTurn"], 46);
+        assert_eq!(payload["retainedMaxTurn"], 50);
     }
 
     #[test]

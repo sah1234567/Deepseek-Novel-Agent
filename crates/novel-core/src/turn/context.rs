@@ -7,6 +7,9 @@ use crate::TerminalReason;
 /// (never `MSG_SEQ_USER`).
 pub const MSG_SEQ_USER: i32 = 0;
 
+/// Mid-turn sub-agent report user messages (`role=user`, not a new turn).
+pub const SUB_AGENT_REPORT_PREFIX: &str = "[子 Agent 完成:";
+
 #[derive(Debug)]
 pub struct TurnContext {
     /// Monotonic counter for segment index and LLM iteration tracking.

@@ -20,6 +20,15 @@ describe("compactionMessages", () => {
     expect(label).toContain("4,000");
   });
 
+  it("maps done with retained turn range", () => {
+    const label = compactionProgressLabel({
+      action: "done",
+      retainedMinTurn: 46,
+      retainedMaxTurn: 50,
+    });
+    expect(label).toContain("保留 turn 46–50");
+  });
+
   it("maps failed with reason", () => {
     expect(
       compactionProgressLabel({ action: "failed", reason: "timeout" }),

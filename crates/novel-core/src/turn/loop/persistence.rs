@@ -1,6 +1,5 @@
 use crate::engine::session_llm::{apply_session_usage, read_session_llm};
 use crate::message::chat_to_json;
-use crate::turn::MSG_SEQ_USER;
 use crate::Event;
 use crate::{AgentEngine, AgentError, ChatMessage};
 use novel_deepseek::LlmCompletion;
@@ -41,23 +40,11 @@ impl AgentEngine {
         let mut turn = 0i32;
         let mut seq_in_turn = 0i32;
         for msg in self.messages.iter() {
-            let (t, seq) = if msg.role == "system" {
-                turn = 0;
-                seq_in_turn = 0;
-                (0, 0)
-            } else if msg.content.starts_with("[上下文刷新]") {
-                (0, 1)
-            } else if Self::is_mid_turn_user_injection(msg) {
-                seq_in_turn += 1;
-                (turn, seq_in_turn)
-            } else if msg.role == "user" {
-                turn += 1;
-                seq_in_turn = 0;
-                (turn, MSG_SEQ_USER)
-            } else {
-                seq_in_turn += 1;
-                (turn, seq_in_turn)
-            };
+            let (t, seq) = crate::message::turn_rows::assign_message_turn_seq(
+                msg,
+                &mut turn,
+                &mut seq_in_turn,
+            );
             rows.push((t, seq, msg.role.clone(), chat_to_json(msg)));
         }
         rows

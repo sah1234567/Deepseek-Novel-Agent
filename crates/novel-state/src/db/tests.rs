@@ -112,6 +112,23 @@ fn archive_session_messages_preserves_epoch() {
 }
 
 #[test]
+fn compaction_retained_turn_metadata_roundtrip() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let db = Database::open(tmp.path().join("test.db")).unwrap();
+    let sid = db.create_session("/tmp", "m").unwrap();
+    db.record_compaction_retained_turns(&sid, 1, 46, 50)
+        .unwrap();
+    assert_eq!(
+        db.get_compaction_retained_turn_bounds(&sid, 1).unwrap(),
+        Some((46, 50))
+    );
+    assert_eq!(
+        db.get_compaction_retained_turn_bounds(&sid, 2).unwrap(),
+        None
+    );
+}
+
+#[test]
 fn increment_compaction_count_metadata() {
     let db = test_db();
     let sid = db.create_session("/tmp/proj", "deepseek-chat").unwrap();

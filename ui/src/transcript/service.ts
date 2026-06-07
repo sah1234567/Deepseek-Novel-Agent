@@ -18,6 +18,8 @@ export type UiTurnBundle = {
 export type ArchiveEpochBounds = {
   epoch: number;
   bounds: UiTurnBounds;
+  retainedMinTurn?: number;
+  retainedMaxTurn?: number;
 };
 
 export type SessionTranscriptLayout = {

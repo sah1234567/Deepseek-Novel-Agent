@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use novel_knowledge::{format_progress_hint, KnowledgeStore};
 use novel_state::Database;
 
 fn outline_path(project_root: &Path) -> PathBuf {
@@ -147,6 +148,10 @@ pub fn load_progress(project_root: &Path, session_id: &str, db: &Database) -> St
     }
     if !in_progress.is_empty() {
         lines.push(format!("进行中任务: {}", in_progress.join("; ")));
+    }
+    let store = KnowledgeStore::new(project_root);
+    if let Some(hint) = format_progress_hint(&store) {
+        lines.push(format!("审计台账: {hint}"));
     }
     lines.join("\n")
 }

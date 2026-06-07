@@ -83,6 +83,7 @@ mod novel_tools_tests {
             "CharacterRotate",
             "ImpactAnalysis",
             "KnowledgeDerive",
+            "AuditStatusQuery",
             "TrackingQuery",
             "RelationQuery",
         ];

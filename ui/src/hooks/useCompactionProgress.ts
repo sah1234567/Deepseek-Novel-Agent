@@ -15,6 +15,9 @@ export interface CompactionBannerState {
   attempt?: number;
   tokensBefore?: number;
   tokensAfter?: number;
+  epoch?: number;
+  retainedMinTurn?: number;
+  retainedMaxTurn?: number;
   reason?: string;
   variant: "info" | "success" | "warn";
 }
@@ -40,6 +43,9 @@ export function useCompactionProgress(): CompactionBannerState {
             attempt: p.attempt,
             tokensBefore: p.tokensBefore,
             tokensAfter: p.tokensAfter,
+            epoch: p.epoch,
+            retainedMinTurn: p.retainedMinTurn,
+            retainedMaxTurn: p.retainedMaxTurn,
             reason: p.reason,
             variant,
           });

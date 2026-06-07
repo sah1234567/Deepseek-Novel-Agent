@@ -79,7 +79,7 @@ Claude Code 文件夹格式：`skills/<id>/SKILL.md` + 可选 `references/`。
 | **SubAgentForkCard** | tool 路径：段内 `ForkSubAgent`；hook 路径：`HookForkCards` 列在滚动区底部。与 Agent 同构（`Subagent · {类型}`）；**进入** → `SubAgentOverlay`（`mode=fork`，含 `forkRuns` 与 approve/deny） |
 | 流式 Tool | `ToolUseCard`（虚线内卡）显示 pending / running / done；`ForkSubAgent` 走 `SubAgentForkCard` 而非 `ToolUseCard` |
 | AskUserQuestion | 全宽卡片；插在 `pauseAfterSegmentId` 段 tools 之后；事件 payload `allowMultiple` / `allowCustom`（camelCase） |
-| **CompactionDivider / ContextRefreshBubble** | archive 区分隔线；`[上下文刷新]` 单气泡默认折叠（摘要预览 + Skill 名一行），展开仅会话摘要 |
+| **CompactionDivider / ContextRefreshBubble** | archive 区分隔线（含 epoch + 保留 turn 范围，来自 layout `retainedMinTurn`/`retainedMaxTurn`）；`[上下文刷新]` 单气泡（非合并 system+ReAct）：折叠优先审计 preview + Skill 标签；展开「审计状态」块 + 会话摘要 |
 | 压缩进度 | `compaction-progress` → **CompactionBanner**（`dialog-viewport` 顶部） |
 
 **会话术语：** 见 [novel-state §1.4](crates/novel-state.md#14-sessionsummary)（`total_turns` vs `api_call_count` vs `context_tokens` vs `last_active_at`）。

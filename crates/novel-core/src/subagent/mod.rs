@@ -13,6 +13,7 @@ pub use runner::run_subagent_job;
 
 use crate::engine::session_llm::read_session_llm;
 use crate::{AgentEngine, AgentError, AgentType, ChatMessage, Event};
+use novel_knowledge::{mark_audited, parse_chapter_numbers, AuditKind, KnowledgeStore};
 use novel_tools::{PendingSubagentWork, PermissionMode};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -129,15 +130,47 @@ impl Drop for DrainInProgressGuard {
     }
 }
 
+fn record_subagent_audit(engine: &AgentEngine, agent_type: AgentType, task: &str) {
+    if matches!(agent_type, AgentType::GeneralPurpose) {
+        return;
+    }
+    let Some(kind) = AuditKind::from_agent_name(&agent_type.to_string()) else {
+        return;
+    };
+    let chapters = parse_chapter_numbers(task);
+    if chapters.is_empty() {
+        tracing::debug!(
+            agent = %agent_type,
+            "audit_status_skip_no_chapter_in_task"
+        );
+        return;
+    }
+    let store = KnowledgeStore::new(&engine.shared.session.project_root);
+    match mark_audited(&store, kind, &chapters, task) {
+        Ok(()) => tracing::debug!(
+            agent = %agent_type,
+            chapters = ?chapters,
+            "audit_status_marked_audited"
+        ),
+        Err(e) => tracing::warn!(
+            agent = %agent_type,
+            error = %e,
+            "audit_status_mark_failed"
+        ),
+    }
+}
+
 async fn apply_subagent_success(
     engine: &mut AgentEngine,
     agent_type: AgentType,
     fork_run_id: &str,
     inject: bool,
+    task: &str,
     output: &str,
     event_tx: Option<&mpsc::UnboundedSender<Event>>,
 ) -> Result<(), AgentError> {
     if inject {
+        record_subagent_audit(engine, agent_type, task);
         engine.inject_sub_agent_report(agent_type, output, Some(fork_run_id))?;
         if engine.compaction_needed() {
             engine.compact_with_events(event_tx).await;
@@ -157,17 +190,20 @@ async fn apply_subagent_success(
 async fn join_subagent_handles(
     engine: &mut AgentEngine,
     handles: Vec<tokio::task::JoinHandle<(AgentType, Result<String, AgentError>)>>,
-    meta: Vec<(AgentType, String, bool)>,
+    meta: Vec<(AgentType, String, bool, String)>,
     event_tx: Option<&mpsc::UnboundedSender<Event>>,
 ) -> Result<(), AgentError> {
     for (i, handle) in handles.into_iter().enumerate() {
-        let (_agent_type, fork_run_id, inject) =
-            meta.get(i)
-                .cloned()
-                .unwrap_or((AgentType::KnowledgeAuditor, String::new(), false));
+        let (_agent_type, fork_run_id, inject, task) = meta.get(i).cloned().unwrap_or((
+            AgentType::KnowledgeAuditor,
+            String::new(),
+            false,
+            String::new(),
+        ));
         match handle.await {
             Ok((at, Ok(output))) => {
-                apply_subagent_success(engine, at, &fork_run_id, inject, &output, event_tx).await?;
+                apply_subagent_success(engine, at, &fork_run_id, inject, &task, &output, event_tx)
+                    .await?;
             }
             Ok((_, Err(e))) => {
                 tracing::error!(error = %e, "subagent_job_failed");
@@ -210,9 +246,10 @@ pub async fn drain_subagent_jobs(
     let _guard = DrainInProgressGuard(Arc::clone(&engine.shared.drain_in_progress));
 
     let mut handles = Vec::with_capacity(jobs.len());
-    let mut meta: Vec<(AgentType, String, bool)> = Vec::with_capacity(jobs.len());
+    let mut meta: Vec<(AgentType, String, bool, String)> = Vec::with_capacity(jobs.len());
     for job in jobs {
         let agent_type = job.agent_type;
+        let task = job.task.clone();
         let inject = job.inject_report();
         let fork_run_id = fork_transcript::create_fork_run(
             &engine.shared.session.db,
@@ -227,7 +264,7 @@ pub async fn drain_subagent_jobs(
         let job_for_spawn = job.clone();
         engine.sub_agent_inc();
         let event_tx_clone = event_tx.cloned();
-        meta.push((agent_type, fork_run_id.clone(), inject));
+        meta.push((agent_type, fork_run_id.clone(), inject, task));
         handles.push(tokio::spawn(async move {
             let result =
                 run_subagent_job(shared, job_for_spawn, fork_run_id, snap, event_tx_clone).await;

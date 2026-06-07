@@ -26,8 +26,12 @@
 ## 子 Agent 结论
 KnowledgeAuditor / ChapterCraftAnalyzer / PlanAuditor / GeneralPurpose subagent 报告要点（若有）
 
+## 审计状态
+从对话与 `knowledge/meta/audit-status.md`（若曾 Read）归纳：每章细纲PA/正文KA/文笔CCA 状态（未审/已审计/已通过/待复审）、最近修复记录要点、无人值守下一批应审哪些章。无则写「无」。
+
 输出要求：
 - 只输出摘要正文（Markdown），不要前言或「以下是摘要」类套话
 - 使用简体中文，保留章节号、人物名、文件路径等可操作细节
 - ★ 「上一章衔接锚点」中的原文引用必须准确，这是压缩后恢复写作的关键信息
+- ★ 「审计状态」须可操作，避免压缩后重复 Fork 或漏审
 - 总长度控制在10000字左右，在保留可操作细节的前提下尽量精炼

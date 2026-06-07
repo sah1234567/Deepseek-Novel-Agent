@@ -164,6 +164,9 @@ pub enum CompactionAction {
     Done {
         tokens_before: usize,
         tokens_after: usize,
+        epoch: i32,
+        retained_min_turn: Option<i32>,
+        retained_max_turn: Option<i32>,
     },
     Failed {
         reason: String,

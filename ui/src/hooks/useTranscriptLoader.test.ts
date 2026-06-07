@@ -26,6 +26,9 @@ function mockLoaderOptions(compactionPaused = false): TranscriptLoaderOptions {
     isBottomAnchoredRef: { current: false },
     contentUnderflowRef: { current: false },
     compactionPausedRef: { current: compactionPaused },
+    isStreamingRef: { current: false },
+    turnInProgressRef: { current: false },
+    appTurnInProgressRef: { current: false },
   };
 }
 

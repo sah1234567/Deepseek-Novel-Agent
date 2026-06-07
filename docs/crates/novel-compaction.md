@@ -21,7 +21,7 @@
 
 **摘要生成（KV cache 优先）：**
 - 在 `messages[0..summarize_to]` 末尾追加 trailing user（正文来自 `prompt/compaction-summary-trailing.md`，`include_str!`）
-- 模板含「上一章衔接锚点」（原文末 3 句 + 细纲场景摘要）和「活跃伏笔」（未来 5 章待回收伏笔 ID）字段，加速压缩后写作恢复
+- 模板含「上一章衔接锚点」（原文末 3 句 + 细纲场景摘要）、「活跃伏笔」（未来 5 章待回收伏笔 ID）和「审计状态」（★ 与衔接锚点同级）字段，加速压缩后写作恢复与防重复/漏审
 - 首行 `[压缩摘要请求]`；**不**写入 DB、**不**进入 rebuild
 - 失败降级：`rule_based_summary` + `[规则摘要]`
 

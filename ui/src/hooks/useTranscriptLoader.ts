@@ -44,6 +44,11 @@ export type TranscriptLoaderOptions = {
   isBottomAnchoredRef: MutableRefObject<boolean>;
   contentUnderflowRef: MutableRefObject<boolean>;
   compactionPausedRef: MutableRefObject<boolean>;
+  /** When any ref is true, compaction-triggered resetAndBootstrap is skipped to preserve in-flight turn.
+   *  Covers: streaming (isStreamingRef), AskUserQuestion pause (turnInProgressRef), and app-level in-progress. */
+  isStreamingRef: MutableRefObject<boolean>;
+  turnInProgressRef: MutableRefObject<boolean>;
+  appTurnInProgressRef: MutableRefObject<boolean>;
 };
 
 export function useTranscriptLoader(
@@ -329,9 +334,21 @@ export function useTranscriptLoader(
 
   useEffect(() => {
     return onCompactionDone(() => {
+      // Mid-turn compaction: skip transcript reset to keep the FSM alive.
+      // Covers: streaming (LLM output in progress), AskUserQuestion pause
+      // (turnInProgress), and app-level flags. Without this, RESET_TRANSCRIPT
+      // would set phase=idle and subsequent TOOL/STREAM events would be
+      // silently discarded by the idle guard in machine.ts.
+      if (
+        options.isStreamingRef.current ||
+        options.turnInProgressRef.current ||
+        options.appTurnInProgressRef.current
+      ) {
+        return;
+      }
       void resetAndBootstrap();
     });
-  }, [resetAndBootstrap]);
+  }, [resetAndBootstrap, options.isStreamingRef, options.turnInProgressRef, options.appTurnInProgressRef]);
 
   return {
     layout,

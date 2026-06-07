@@ -1,3 +1,4 @@
+mod audit_status_query;
 mod character_rotate;
 mod character_search;
 mod common;
@@ -12,6 +13,7 @@ mod relation_query;
 mod stats;
 mod tracking_query;
 
+pub use audit_status_query::AuditStatusQueryTool;
 pub use character_rotate::CharacterRotateTool;
 pub use character_search::CharacterSearchTool;
 pub use corkboard::CorkboardTool;

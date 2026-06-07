@@ -68,6 +68,6 @@ allowed-tools: Read, Write, Edit, Glob, Grep, Bash, CharacterSearch, PlotGraph, 
 1. 向用户汇报修订摘要：已修改文件清单与变更要点。
 2. 若本轮 Edit/Write 了 `chapters/**`：**必须**在同一次 assistant 消息内并行 Fork 2 项 Subagent（KnowledgeAuditor + ChapterCraftAnalyzer），task 含受影响章节路径与改稿原因；按全部报告 Edit 修复。
 3. 若仅改 knowledge/ 未改正文：说明知识库已同步；若改动可能影响已写章节，**必须** Fork KnowledgeAuditor（+ 必要时 ChapterCraftAnalyzer）审计最近相关章。
-4. 审计与修复完成后，向用户确认「修订完成」。
+4. 审计与修复完成后，更新审计台账；改细纲/正文后将对应列标 `待复审` 或修复后标 `已通过`，向用户确认「修订完成」。
 
 **下一步：** 如果修改了正文章节→已完成审计（KnowledgeAuditor + ChapterCraftAnalyzer），如需额外收尾核对→InvokeSkill(`post-chapter-checklist`)。如果修改了 knowledge/ 未改正文→说明已同步。如果修改了大纲/细纲→可能需要 InvokeSkill(`chapter-writing`) 重写或续写受影响章。如果改稿不满意要重来→InvokeSkill(`chapter-writing`) 使用重写模式。

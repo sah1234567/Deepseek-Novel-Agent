@@ -33,6 +33,7 @@ mod tests {
         assert!(p.contains("10000字左右"));
         assert!(!p.contains("硬上限"));
         assert!(p.contains("## 创作进度"));
+        assert!(p.contains("## 审计状态"));
     }
 
     #[test]

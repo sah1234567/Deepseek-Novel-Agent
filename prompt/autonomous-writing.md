@@ -36,9 +36,11 @@
 
 | Subagent | 频率 | 备注 |
 |----------|------|------|
-| PlanAuditor | 每批细纲（5-10章）一次 | task 含所有新细纲章号 |
-| KnowledgeAuditor + ChapterCraftAnalyzer | 每 3 章一次 | task 含最近 3 章路径，提示按章分组 |
+| PlanAuditor | 每批细纲（5-10章）一次 | task 含所有新细纲章号；Fork 前 `AuditStatusQuery(operation=pending, audit_type=pa)` |
+| KnowledgeAuditor + ChapterCraftAnalyzer | 每 3 章一次 | task 含最近 3 章路径，提示按章分组；Fork 前查 `audit_type=ka`/`cca` |
 | 全局审计（KA 跨章模式） | 每 20 章一次 | task 含最近 20 章，额外检查伏笔回收率/人物弧线/战力一致性 |
+
+修复后更新 `knowledge/meta/audit-status.md`：标 `已通过` + append 修复记录（见 system §4.5）。
 
 降频的章仍需做轻量自检：Stats 字数 + Tail 上章衔接 + 细纲「写后记录」和「知识库更新确认」填写。
 

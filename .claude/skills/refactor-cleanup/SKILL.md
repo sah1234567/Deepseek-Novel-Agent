@@ -173,7 +173,7 @@ Ok(v)
 | **B. Tauri 壳** | `bash scripts/ci-tauri.sh` |
 | **C. 前端** | `bash scripts/ci-frontend.sh` |
 | **DB / 迁移** | 相关 crate nextest；必要时手工验证迁移 + metadata roundtrip |
-| **可选 CRAP** | 改 `crates/` 逻辑时：`bash scripts/ci-crap.sh` |
+| **可选 CRAP** | 改 `crates/` 后：`ci-lcov` → `ci-crap`（见 `cargo-crap` skill；Windows 用 `.ps1`） |
 
 全量 Rust 验证用 `bash scripts/ci-rust-test.sh`（workspace nextest）。**禁止 `cargo test`**。
 

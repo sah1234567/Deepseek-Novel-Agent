@@ -306,7 +306,15 @@ export function TranscriptView({
 
     const closeArchiveEpoch = () => {
       if (lastArchiveEpoch === undefined) return;
-      nodes.push(<CompactionDivider key={`divider-${lastArchiveEpoch}`} epoch={lastArchiveEpoch} />);
+      const arch = layout?.archives.find((a) => a.epoch === lastArchiveEpoch);
+      nodes.push(
+        <CompactionDivider
+          key={`divider-${lastArchiveEpoch}`}
+          epoch={lastArchiveEpoch}
+          retainedMinTurn={arch?.retainedMinTurn}
+          retainedMaxTurn={arch?.retainedMaxTurn}
+        />,
+      );
       lastArchiveEpoch = undefined;
     };
 

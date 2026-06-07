@@ -23,6 +23,59 @@ impl Database {
         Ok(next)
     }
 
+    /// Record pre-compaction turn numbers retained into the active working set for one epoch.
+    pub fn record_compaction_retained_turns(
+        &self,
+        session_id: &str,
+        epoch: i32,
+        retained_min_turn: i32,
+        retained_max_turn: i32,
+    ) -> Result<(), StateError> {
+        let mut meta = self
+            .get_session_metadata(session_id)?
+            .unwrap_or_else(|| serde_json::json!({}));
+        if let Some(obj) = meta.as_object_mut() {
+            let epochs = obj
+                .entry("compaction_epochs")
+                .or_insert_with(|| serde_json::json!([]));
+            if let Some(arr) = epochs.as_array_mut() {
+                arr.push(serde_json::json!({
+                    "epoch": epoch,
+                    "retained_min_turn": retained_min_turn,
+                    "retained_max_turn": retained_max_turn,
+                }));
+            }
+        }
+        self.set_session_metadata(session_id, &meta)
+    }
+
+    pub fn get_compaction_retained_turn_bounds(
+        &self,
+        session_id: &str,
+        epoch: i32,
+    ) -> Result<Option<(i32, i32)>, StateError> {
+        let Some(meta) = self.get_session_metadata(session_id)? else {
+            return Ok(None);
+        };
+        let Some(arr) = meta.get("compaction_epochs").and_then(|v| v.as_array()) else {
+            return Ok(None);
+        };
+        for entry in arr {
+            if entry.get("epoch").and_then(|v| v.as_i64()) == Some(epoch as i64) {
+                let min = entry
+                    .get("retained_min_turn")
+                    .and_then(|v| v.as_i64())
+                    .map(|n| n as i32);
+                let max = entry
+                    .get("retained_max_turn")
+                    .and_then(|v| v.as_i64())
+                    .map(|n| n as i32);
+                return Ok(min.zip(max));
+            }
+        }
+        Ok(None)
+    }
+
     pub fn require_frozen_system_metadata(&self, session_id: &str) -> Result<(), StateError> {
         let meta = self
             .get_session_metadata(session_id)?

@@ -10,6 +10,7 @@ pub const SCAFFOLD_DIRS: &[&str] = &[
     "knowledge/plot",
     "knowledge/plot/细纲",
     "knowledge/shared-systems",
+    "knowledge/meta",
     "knowledge/worlds",
     "chapters",
     "memory",

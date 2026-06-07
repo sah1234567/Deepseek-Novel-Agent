@@ -54,6 +54,14 @@
   color: var(--color-text-muted, #9aa0a6);
 }
 
+.context-refresh-audit {
+  margin-top: 0.75rem;
+  padding: 0.65rem 0.75rem;
+  border-radius: 0.35rem;
+  background: rgba(255, 200, 100, 0.08);
+  border: 1px solid rgba(255, 200, 100, 0.25);
+}
+
 .context-refresh-body {
   margin-top: 0.75rem;
   padding-top: 0.75rem;

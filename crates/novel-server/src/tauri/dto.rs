@@ -52,6 +52,10 @@ pub struct UiTurnBundle {
 pub struct ArchiveEpochBounds {
     pub epoch: i32,
     pub bounds: UiTurnBounds,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retained_min_turn: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retained_max_turn: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -272,9 +276,12 @@ pub fn build_session_transcript_layout(
     let mut archives = Vec::with_capacity(epochs.len());
     for epoch in epochs {
         if let Some(bounds) = db.get_archived_turn_bounds(session_id, epoch)? {
+            let retained = db.get_compaction_retained_turn_bounds(session_id, epoch)?;
             archives.push(ArchiveEpochBounds {
                 epoch,
                 bounds: bounds.into(),
+                retained_min_turn: retained.map(|(min, _)| min),
+                retained_max_turn: retained.map(|(_, max)| max),
             });
         }
     }
@@ -534,11 +541,16 @@ mod tests {
         )
         .unwrap();
 
+        db.record_compaction_retained_turns(&sid, 1, 46, 50)
+            .unwrap();
+
         let layout = build_session_transcript_layout(&db, &sid).unwrap();
         assert!(layout.has_context_refresh);
         assert_eq!(layout.active.min_turn, 0);
         assert_eq!(layout.active.max_turn, 2);
         assert_eq!(layout.archives.len(), 1);
         assert_eq!(layout.archives[0].bounds.min_turn, 1);
+        assert_eq!(layout.archives[0].retained_min_turn, Some(46));
+        assert_eq!(layout.archives[0].retained_max_turn, Some(50));
     }
 }

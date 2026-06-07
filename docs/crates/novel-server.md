@@ -158,7 +158,7 @@ invoke("approve_tool", { toolCallId });
 | `sub-agent-started` / `sub-agent-complete` | 子 Agent；payload 含 `forkRunId`、`agentType`、`parentToolCallId`（前端据其推断 `source`: tool \| hook） |
 | `sub-agent-stream` / `sub-agent-tool` | 子 Agent overlay 流式正文与工具 |
 | `assistant-segment-complete` | AssistantSegmentComplete（`segmentIndex`；可选 `forkRunId`） |
-| `compaction-progress` | CompactionProgress → **CompactionBanner**（ChatPanel viewport 顶部；`action` + `attempt` / `tokensBefore`/`tokensAfter` / `reason`） |
+| `compaction-progress` | CompactionProgress → **CompactionBanner**（ChatPanel viewport 顶部；`action` + `attempt` / `tokensBefore`/`tokensAfter` / `reason`；`done` 另含 `epoch` + `retainedMinTurn`/`retainedMaxTurn` 压缩前保留的 turn 范围） |
 
 子 Agent 事件更新 `forkRuns` 并驱动 **SubAgentOverlay** 实时 transcript；`AppStatus.hook_running` 反映 `drain_in_progress`，**StatusBar 无 sub-agent 运行 chip**。tool 路径卡片在 `SegmentGroup` 内（`ForkSubAgent` → `SubAgentForkCard`）；hook 路径经 `HookForkCards` 列在滚动区底部。`forkRunId` 非空时 `assistant-segment-complete` finalize overlay，否则 finalize 主聊天。前端按 **SegmentGroup**（Agent 在上、Tool 在下）渲染 transcript；事件顺序与 DB `ORDER BY sequence` 一致，异步 tool result 写入 `openSegment.tools` 而非顶层 messages。
 

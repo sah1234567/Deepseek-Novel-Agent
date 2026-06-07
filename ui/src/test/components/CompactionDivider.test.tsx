@@ -7,4 +7,9 @@ describe("CompactionDivider", () => {
     render(<CompactionDivider epoch={2} />);
     expect(screen.getByText(/第 2 次/)).toBeInTheDocument();
   });
+
+  it("shows retained turn range when provided", () => {
+    render(<CompactionDivider epoch={1} retainedMinTurn={46} retainedMaxTurn={50} />);
+    expect(screen.getByText(/保留 turn 46–50/)).toBeInTheDocument();
+  });
 });

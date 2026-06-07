@@ -36,7 +36,7 @@ novel_agent/
 └── .novel-agent/            # 全局 API 配置等
 ```
 
-作品数据在 `works/` 下，与 Agent 代码分离。切换作品时前端同步切换会话库与文件树。审计日志在 `{作品}/.novel/logs/`。
+作品数据在 `works/` 下，与 Agent 代码分离。切换作品时前端同步切换会话库与文件树。跨会话**审计台账**在 `{作品}/knowledge/meta/audit-status.md`（Agent 可读）；引擎调试 JSONL 在 `{作品}/.novel/logs/`（非 Agent 知识层）。
 
 ### 清理作品会话库
 

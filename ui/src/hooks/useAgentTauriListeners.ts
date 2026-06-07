@@ -148,12 +148,14 @@ export function useAgentTauriListeners(deps: AgentListenerDeps) {
           }
           if (p.phase === "start") return;
           if (p.turnHitTokens !== undefined || p.cacheHitTokens !== undefined) {
+            // Guard: keep FSM alive when tools are pending approval.
+            // TURN_COMPLETE would set phase=idle, discarding subsequent TOOL events.
+            if (hasPendingApproval(transcriptMachineRef.current)) return;
             dispatchMain({ type: "TURN_COMPLETE" });
             setIsStreaming(false);
             setHasInterruptibleToolInProgress(false);
             void (async () => {
               if (pendingQuestionRef.current) return;
-              if (hasPendingApproval(transcriptMachineRef.current)) return;
               try {
                 const s = await invoke<AppStatusSnapshot>(IPC_COMMANDS.getAppStatus);
                 if (s.pendingUserQuestion) return;

@@ -68,6 +68,7 @@ pub fn default_registry() -> ToolRegistry {
     reg.register(Box::new(novel::ForkSubAgentTool));
     reg.register(Box::new(novel::ImpactAnalysisTool));
     reg.register(Box::new(novel::KnowledgeDeriveTool));
+    reg.register(Box::new(novel::AuditStatusQueryTool));
     reg.register(Box::new(novel::TrackingQueryTool));
     reg.register(Box::new(novel::RelationQueryTool));
     reg

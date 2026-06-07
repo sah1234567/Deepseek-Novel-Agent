@@ -197,6 +197,36 @@ impl AgentEngine {
             compaction_threshold,
         })?;
 
+        let retained_bounds = {
+            use crate::message::turn_rows::retained_turn_bounds_from_index;
+            use novel_compaction::user_turn_ranges;
+
+            let kept_turns = if final_msgs.len() > 2 {
+                user_turn_ranges(&final_msgs[2..]).len()
+            } else {
+                0
+            };
+            if kept_turns == 0 {
+                None
+            } else {
+                let ranges = user_turn_ranges(&compacted);
+                let start_index = if ranges.len() >= kept_turns {
+                    ranges[ranges.len() - kept_turns].0
+                } else {
+                    partition.retain_from
+                };
+                retained_turn_bounds_from_index(&self.messages, start_index)
+            }
+        };
+        if let Some((min, max)) = retained_bounds {
+            let _ = self.shared.session.db.record_compaction_retained_turns(
+                &self.shared.session.id,
+                epoch,
+                min,
+                max,
+            );
+        }
+
         self.invoked_skill_ids = skill_ids.clone();
         let _ = self
             .shared
@@ -242,6 +272,9 @@ impl AgentEngine {
             CompactionAction::Done {
                 tokens_before,
                 tokens_after: self.last_context_tokens,
+                epoch,
+                retained_min_turn: retained_bounds.map(|(min, _)| min),
+                retained_max_turn: retained_bounds.map(|(_, max)| max),
             },
         );
 

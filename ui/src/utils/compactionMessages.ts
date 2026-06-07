@@ -10,6 +10,9 @@ export interface CompactionProgressPayload {
   attempt?: number;
   tokensBefore?: number;
   tokensAfter?: number;
+  epoch?: number;
+  retainedMinTurn?: number;
+  retainedMaxTurn?: number;
   reason?: string;
 }
 
@@ -21,10 +24,19 @@ export function compactionProgressLabel(payload: CompactionProgressPayload): str
       return "正在生成会话摘要…";
     case "rebuilding-session":
       return "正在重建上下文…";
-    case "done":
-      return payload.tokensBefore !== undefined && payload.tokensAfter !== undefined
-        ? `上下文已压缩（${payload.tokensBefore.toLocaleString()} → ${payload.tokensAfter.toLocaleString()} tokens）`
-        : "上下文已压缩";
+    case "done": {
+      const retained =
+        payload.retainedMinTurn !== undefined && payload.retainedMaxTurn !== undefined
+          ? payload.retainedMinTurn === payload.retainedMaxTurn
+            ? `，保留 turn ${payload.retainedMinTurn}`
+            : `，保留 turn ${payload.retainedMinTurn}–${payload.retainedMaxTurn}`
+          : "";
+      const tokens =
+        payload.tokensBefore !== undefined && payload.tokensAfter !== undefined
+          ? `（${payload.tokensBefore.toLocaleString()} → ${payload.tokensAfter.toLocaleString()} tokens）`
+          : "";
+      return `上下文已压缩${tokens}${retained}`;
+    }
     case "failed":
       return payload.reason ? `压缩失败：${payload.reason}` : "压缩失败";
     default:

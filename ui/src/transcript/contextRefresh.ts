@@ -1,6 +1,7 @@
 import type { UIMessage } from "../types/messages";
 
 export const CONTEXT_REFRESH_PREFIX = "[上下文刷新]";
+const AUDIT_STATUS_MARKER = "## 审计状态";
 
 export function isContextRefreshUser(user: UIMessage): boolean {
   if (user.messageKind === "contextRefresh") return true;
@@ -8,7 +9,11 @@ export function isContextRefreshUser(user: UIMessage): boolean {
   return text.startsWith(CONTEXT_REFRESH_PREFIX);
 }
 
-export function parseContextRefreshSections(text: string): { skill: string; summary: string } {
+export function parseContextRefreshSections(text: string): {
+  skill: string;
+  summary: string;
+  auditStatus: string;
+} {
   const body = text.startsWith(CONTEXT_REFRESH_PREFIX)
     ? text.slice(CONTEXT_REFRESH_PREFIX.length).trimStart()
     : text;
@@ -28,7 +33,26 @@ export function parseContextRefreshSections(text: string): { skill: string; summ
   } else {
     summary = body.trim();
   }
-  return { skill, summary };
+  const { audit, restSummary } = extractAuditStatusSection(summary);
+  return { skill, summary: restSummary, auditStatus: audit };
+}
+
+/** Pull `## 审计状态` block out of compaction summary markdown. */
+export function extractAuditStatusSection(summary: string): {
+  audit: string;
+  restSummary: string;
+} {
+  const idx = summary.indexOf(AUDIT_STATUS_MARKER);
+  if (idx < 0) {
+    return { audit: "", restSummary: summary };
+  }
+  const afterMarker = summary.slice(idx + AUDIT_STATUS_MARKER.length);
+  const nextH2 = afterMarker.search(/\n## /);
+  const audit = (nextH2 >= 0 ? afterMarker.slice(0, nextH2) : afterMarker).trim();
+  const before = summary.slice(0, idx).trimEnd();
+  const after = nextH2 >= 0 ? afterMarker.slice(nextH2).trimStart() : "";
+  const restSummary = [before, after].filter(Boolean).join("\n\n");
+  return { audit, restSummary };
 }
 
 /** Skill ids from `### {id}` headings in the activated-skill block (omits reference paths). */
@@ -54,4 +78,11 @@ export function summaryPreview(summary: string, maxLen = 96): string {
   if (!flat) return "";
   if (flat.length <= maxLen) return flat;
   return `${flat.slice(0, maxLen)}…`;
+}
+
+/** Collapsed preview: prefer audit status line when present. */
+export function contextRefreshPreview(auditStatus: string, summary: string, maxLen = 96): string {
+  const auditLine = summaryPreview(auditStatus, maxLen);
+  if (auditLine) return `审计：${auditLine}`;
+  return summaryPreview(summary, maxLen);
 }

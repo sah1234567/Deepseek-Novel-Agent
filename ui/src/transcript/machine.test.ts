@@ -205,6 +205,31 @@ describe("dispatchTranscriptEvent", () => {
     expect(JSON.stringify(m)).toBe(before);
   });
 
+  it("T13: mid-stream TOOL survives when no idle reset (compaction-mid-turn guard)", () => {
+    // Simulates the fixed path: compaction fires mid-stream, but the guard
+    // (isStreamingRef / turnInProgressRef) skips RESET_TRANSCRIPT. FSM stays
+    // in segmentStreaming and continues processing events.
+    let m = createInitialMachine();
+    m = dispatchTranscriptEvent(m, { type: "BEGIN_TURN", user: userMsg("u1") });
+    m = dispatchTranscriptEvent(m, {
+      type: "TOOL", phase: "start", toolCallId: "t1", toolName: "Read",
+    });
+    expect(m.phase).toBe("segmentStreaming");
+    // Compaction banner fires here — but guard skips RESET_TRANSCRIPT.
+    // Subsequent tool events must still be processed:
+    m = dispatchTranscriptEvent(m, {
+      type: "TOOL", phase: "result", toolCallId: "t1", content: "done",
+    });
+    expect(m.phase).not.toBe("idle");
+    expect(m.phase).toBe("segmentStreaming");
+    // Tool result applied in openSegment (not yet committed):
+    const tool = m.context.openSegment?.tools.find(
+      (t: { id: string }) => t.id === "t1",
+    );
+    expect(tool?.status).toBe("done");
+    expect(tool?.result).toBe("done");
+  });
+
   it("pausedForQuestion blocks STREAM_CHUNK", () => {
     let m = createInitialMachine();
     m = dispatchTranscriptEvent(m, { type: "BEGIN_TURN", user: userMsg("u1") });

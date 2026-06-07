@@ -1,17 +1,17 @@
 import ReactMarkdown from "react-markdown";
 import type { UIMessage } from "../../types/messages";
 import {
+  contextRefreshPreview,
   extractActivatedSkillLabels,
   parseContextRefreshSections,
-  summaryPreview,
 } from "../../transcript/contextRefresh";
 import "./ContextRefreshBubble.css";
 
 export function ContextRefreshBubble({ user }: { user: UIMessage }) {
   const text = user.contentBlocks.find((b) => b.kind === "text")?.text ?? "";
-  const { skill, summary } = parseContextRefreshSections(text);
+  const { skill, summary, auditStatus } = parseContextRefreshSections(text);
   const skillLabels = extractActivatedSkillLabels(skill);
-  const preview = summaryPreview(summary);
+  const preview = contextRefreshPreview(auditStatus, summary);
 
   return (
     <article className="message message-context-refresh">
@@ -25,6 +25,12 @@ export function ContextRefreshBubble({ user }: { user: UIMessage }) {
             </span>
           )}
         </summary>
+        {auditStatus && (
+          <div className="context-refresh-audit">
+            <h3 className="context-refresh-body-title">审计状态</h3>
+            <ReactMarkdown>{auditStatus}</ReactMarkdown>
+          </div>
+        )}
         {summary && (
           <div className="context-refresh-body">
             <h3 className="context-refresh-body-title">会话历史摘要</h3>

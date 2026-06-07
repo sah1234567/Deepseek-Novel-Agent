@@ -1,6 +1,7 @@
 #![deny(clippy::unwrap_used)]
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
+mod audit_status;
 mod causality;
 mod character;
 mod derive;
@@ -12,6 +13,11 @@ mod project_tree;
 mod scaffold;
 mod scaffold_templates;
 
+pub use audit_status::{
+    ensure_audit_status, format_progress_hint, list_pending, mark_audited, parse_chapter_numbers,
+    query_chapter, query_summary, AuditChapterRow, AuditKind, AuditStatusSummary, PendingFilter,
+    AUDIT_STATUS_PATH,
+};
 pub use causality::{parse_causality_markdown, CausalityGraph, CausalityNode};
 pub use character::{CharacterCategory, CharacterFrontmatter, CharacterStatus};
 pub use derive::{

@@ -47,8 +47,9 @@ bash scripts/ci-security-audit.sh
 | `ci-clippy.sh` | clippy（deny warnings + unwrap_used） |
 | `ci-nextest-env.sh` | 统一 `NEXTEST_TEST_THREADS` |
 | `ci-rust-test.sh` | nextest（含 `concurrent_writes` 压测） |
-| `ci-crap.sh` | **推荐**：同一 shell 内先 `llvm-cov nextest` 生成 `lcov.info`，再 `cargo crap --fail-above`（重构后勿单独跑 crap，须重生 lcov） |
-| （本地 CRAP 手动） | Git Bash：`bash scripts/ci-crap.sh`；或 `NEXTEST_PROFILE=ci cargo llvm-cov nextest --workspace --all-features --lcov --output-path lcov.info` 后 `cargo crap --lcov lcov.info --workspace --min 30`（勿用 `cargo test`） |
+| `ci-crap.sh` / `ci-crap.ps1` | **仅** `cargo crap --fail-above`（读已有 `lcov.info`） |
+| `ci-lcov.sh` / `ci-lcov.ps1` | 生成 `lcov.info`（`llvm-cov nextest`；重构后须先跑再 `ci-crap`） |
+| （本地 CRAP 全流程） | `bash scripts/ci-lcov.sh && bash scripts/ci-crap.sh`；Windows：`.\scripts\ci-lcov.ps1; .\scripts\ci-crap.ps1` |
 | `ci-tauri-check.sh` | `cargo check` novel-agent |
 | `ci-tauri.sh` | check + `cargo build` novel-agent |
 | `ci-linux-tauri-deps.sh` | GHA Ubuntu：WebKit/GTK apt |

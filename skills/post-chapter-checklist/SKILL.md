@@ -24,6 +24,7 @@ allowed-tools: Read, Edit, Glob, Grep, CharacterSearch, Tail, TodoWrite, ForkSub
 | 执行偏差处理 | 同上 | 如有偏差 →「修订记录」有对应行 + 相关追踪文件已修正 |
 | 大纲章节索引 | Read 大纲对应卷索引段 `\| N \|` | 本章行存在且「核心事件」与正文一致 |
 | INDEX.md 进度 | Read `knowledge/INDEX.md` | 进度段已更新到本章 |
+| 审计台账 | Read `knowledge/meta/audit-status.md` 或 AuditStatusQuery | 本章 KA/CCA 已标已通过（修复后） |
 | 角色出场 | `CharacterRotate` | 是否有重要角色连续 ≥5 章未出场 |
 
 遗漏项 → Edit 补充。

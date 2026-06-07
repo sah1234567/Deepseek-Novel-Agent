@@ -89,7 +89,7 @@ allowed-tools: Read, Write, Edit, Glob, Grep, Bash, WebSearch, InvokeSkill, AskU
 ForkSubAgent(agent_type="PlanAuditor", task="审计细纲 chapter-NNN-细纲.md 的计划质量")
 ```
 
-按报告修改细纲后，该章细纲才算完成。PlanAuditor 通过的细纲才可用于正文写作。
+按报告修改细纲后，更新审计台账（细纲PA=已通过），该章细纲才算完成。PlanAuditor 通过的细纲才可用于正文写作。
 
 **多世界题材：** 在 knowledge/worlds/ 下为每个持久世界创建 INDEX.md
 

@@ -25,12 +25,14 @@
 
 ### 1.2 ToolRegistry
 
-`default_registry()` 注册 **23** 个工具（无参数；`project_root` 由 `ToolContext` 提供）：
+`default_registry()` 注册 **24** 个工具（无参数；`project_root` 由 `ToolContext` 提供）：
 
 **11 个 builtin：** Read, Write, Edit, **Tail**, Grep, Glob, Bash, WebSearch, InvokeSkill, TodoWrite, AskUserQuestion
 
-**12 个 Novel 专属：**
-CharacterSearch, PlotGraph, PlotGrid, ForeshadowTracker, Stats, Corkboard, CharacterRotate, **ForkSubAgent**, ImpactAnalysis, KnowledgeDerive, TrackingQuery, RelationQuery
+**13 个 Novel 专属：**
+CharacterSearch, PlotGraph, PlotGrid, ForeshadowTracker, Stats, Corkboard, CharacterRotate, **ForkSubAgent**, ImpactAnalysis, KnowledgeDerive, **AuditStatusQuery**, TrackingQuery, RelationQuery
+
+**AuditStatusQuery：** 只读查询 `knowledge/meta/audit-status.md`。`operation`: `summary` | `chapter` | `pending`；`pending` 需 `audit_type`: `pa` | `ka` | `cca` | `any`（snake_case）。
 
 （对话/节奏/情感分析由 **Subagent** ChapterCraftAnalyzer 承担，非独立主会话工具。）
 
