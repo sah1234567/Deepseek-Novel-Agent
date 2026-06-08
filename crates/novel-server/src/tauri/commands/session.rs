@@ -1,12 +1,13 @@
 use crate::tauri::dto::{
-    self, build_session_transcript_layout, fork_messages_to_ui, stored_messages_to_turn_bundles,
-    SessionTranscriptLayout, UiMessage, UiTurnBundle,
+    build_session_transcript_layout, fork_messages_to_ui, SessionTranscriptLayout, UiMessage,
+    UiTurnBundle,
 };
 use crate::tauri::engine_loop::EngineCommand;
 use crate::tauri::session_api::{self, TurnMessageSource};
 use crate::tauri::state::CommandContext;
 
 use super::engine_ipc::{emit_session_resumed, send_engine_reply};
+use super::fork::clear_fork_stream_subscriptions;
 use super::open_db;
 use super::settings::get_app_status;
 
@@ -19,12 +20,14 @@ pub(crate) async fn switch_project_and_create_session(
         reply,
     })
     .await?;
+    clear_fork_stream_subscriptions(&ctx.fork_stream_subs);
     emit_session_resumed(ctx, &sid);
     Ok(sid)
 }
 
 pub async fn create_session(ctx: &CommandContext) -> Result<String, String> {
     let sid = send_engine_reply(ctx, |reply| EngineCommand::CreateSession { reply }).await?;
+    clear_fork_stream_subscriptions(&ctx.fork_stream_subs);
     emit_session_resumed(ctx, &sid);
     Ok(sid)
 }
@@ -35,6 +38,7 @@ pub async fn resume_session(ctx: &CommandContext, session_id: String) -> Result<
         reply,
     })
     .await?;
+    clear_fork_stream_subscriptions(&ctx.fork_stream_subs);
     emit_session_resumed(ctx, &sid);
     Ok(sid)
 }
@@ -74,14 +78,9 @@ async fn fetch_turn_bundles(
     to_turn: i32,
     source: TurnMessageSource,
 ) -> Result<Vec<UiTurnBundle>, String> {
-    dto::validate_turn_range(from_turn, to_turn)?;
     let sid = resolve_session_id(ctx, session_id).await?;
     let db = open_db(ctx).await?;
-    let stored = session_api::load_turn_range_messages(&db, &sid, from_turn, to_turn, source)
-        .map_err(|e| e.to_string())?;
-    let bundles = stored_messages_to_turn_bundles(&stored);
-    session_api::trace_turn_bundles_loaded(&sid, source, from_turn, to_turn, bundles.len());
-    Ok(bundles)
+    session_api::bundles_for_turn_range(&db, &sid, from_turn, to_turn, source)
 }
 
 pub async fn get_session_message_turns(

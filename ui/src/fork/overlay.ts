@@ -1,5 +1,5 @@
 import type { ContentBlock, ForkRunState, UIMessage } from "../types/messages";
-import { emptyForkMachine, forkRunAcceptsDbSnapshot, hydrateForkMachine } from "./transcript";
+import { emptyForkMachine, hydrateForkMachine } from "./transcript";
 
 /** Ensure `forkRuns` contains a shell entry when the overlay opens. */
 export function mergeForkRunOnOpen(
@@ -21,14 +21,11 @@ export function mergeForkRunOnOpen(
   return next;
 }
 
-/** Apply DB snapshot only when the run is not live-streaming. */
+/** Apply persisted fork transcript (including while run is still `running`). */
 export function applyForkDbSnapshot(
   run: ForkRunState,
   dbFlatMessages: UIMessage[],
 ): ForkRunState {
-  if (!forkRunAcceptsDbSnapshot(run.status)) {
-    return run;
-  }
   if (dbFlatMessages.length === 0) {
     return run;
   }

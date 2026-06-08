@@ -25,10 +25,14 @@ impl ToolResultMiddleware for WriteEditFactMiddleware {
             return Vec::new();
         };
         let norm = normalize_rel_path(&path);
-        vec![
-            format!("[fact] touched: {norm}"),
-            "[fact] context: session cache updated; conversation still has pre-edit text until you Read/Tail the changed range once.".into(),
-        ]
+        let context_line = if ctx.tool_name == "Edit" {
+            "[fact] context: read cache patched for this path; conversation may still show pre-edit text — \
+             next Edit on this file: build old_string from updated on-disk text (Grep if needed); \
+             do not re-Read same offset/limit (dedup stub); use different offset or rely on cache for same-slice edits.".into()
+        } else {
+            "[fact] context: session cache holds full file; conversation may still show pre-write text — Tail/Read to confirm after large overwrites.".into()
+        };
+        vec![format!("[fact] touched: {norm}"), context_line]
     }
 }
 
@@ -99,6 +103,18 @@ mod tests {
         let lines = append_middleware_lines(&ctx);
         assert!(lines.iter().any(|l| l.contains("[read-dedup]")));
         assert!(lines.iter().any(|l| l.contains("offset:5 limit:8")));
+    }
+
+    #[test]
+    fn edit_fact_mentions_patched_cache() {
+        let input = json!({"file_path": "chapters/ch01.md"});
+        let ctx = MiddlewareCtx {
+            tool_name: "Edit",
+            tool_input: Some(&input),
+            content: "Edited file",
+        };
+        let lines = append_middleware_lines(&ctx);
+        assert!(lines.iter().any(|l| l.contains("read cache patched")));
     }
 
     #[test]

@@ -68,7 +68,7 @@ Claude Code 文件夹格式：`skills/<id>/SKILL.md` + 可选 `references/`。
 | StatusBar 作品 | `list_works` 下拉 + 新建作品；切换作品会 **新建 session**（不自动恢复上次会话） |
 | StatusBar 会话 | `list_sessions` 下拉 + `resume_session` 切换；`+` → `create_session`；标签显示 **对话轮数** + **最后 LLM 活跃时间**；流式中（`isStreaming`）禁用切换 |
 | StatusBar Todo | **按钮常驻**（StatusBar 最左）；`TodoWrite` → DB → `get_app_status.todos`；下拉按 **进行中 / 未进行 / 已完成** 分组；空列表显示「暂无待办事项」；`update_session_todo` 点击循环状态；未完成数 **0→>0** 时自动展开；**工具 result 后即时 refresh** |
-| StatusBar Token | 会话累计三分类 + 当前上下文；**30s** 轮询 `get_app_status` + `turn-complete` / `permission-mode-changed` / `tool-call-request`(result) 全量 refresh；会话切换由 invoke 调用方 refresh；`session-tokens-updated` 局部 patch token 字段 |
+| StatusBar Token | 会话累计三分类 + 当前上下文；**`session-tokens-updated` 事件驱动**（主/SubAgent 每次 LLM 调用后推送）；初始与切 session 经 `get_app_status`；30s 轮询与 turn/tool refresh 兜底非 token 字段 |
 | 设置 · 会话列表 | 同 `list_sessions`；元数据含 **对话 N 轮 · API M 次** |
 | 权限 / 模型 | ChatPanel 底栏：normal / plan / auto / unattended；flash/pro；**turn 进行中禁用** |
 | **聊天区布局** | Agent/用户/Subagent 全宽 `message`；问答全宽卡片；普通工具 `message-tool` + `ToolUseCard`；`word-break` 边界换行 |
@@ -102,8 +102,8 @@ start → input_delta → input_complete → (pending | running) → progress/re
   result 阶段仅含 toolCallId + content（无 toolName）→ useAppStatus 在 result 时 refresh（含 todos）
 assistant-segment-complete → 主聊天或 fork overlay 分段 finalize
 ask-user-question → questions[] 含 allowMultiple / allowCustom（camelCase）
-turn-complete → useAppStatus 全量 refresh；useAgent 若 pending 工具/问答则跳过 hydrate
-session-tokens-updated → useAppStatus 局部 patch token（非全量 get_app_status）
+turn-complete → onTurnComplete 单次 get_app_status（turn/todos 等非 token 字段）；useAgent 若 pending 工具/问答则跳过 hydrate
+session-tokens-updated → useAppStatus 局部 patch token 四字段（主/SubAgent LLM 后推送；非全量 get_app_status）
 session-resumed → useAgent 清 streaming；status.sessionId 更新 / compaction done → useTranscriptLoader.resetAndBootstrap；turn-complete → reloadActiveTail（get_session_message_turns 尾轮）；懒加载按时间轴相邻 idle 窗口预取（`turnLoadPlan`），跨 compact 并行分段 IPC（archive / active）；`planMemoryReconcile`（TAIL 6 / VIEW 6 / MAX 18，视口感知溢出淘汰）；贴底欠填 `TAIL_CONTENT_UNDERFLOW_PX` 向上预取；贴底区（`BOTTOM_ANCHOR_THRESHOLD_PX`）稳定后防抖收缩至 TAIL 6 轮；`ScrollViewport` 近底区内容增长时自动置底
 ```
 

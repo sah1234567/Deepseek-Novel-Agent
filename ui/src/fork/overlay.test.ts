@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ForkRunState } from "../types/messages";
 import { applyForkDbSnapshot } from "./overlay";
-import { forkRunAcceptsDbSnapshot } from "./transcript";
 import { emptyForkMachine } from "./transcript";
 
 function sampleRun(status: ForkRunState["status"]): ForkRunState {
@@ -16,12 +15,7 @@ function sampleRun(status: ForkRunState["status"]): ForkRunState {
 }
 
 describe("fork/overlay", () => {
-  it("forkRunAcceptsDbSnapshot is false while running", () => {
-    expect(forkRunAcceptsDbSnapshot("running")).toBe(false);
-    expect(forkRunAcceptsDbSnapshot("complete")).toBe(true);
-  });
-
-  it("applyForkDbSnapshot skips DB while running", () => {
+  it("applyForkDbSnapshot hydrates while running", () => {
     const run = sampleRun("running");
     const next = applyForkDbSnapshot(run, [
       {
@@ -30,7 +24,8 @@ describe("fork/overlay", () => {
         contentBlocks: [{ blockIndex: 0, kind: "text", text: "db" }],
       },
     ]);
-    expect(next.machine).toBe(run.machine);
+    expect(next.machine).not.toBe(run.machine);
+    expect(next.machine.phase).not.toBe("idle");
   });
 
   it("applyForkDbSnapshot hydrates when complete", () => {

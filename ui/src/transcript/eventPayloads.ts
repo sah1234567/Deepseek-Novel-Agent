@@ -29,8 +29,3 @@ export interface TurnCompletePayload {
   message?: string;
   wasInterrupted?: boolean;
 }
-
-export interface AppStatusSnapshot {
-  hasInterruptibleToolInProgress?: boolean;
-  pendingUserQuestion?: boolean;
-}

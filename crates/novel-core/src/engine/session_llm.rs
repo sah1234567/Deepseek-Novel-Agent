@@ -65,7 +65,10 @@ pub fn build_chat_client(
 }
 
 /// Single path for session token DB + audit + `SessionTokensUpdated` after LLM usage.
-/// Pass `update_context_snapshot: false` for fork subagent billing so StatusBar keeps the parent snapshot.
+///
+/// Always emits `SessionTokensUpdated` on successful accumulate (main and subagent).
+/// Pass `update_context_snapshot: false` for fork subagent billing: billing counters still
+/// accumulate and the event is sent, but DB `context_tokens` keeps the parent snapshot.
 pub fn apply_session_usage(
     shared: &EngineShared,
     usage: &TokenUsage,
@@ -94,12 +97,13 @@ pub fn apply_session_usage(
         cache_miss_tokens: usage.cache_miss_tokens,
         completion_tokens: usage.completion_tokens,
     });
-    emit_session_tokens_updated(shared, event_tx);
+    emit_session_tokens_updated(shared, event_tx, update_context_snapshot);
 }
 
 fn emit_session_tokens_updated(
     shared: &EngineShared,
     event_tx: Option<&mpsc::UnboundedSender<Event>>,
+    context_snapshot_updated: bool,
 ) {
     let Some(tx) = event_tx else {
         return;
@@ -107,10 +111,93 @@ fn emit_session_tokens_updated(
     let Ok(Some(s)) = shared.session.db.get_session(&shared.session.id) else {
         return;
     };
+    tracing::debug!(
+        session_id = %shared.session.id,
+        cache_hit = s.cache_hit_tokens,
+        cache_miss = s.cache_miss_tokens,
+        completion = s.completion_tokens,
+        context = s.context_tokens,
+        context_snapshot_updated,
+        "session_tokens_updated_emit"
+    );
     let _ = tx.send(Event::SessionTokensUpdated {
         cache_hit_tokens: s.cache_hit_tokens,
         cache_miss_tokens: s.cache_miss_tokens,
         completion_tokens: s.completion_tokens,
         context_tokens: s.context_tokens,
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::types::{AgentEngine, EngineConfig};
+    use tempfile::TempDir;
+
+    fn test_config(tmp: &TempDir) -> EngineConfig {
+        std::fs::create_dir_all(tmp.path().join("skills")).unwrap();
+        EngineConfig {
+            project_root: tmp.path().to_path_buf(),
+            settings_path: tmp.path().join("settings.json"),
+            db_path: tmp.path().join("state.db"),
+            skills_dir: tmp.path().join("skills"),
+            global_config_path: tmp.path().join(".novel-agent/api_config.json"),
+        }
+    }
+
+    #[test]
+    fn fork_usage_emits_billing_without_context_snapshot_change() {
+        let tmp = TempDir::new().unwrap();
+        let engine = AgentEngine::new(test_config(&tmp)).unwrap();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let usage = TokenUsage {
+            cache_hit_tokens: 1,
+            cache_miss_tokens: 2,
+            completion_tokens: 3,
+            reasoning_tokens: 0,
+        };
+        let snap = read_session_llm(&engine.shared);
+        let session_id = engine.shared.session.id.clone();
+
+        apply_session_usage(&engine.shared, &usage, &snap, Some(&tx), true);
+        let main_evt = rx.try_recv().expect("main agent emit");
+        assert!(matches!(
+            main_evt,
+            Event::SessionTokensUpdated {
+                cache_hit_tokens: 1,
+                cache_miss_tokens: 2,
+                completion_tokens: 3,
+                context_tokens: 6,
+            }
+        ));
+        let after_main = engine
+            .shared
+            .session
+            .db
+            .get_session(&session_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(after_main.context_tokens, 6);
+
+        apply_session_usage(&engine.shared, &usage, &snap, Some(&tx), false);
+        let fork_evt = rx.try_recv().expect("subagent emit");
+        assert!(matches!(
+            fork_evt,
+            Event::SessionTokensUpdated {
+                cache_hit_tokens: 2,
+                cache_miss_tokens: 4,
+                completion_tokens: 6,
+                context_tokens: 6,
+            }
+        ));
+        let after_fork = engine
+            .shared
+            .session
+            .db
+            .get_session(&session_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(after_fork.cache_hit_tokens, 2);
+        assert_eq!(after_fork.context_tokens, 6);
+    }
 }

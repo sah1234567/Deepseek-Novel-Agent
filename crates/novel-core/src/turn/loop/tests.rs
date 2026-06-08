@@ -648,6 +648,9 @@ async fn compact_and_sync_clears_read_file_cache() {
             limit: None,
             total_lines: 1,
             source: ReadCacheSource::Read,
+            transcript_committed: false,
+            committed_offset: None,
+            committed_limit: None,
         },
     );
     assert_eq!(engine.shared.read_file_cache.len(), 1);
@@ -675,11 +678,214 @@ async fn compact_and_sync_skipped_when_under_threshold_keeps_read_cache() {
             limit: None,
             total_lines: 1,
             source: ReadCacheSource::Read,
+            transcript_committed: false,
+            committed_offset: None,
+            committed_limit: None,
         },
     );
 
     engine.compact_and_sync(None).await.unwrap();
     assert_eq!(engine.shared.read_file_cache.len(), 1);
+}
+
+mod compaction_tokens {
+    use super::test_config;
+    use crate::engine::session_llm::{apply_session_usage, read_session_llm};
+    use crate::{AgentEngine, ChatMessage, EngineConfig, Event};
+    use novel_config::{save_agent_api_config, AgentApiConfig};
+    use novel_deepseek::{LlmCompletion, TokenUsage};
+    use tempfile::TempDir;
+    use tokio::sync::mpsc;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn test_config_with_api(tmp: &TempDir, api_config_path: std::path::PathBuf) -> EngineConfig {
+        EngineConfig {
+            global_config_path: api_config_path,
+            ..test_config(tmp)
+        }
+    }
+
+    fn push_user_assistant_pairs(engine: &mut AgentEngine, pairs: usize) {
+        for i in 0..pairs {
+            engine.messages.push(ChatMessage {
+                role: "user".into(),
+                content: format!("user turn {i}"),
+                tool_call_id: None,
+                tool_calls: None,
+                reasoning_content: None,
+            });
+            engine.messages.push(ChatMessage {
+                role: "assistant".into(),
+                content: format!("assistant reply {i}"),
+                tool_call_id: None,
+                tool_calls: None,
+                reasoning_content: None,
+            });
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn compaction_summary_api_bills_without_context_snapshot_change() {
+        let _offline = crate::test_env::StripDeepseekApiKey::new();
+        std::env::set_var("DEEPSEEK_API_KEY", "test-key");
+        let server = MockServer::start().await;
+        std::env::set_var("DEEPSEEK_API_BASE", server.uri());
+
+        let sse = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"session summary\"},\"finish_reason\":null}],",
+            "\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":10,",
+            "\"prompt_tokens_details\":{\"cached_tokens\":30}}}\n\n",
+            "data: [DONE]\n\n"
+        );
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(sse),
+            )
+            .mount(&server)
+            .await;
+
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("skills")).unwrap();
+        let api_path = tmp.path().join(".novel-agent/api_config.json");
+        std::fs::create_dir_all(api_path.parent().unwrap()).unwrap();
+        save_agent_api_config(
+            &api_path,
+            &AgentApiConfig {
+                api_key: "test-key".into(),
+                api_base: server.uri(),
+            },
+        )
+        .unwrap();
+
+        let mut engine = AgentEngine::new(test_config_with_api(&tmp, api_path)).unwrap();
+        push_user_assistant_pairs(&mut engine, 6);
+        engine.last_context_tokens = 850_000;
+        engine.init_llm();
+        assert!(engine.llm.is_some());
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let snap = read_session_llm(&engine.shared);
+        let session_id = engine.shared.session.id.clone();
+        apply_session_usage(
+            &engine.shared,
+            &TokenUsage {
+                cache_hit_tokens: 1,
+                cache_miss_tokens: 2,
+                completion_tokens: 3,
+                reasoning_tokens: 0,
+            },
+            &snap,
+            Some(&tx),
+            true,
+        );
+        let _ = rx.try_recv().expect("pre-compaction emit");
+        let before = engine
+            .shared
+            .session
+            .db
+            .get_session(&session_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(before.context_tokens, 6);
+
+        engine.compact_and_sync(Some(&tx)).await.unwrap();
+
+        let after = engine
+            .shared
+            .session
+            .db
+            .get_session(&session_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.cache_hit_tokens, 1 + 30);
+        assert_eq!(after.cache_miss_tokens, 2 + 70);
+        assert_eq!(after.completion_tokens, 3 + 10);
+        assert_eq!(after.context_tokens, 6);
+
+        let summary_emit = std::iter::from_fn(|| rx.try_recv().ok()).find(|evt| {
+            matches!(
+                evt,
+                Event::SessionTokensUpdated {
+                    cache_hit_tokens: 31,
+                    cache_miss_tokens: 72,
+                    completion_tokens: 13,
+                    context_tokens: 6,
+                }
+            )
+        });
+        assert!(
+            summary_emit.is_some(),
+            "expected SessionTokensUpdated after summary API billing"
+        );
+        assert_eq!(engine.last_context_tokens, 0);
+
+        std::env::remove_var("DEEPSEEK_API_BASE");
+    }
+
+    #[tokio::test]
+    async fn post_compaction_main_api_updates_context_and_emits() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("skills")).unwrap();
+        let mut engine = AgentEngine::new(test_config(&tmp)).unwrap();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+
+        let snap = read_session_llm(&engine.shared);
+        apply_session_usage(
+            &engine.shared,
+            &TokenUsage {
+                cache_hit_tokens: 100,
+                cache_miss_tokens: 200,
+                completion_tokens: 50,
+                reasoning_tokens: 0,
+            },
+            &snap,
+            Some(&tx),
+            true,
+        );
+        let _ = rx.try_recv().expect("pre-compaction emit");
+
+        engine.last_context_tokens = 0;
+
+        let completion = LlmCompletion {
+            content: Some("after compaction".into()),
+            usage: Some(TokenUsage {
+                cache_hit_tokens: 10,
+                cache_miss_tokens: 20,
+                completion_tokens: 5,
+                reasoning_tokens: 0,
+            }),
+            ..Default::default()
+        };
+        engine.record_usage(&completion, Some(&tx));
+
+        let session = engine
+            .shared
+            .session
+            .db
+            .get_session(&engine.shared.session.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(session.context_tokens, 35);
+        assert_eq!(
+            engine.last_turn_usage.as_ref().unwrap().cache_hit_tokens,
+            10
+        );
+
+        let evt = rx.try_recv().expect("post-compaction main api emit");
+        assert!(matches!(
+            evt,
+            Event::SessionTokensUpdated {
+                cache_hit_tokens: 110,
+                cache_miss_tokens: 220,
+                completion_tokens: 55,
+                context_tokens: 35,
+            }
+        ));
+    }
 }
 
 mod llm_stream {
@@ -775,17 +981,24 @@ mod llm_stream {
         std::env::remove_var("DEEPSEEK_API_BASE");
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn streaming_turn_with_tool_calls_hits_finish_batch() {
         let _offline = crate::test_env::StripDeepseekApiKey::new();
         std::env::set_var("DEEPSEEK_API_KEY", "test-key");
         let server = MockServer::start().await;
         std::env::set_var("DEEPSEEK_API_BASE", server.uri());
 
-        let sse = concat!(
+        // Inner ReAct loop calls the LLM again after tool results; a single tool_calls
+        // mock would loop forever (max_react_loops defaults to 0 = unlimited).
+        let tool_sse = concat!(
             "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"tc-r\",\"function\":",
             "{\"name\":\"Read\",\"arguments\":\"{\\\"file_path\\\":\\\"wm.txt\\\"}\"}}]},\"finish_reason\":null}]}\n\n",
             "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}],",
+            "\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}\n\n",
+            "data: [DONE]\n\n"
+        );
+        let stop_sse = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":null}],",
             "\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}\n\n",
             "data: [DONE]\n\n"
         );
@@ -794,7 +1007,17 @@ mod llm_stream {
             .respond_with(
                 ResponseTemplate::new(200)
                     .insert_header("content-type", "text/event-stream")
-                    .set_body_string(sse),
+                    .set_body_string(tool_sse),
+            )
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(stop_sse),
             )
             .mount(&server)
             .await;

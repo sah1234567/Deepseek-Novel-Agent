@@ -1,4 +1,5 @@
 mod engine_ipc;
+mod fork;
 mod project;
 mod session;
 mod settings;
@@ -7,6 +8,7 @@ mod turn;
 #[cfg(test)]
 mod tests;
 
+pub use fork::*;
 pub use project::*;
 pub use session::*;
 pub use settings::*;

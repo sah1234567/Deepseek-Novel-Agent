@@ -3,6 +3,7 @@ use crate::context::dynamic_context::{
     load_frozen_static_from_metadata, persist_frozen_system_metadata,
 };
 use crate::engine::session_llm::new_session_llm;
+use crate::fork_stream_subs::{new_fork_stream_subscriptions, ForkStreamSubscriptions};
 use crate::hooks::default_hook_config;
 use crate::interrupt::AbortController;
 use crate::message::{chat_to_json, repair_tool_use_chain, stored_to_chat};
@@ -20,12 +21,17 @@ use dashmap::DashMap;
 
 impl AgentEngine {
     pub fn new(config: EngineConfig) -> Result<Self, AgentError> {
-        Self::new_with_abort(config, AbortController::shared())
+        Self::new_with_abort(
+            config,
+            AbortController::shared(),
+            new_fork_stream_subscriptions(),
+        )
     }
 
     pub fn new_with_abort(
         config: EngineConfig,
         abort_controller: Arc<AbortController>,
+        fork_stream_subs: ForkStreamSubscriptions,
     ) -> Result<Self, AgentError> {
         let mut settings = load_project_settings(&config.settings_path)?;
         if settings.hooks.post_tool_use.is_empty() {
@@ -82,6 +88,7 @@ impl AgentEngine {
             abort_controller,
             permission_mode_override: Arc::new(Mutex::new(initial_permission_mode)),
             read_file_cache: Arc::new(DashMap::new()),
+            file_op_locks: Arc::new(DashMap::new()),
             subagent_queue: Arc::new(Mutex::new(Vec::new())),
             session_llm,
             drain_in_progress: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -90,6 +97,7 @@ impl AgentEngine {
             global_config_path: config.global_config_path.clone(),
             system_prompt,
             sub_agent_count: Arc::new(AtomicU32::new(0)),
+            fork_stream_subs,
             compaction_lock: Arc::new(tokio::sync::Mutex::new(())),
             audit,
         };
@@ -109,19 +117,27 @@ impl AgentEngine {
             read_skill_reference_paths: Vec::new(),
             last_chapter_written: None,
             compaction_fail_count: 0,
+            consecutive_tool_failure_key: None,
+            consecutive_tool_failure_count: 0,
             turn_message_seq: 0,
             pending_permission_user_prefix: None,
         })
     }
 
     pub fn resume(config: EngineConfig, session_id: &str) -> Result<Self, AgentError> {
-        Self::resume_with_abort(config, session_id, AbortController::shared())
+        Self::resume_with_abort(
+            config,
+            session_id,
+            AbortController::shared(),
+            new_fork_stream_subscriptions(),
+        )
     }
 
     pub fn resume_with_abort(
         config: EngineConfig,
         session_id: &str,
         abort_controller: Arc<AbortController>,
+        fork_stream_subs: ForkStreamSubscriptions,
     ) -> Result<Self, AgentError> {
         let mut settings = load_project_settings(&config.settings_path)?;
         if settings.hooks.post_tool_use.is_empty() {
@@ -242,6 +258,7 @@ impl AgentEngine {
             abort_controller,
             permission_mode_override: Arc::new(Mutex::new(initial_permission_mode)),
             read_file_cache: Arc::new(DashMap::new()),
+            file_op_locks: Arc::new(DashMap::new()),
             subagent_queue: Arc::new(Mutex::new(Vec::new())),
             session_llm,
             drain_in_progress: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -250,6 +267,7 @@ impl AgentEngine {
             global_config_path: config.global_config_path.clone(),
             system_prompt,
             sub_agent_count: Arc::new(AtomicU32::new(0)),
+            fork_stream_subs,
             compaction_lock: Arc::new(tokio::sync::Mutex::new(())),
             audit,
         };
@@ -269,6 +287,8 @@ impl AgentEngine {
             read_skill_reference_paths,
             last_chapter_written: None,
             compaction_fail_count: 0,
+            consecutive_tool_failure_key: None,
+            consecutive_tool_failure_count: 0,
             turn_message_seq: 0,
             pending_permission_user_prefix: None,
         })

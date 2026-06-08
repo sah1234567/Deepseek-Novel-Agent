@@ -23,6 +23,8 @@ export const IPC_COMMANDS = {
   getApiConfig: "get_api_config",
   setApiConfig: "set_api_config",
   getForkMessages: "get_fork_messages",
+  subscribeForkStream: "subscribe_fork_stream",
+  unsubscribeForkStream: "unsubscribe_fork_stream",
   getSessionTranscriptLayout: "get_session_transcript_layout",
   getSessionMessageTurns: "get_session_message_turns",
   getSessionArchiveTurns: "get_session_archive_turns",

@@ -186,6 +186,14 @@ function resolveToolSegment(ctx: TranscriptContext, toolCallId: string): LlmSegm
 function handleToolEvent(machine: TranscriptMachine, event: Extract<TranscriptEvent, { type: "TOOL" }>): TranscriptMachine {
   const { phase, toolCallId } = event;
 
+  // Defensive: ignore TOOL events once the turn FSM is idle. In production,
+  // TurnComplete is enqueued only after all tool results (novel-core turn/loop:
+  // turn_paused gate) and the IPC forwarder preserves order — so a tool result
+  // cannot legitimately arrive after TURN_COMPLETE on the same turn. Late events
+  // may still appear after INTERRUPT, session switch, or a historical RESET; do
+  // not patch idle here — use reloadActiveTail (DB) instead. Mid-turn compaction
+  // must skip RESET_TRANSCRIPT (useTranscriptLoader onCompactionDone) so we never
+  // hit idle while the backend is still streaming.
   if (machine.phase === "idle") {
     return machine;
   }
@@ -319,6 +327,7 @@ function handleStreamChunk(
   machine: TranscriptMachine,
   event: Extract<TranscriptEvent, { type: "STREAM_CHUNK" }>,
 ): TranscriptMachine {
+  // Same idle guard as handleToolEvent — see comment there.
   if (machine.phase === "idle" || machine.phase === "pausedForQuestion") {
     return machine;
   }

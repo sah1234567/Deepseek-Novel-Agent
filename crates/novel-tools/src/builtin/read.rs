@@ -28,13 +28,13 @@ pub(crate) async fn read_fast(
     full: &std::path::Path,
     line_offset: usize,
     limit: Option<usize>,
-) -> Result<(String, usize, usize), ToolError> {
+) -> Result<(String, usize, usize, String), ToolError> {
     let content = fs::read_to_string(full).await.map_err(ToolError::Io)?;
     let all_lines: Vec<&str> = content.lines().collect();
     let total_lines = all_lines.len();
 
     if line_offset >= total_lines {
-        return Ok((String::new(), 0, total_lines));
+        return Ok((String::new(), 0, total_lines, content));
     }
 
     let end = match limit {
@@ -45,7 +45,7 @@ pub(crate) async fn read_fast(
     let selected: Vec<&str> = all_lines[line_offset..end].to_vec();
     let line_count = selected.len();
     let result = selected.join("\n");
-    Ok((result, line_count, total_lines))
+    Ok((result, line_count, total_lines, content))
 }
 
 /// Streaming path: for files >= 10 MB, read line by line without loading entirely into memory.
@@ -139,41 +139,109 @@ impl Tool for ReadTool {
             .and_then(|v| v.as_u64())
             .map(|l| l as usize);
 
-        // Offset is 1-indexed; convert to 0-indexed
         let line_offset = if offset == 0 {
             0
         } else {
             offset.saturating_sub(1)
         };
 
-        // ── Empty file check ──
-        match fs::metadata(&full).await {
-            Ok(meta) if meta.len() == 0 => {
-                ctx.store_read_cache(
-                    &full,
-                    ReadCacheEntry {
-                        mtime_secs: file_mtime_secs(&meta),
-                        raw_content: String::new(),
-                        offset: None,
-                        limit: None,
-                        total_lines: 0,
-                        source: ReadCacheSource::Read,
+        ctx.with_file_lock(&full, || async {
+            match fs::metadata(&full).await {
+                Ok(meta) if meta.len() == 0 => {
+                    ctx.store_read_cache(
+                        &full,
+                        ReadCacheEntry {
+                            mtime_secs: file_mtime_secs(&meta),
+                            raw_content: String::new(),
+                            offset: None,
+                            limit: None,
+                            total_lines: 0,
+                            source: ReadCacheSource::Read,
+                            transcript_committed: false,
+                            committed_offset: None,
+                            committed_limit: None,
+                        },
+                        &path,
+                        None,
+                        None,
+                    )?;
+                    return Ok(ToolOutput {
+                        content: "<system-reminder>Warning: the file exists but the contents are empty.</system-reminder>".into(),
+                        is_error: false,
+                    });
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    return Err(ToolError::Io(e));
+                }
+                _ => {}
+            }
+
+            if let Ok(meta) = fs::metadata(&full).await {
+                let current_mtime = file_mtime_secs(&meta);
+                let (cache_off, cache_lim) = read_range_key(
+                    if limit.is_some() || offset > 1 {
+                        Some(offset)
+                    } else {
+                        None
                     },
+                    limit,
                 );
+                if ctx.read_dedup_hit(&full, cache_off, cache_lim, current_mtime) {
+                    return Ok(ToolOutput {
+                        content: FILE_UNCHANGED_STUB.into(),
+                        is_error: false,
+                    });
+                }
+            }
+
+            let metadata = fs::metadata(&full).await.map_err(ToolError::Io)?;
+            let fast = metadata.len() < FAST_PATH_MAX_SIZE;
+
+            let (content, _line_count, total_lines, disk_full): (
+                String,
+                usize,
+                usize,
+                Option<String>,
+            ) = if fast {
+                let (c, lc, tl, disk) = read_fast(&full, line_offset, limit).await?;
+                (c, lc, tl, Some(disk))
+            } else {
+                let (c, lc, tl) = read_streaming(&full, line_offset, limit).await?;
+                let disk = if ctx.read_cache_entry(&full).is_some() {
+                    Some(fs::read_to_string(&full).await.map_err(ToolError::Io)?)
+                } else {
+                    None
+                };
+                (c, lc, tl, disk)
+            };
+
+            crate::read_economy::read_pre_check(&path, limit, total_lines)?;
+
+            if content.is_empty() && line_offset >= total_lines && total_lines > 0 {
                 return Ok(ToolOutput {
-                    content: "<system-reminder>Warning: the file exists but the contents are empty.</system-reminder>".into(),
+                    content: format!(
+                        "<system-reminder>Warning: the file has only {} lines, but offset is {}. No content to read.</system-reminder>",
+                        total_lines, offset
+                    ),
                     is_error: false,
                 });
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Err(ToolError::Io(e));
-            }
-            _ => {}
-        }
 
-        // ── Dedup check (mtime + range) ──
-        if let Ok(meta) = fs::metadata(&full).await {
-            let current_mtime = file_mtime_secs(&meta);
+            if limit.is_none() && content.len() > MAX_OUTPUT_BYTES {
+                let size_str = format_file_size(content.len());
+                let limit_str = format_file_size(MAX_OUTPUT_BYTES);
+                return Err(ToolError::Execution(format!(
+                    "File content ({size_str}) exceeds maximum allowed size ({limit_str}). Use offset and limit parameters to read specific portions of the file, or use Grep to search for specific content."
+                )));
+            }
+
+            let formatted = if content.is_empty() {
+                String::new()
+            } else {
+                add_line_numbers(&content, offset.max(1))
+            };
+
+            let mtime = file_mtime_secs(&metadata);
             let (cache_off, cache_lim) = read_range_key(
                 if limit.is_some() || offset > 1 {
                     Some(offset)
@@ -182,77 +250,30 @@ impl Tool for ReadTool {
                 },
                 limit,
             );
-            if ctx.read_dedup_hit(&full, cache_off, cache_lim, current_mtime) {
-                return Ok(ToolOutput {
-                    content: FILE_UNCHANGED_STUB.into(),
-                    is_error: false,
-                });
-            }
-        }
+            ctx.store_read_cache(
+                &full,
+                ReadCacheEntry {
+                    mtime_secs: mtime,
+                    raw_content: content,
+                    offset: cache_off,
+                    limit: cache_lim,
+                    total_lines,
+                    source: ReadCacheSource::Read,
+                    transcript_committed: false,
+                    committed_offset: None,
+                    committed_limit: None,
+                },
+                &path,
+                disk_full.as_deref(),
+                None,
+            )?;
 
-        let metadata = fs::metadata(&full).await.map_err(ToolError::Io)?;
-
-        // ── Choose fast vs streaming path ──
-        let (content, _line_count, total_lines) = if metadata.len() < FAST_PATH_MAX_SIZE {
-            read_fast(&full, line_offset, limit).await?
-        } else {
-            read_streaming(&full, line_offset, limit).await?
-        };
-
-        crate::read_economy::read_pre_check(&path, limit, total_lines)?;
-
-        // ── Offset beyond file ──
-        if content.is_empty() && line_offset >= total_lines && total_lines > 0 {
-            return Ok(ToolOutput {
-                content: format!(
-                    "<system-reminder>Warning: the file has only {} lines, but offset is {}. No content to read.</system-reminder>",
-                    total_lines, offset
-                ),
+            Ok(ToolOutput {
+                content: formatted,
                 is_error: false,
-            });
-        }
-
-        // ── Byte limit check (only for full-file reads, not line-range) ──
-        if limit.is_none() && content.len() > MAX_OUTPUT_BYTES {
-            let size_str = format_file_size(content.len());
-            let limit_str = format_file_size(MAX_OUTPUT_BYTES);
-            return Err(ToolError::Execution(format!(
-                "File content ({size_str}) exceeds maximum allowed size ({limit_str}). Use offset and limit parameters to read specific portions of the file, or use Grep to search for specific content."
-            )));
-        }
-
-        // ── Add line numbers ──
-        let formatted = if content.is_empty() {
-            String::new()
-        } else {
-            add_line_numbers(&content, offset.max(1))
-        };
-
-        let mtime = file_mtime_secs(&metadata);
-        let (cache_off, cache_lim) = read_range_key(
-            if limit.is_some() || offset > 1 {
-                Some(offset)
-            } else {
-                None
-            },
-            limit,
-        );
-        ctx.store_read_cache(
-            &full,
-            ReadCacheEntry {
-                mtime_secs: mtime,
-                raw_content: content,
-                offset: cache_off,
-                limit: cache_lim,
-                total_lines,
-                source: ReadCacheSource::Read,
-            },
-        );
-
-        Ok(ToolOutput {
-            content: formatted,
-            is_error: false,
+            })
         })
+        .await
     }
 }
 
@@ -410,7 +431,7 @@ mod tests {
         ctx.read_file_cache = Some(Arc::new(dashmap::DashMap::new()));
         let full = ctx.resolve_path("edited.md");
         let meta = std::fs::metadata(&full).unwrap();
-        ctx.store_read_cache(
+        ctx.store_read_cache_direct(
             &full,
             ReadCacheEntry {
                 mtime_secs: crate::file_mtime_secs(&meta),
@@ -419,6 +440,9 @@ mod tests {
                 limit: None,
                 total_lines: 1,
                 source: ReadCacheSource::WriteRefresh,
+                transcript_committed: true,
+                committed_offset: None,
+                committed_limit: None,
             },
         );
 
@@ -431,12 +455,47 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn edit_patched_cache_does_not_dedup_read() {
+        use crate::ReadCacheSource;
+
+        let tmp = TempDir::new().unwrap();
+        let lines: Vec<String> = (1..=10).map(|i| format!("line {i}")).collect();
+        write_file(tmp.path(), "ch.md", &lines.join("\n"));
+        let mut ctx = test_ctx(&tmp);
+        ctx.read_file_cache = Some(Arc::new(dashmap::DashMap::new()));
+        let full = ctx.resolve_path("ch.md");
+        let meta = std::fs::metadata(&full).unwrap();
+        let mtime = crate::file_mtime_secs(&meta);
+        ctx.store_read_cache_direct(
+            &full,
+            ReadCacheEntry {
+                mtime_secs: mtime,
+                raw_content: "line 3\nline 4\nline 5".into(),
+                offset: Some(3),
+                limit: Some(3),
+                total_lines: 10,
+                source: ReadCacheSource::EditPatched,
+                transcript_committed: true,
+                committed_offset: Some(3),
+                committed_limit: Some(3),
+            },
+        );
+
+        let out = ReadTool
+            .call(json!({"file_path": "ch.md", "offset": 3, "limit": 3}), &ctx)
+            .await
+            .unwrap();
+        assert!(out.content.contains("line 3"));
+        assert!(!out.content.contains("has not been changed since last read"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn read_fast_slices_by_offset_and_limit() {
         let tmp = TempDir::new().unwrap();
         let lines: Vec<String> = (1..=10).map(|i| format!("line {i}")).collect();
         write_file(tmp.path(), "slice.md", &lines.join("\n"));
         let full = tmp.path().join("slice.md");
-        let (content, line_count, total) = read_fast(&full, 2, Some(3)).await.unwrap();
+        let (content, line_count, total, _) = read_fast(&full, 2, Some(3)).await.unwrap();
         assert_eq!(total, 10);
         assert_eq!(line_count, 3);
         assert!(content.starts_with("line 3"));
@@ -452,6 +511,6 @@ mod tests {
         let full = tmp.path().join("stream.md");
         let fast = read_fast(&full, 1, Some(4)).await.unwrap();
         let stream = read_streaming(&full, 1, Some(4)).await.unwrap();
-        assert_eq!(fast, stream);
+        assert_eq!((fast.0, fast.1, fast.2), stream);
     }
 }

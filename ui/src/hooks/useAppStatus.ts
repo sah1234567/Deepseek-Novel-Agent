@@ -51,9 +51,9 @@ export function useAppStatus() {
   const [status, setStatus] = useState<AppStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (prefetched?: AppStatus) => {
     try {
-      const s = await invoke<AppStatus>(IPC_COMMANDS.getAppStatus);
+      const s = prefetched ?? (await invoke<AppStatus>(IPC_COMMANDS.getAppStatus));
       setStatus(s);
       setError(null);
     } catch (e) {
@@ -61,6 +61,8 @@ export function useAppStatus() {
     }
   }, []);
 
+  // Initial load + 30s fallback for non-token fields (todos, turn flags). Runtime token
+  // counters are driven by `session-tokens-updated` (main and subagent LLM calls).
   useEffect(() => {
     void refresh();
     const interval = setInterval(() => void refresh(), 30000);
@@ -89,14 +91,15 @@ export function useAppStatus() {
               : prev,
           );
         }),
-      // ToolCallResult events use phase "result" but omit toolName (see event_payload.rs).
+      // Tool result refresh: todos and turn flags — not the primary token update path.
       () =>
         listen<{ phase?: string }>(IPC_EVENTS.toolCallRequest, (event) => {
           if (event.payload.phase === "result") {
             void refresh();
           }
         }),
-      // Turn-end status refresh is driven by `AgentProvider.onTurnComplete` (useAgent).
+      // Turn-end refresh (`AgentProvider.onTurnComplete`): turnNumber, todos, etc.
+      // Token fields stay event-driven via `session-tokens-updated`.
       // Session switches refresh via invoke callers (resumeSession / createSession / openWork).
       () => listen(IPC_EVENTS.permissionModeChanged, () => void refresh()),
     ]);

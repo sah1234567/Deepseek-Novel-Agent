@@ -130,4 +130,4 @@ Turn 进行中（流式、待批准工具、待回答问题）时模型与权限
 | `+` 新建 | `create_session`，当前作品下空白会话 |
 | 标签 | `{标题} · 对话 N 轮 · {相对时间} · {模型}` |
 
-会话列表按最近 LLM 活跃时间降序排列。StatusBar 展示会话累计 token 三分类与当前上下文（DB `context_tokens`，最近一次 API 快照；30s 轮询 + `turn-complete` / `session-tokens-updated` 等事件刷新）。详见 [FRAMEWORK.md §2.2](FRAMEWORK.md#22-作品与会话)。
+会话列表按最近 LLM 活跃时间降序排列。StatusBar 展示会话累计 token 三分类与当前上下文（DB `context_tokens`，最近一次 API 快照）；运行中由 **`session-tokens-updated` 事件驱动**（主/SubAgent 每次 LLM 调用后推送），初始与切 session 经 `get_app_status`。详见 [FRAMEWORK.md §2.2](FRAMEWORK.md#22-作品与会话)。

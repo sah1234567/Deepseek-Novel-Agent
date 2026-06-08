@@ -8,6 +8,7 @@ mod agent;
 mod context;
 mod engine;
 mod error;
+mod fork_stream_subs;
 mod hooks;
 mod interrupt;
 mod message;
@@ -20,6 +21,10 @@ pub(crate) mod types;
 pub use agent::{AgentType, FORKABLE_AGENT_TYPE_NAMES};
 pub use engine::{AgentEngine, EngineConfig, EngineStatus};
 pub use error::AgentError;
+pub use fork_stream_subs::{
+    is_fork_stream_subscribed, new_fork_stream_subscriptions, try_send_fork_overlay_event,
+    ForkStreamSubscriptions,
+};
 pub use interrupt::{AbortController, InterruptReason};
 pub use message::stored_message_display_text;
 pub use permission::{

@@ -1,3 +1,4 @@
+use novel_knowledge::truncate_bytes_utf8;
 use std::path::Path;
 
 /// Load memory/ index and referenced files (≤ max_bytes total).
@@ -33,10 +34,23 @@ pub(super) fn truncate_str(s: &str, max: usize) -> String {
         s.to_string()
     } else {
         format!(
-            "{}…\n> WARNING: content was truncated ({} → {} chars). Only part of it was loaded.",
-            &s[..max.saturating_sub(3)],
+            "{}\n> WARNING: content was truncated ({} → {} bytes). Only part of it was loaded.",
+            truncate_bytes_utf8(s, max),
             s.len(),
             max
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::truncate_str;
+
+    #[test]
+    fn truncate_str_does_not_split_utf8_codepoint() {
+        let s = "记".repeat(100);
+        let out = truncate_str(&s, 80);
+        assert!(std::str::from_utf8(out.as_bytes()).is_ok());
+        assert!(out.contains('…'));
     }
 }

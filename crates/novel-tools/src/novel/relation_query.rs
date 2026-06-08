@@ -8,10 +8,14 @@ use serde_json::{json, Value};
 #[derive(Debug, Clone, Serialize)]
 struct RelationEntry {
     chapter: String,
+    speaker: String,
+    object: String,
     relation: String,
-    calling_a_to_b: String,
-    calling_b_to_a: String,
+    calling_speaker_to_object: String,
+    calling_object_to_speaker: String,
     event: String,
+    #[serde(skip)]
+    raw_row: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -27,6 +31,9 @@ struct RelationQueryResult {
 }
 
 fn parse_relation_table(content: &str) -> Vec<RelationEntry> {
+    // Template: | 章节 | 说话者 | 对象 | 旧关系 | 新关系 | 说话者称呼变化 | 对方对说话者称呼 | 触发事件 |
+    // cells[1]=章节  cells[2]=说话者  cells[3]=对象  cells[4]=旧关系  cells[5]=新关系
+    // cells[6]=说话者称呼变化  cells[7]=对方对说话者称呼  cells[8]=触发事件
     let heading = "## 关系演变日志";
     let Some(section_start) = content.find(heading) else {
         return vec![];
@@ -38,7 +45,7 @@ fn parse_relation_table(content: &str) -> Vec<RelationEntry> {
             continue;
         }
         let cells: Vec<&str> = line.split('|').map(|s| s.trim()).collect();
-        if cells.len() < 7 {
+        if cells.len() < 9 {
             continue;
         }
         let ch = parse_chapter_num(cells[1]);
@@ -47,10 +54,13 @@ fn parse_relation_table(content: &str) -> Vec<RelationEntry> {
         }
         entries.push(RelationEntry {
             chapter: format!("Ch{ch}"),
-            relation: cells[3].to_string(),
-            calling_a_to_b: cells[4].to_string(),
-            calling_b_to_a: cells[5].to_string(),
-            event: cells.get(6).map(|s| s.to_string()).unwrap_or_default(),
+            speaker: cells[2].to_string(),
+            object: cells[3].to_string(),
+            relation: cells[5].to_string(),
+            calling_speaker_to_object: cells[6].to_string(),
+            calling_object_to_speaker: cells[7].to_string(),
+            event: cells[8].to_string(),
+            raw_row: line.to_string(),
         });
     }
     entries
@@ -58,24 +68,25 @@ fn parse_relation_table(content: &str) -> Vec<RelationEntry> {
 
 fn find_character_relations(
     entries: &[RelationEntry],
-    a: &str,
+    character: &str,
     target: Option<&str>,
 ) -> Vec<RelationEntry> {
-    let a_lower = a.to_lowercase();
+    let a_lower = character.to_lowercase();
     let t_lower = target.map(|t| t.to_lowercase());
     entries
         .iter()
         .filter(|e| {
-            let row_text = format!(
-                "{} {} {} {} {}",
-                e.relation, e.calling_a_to_b, e.calling_b_to_a, e.event, e.chapter
-            );
-            let lower = row_text.to_lowercase();
-            let has_a = lower.contains(&a_lower);
+            // Match only speaker/object columns (cells[2]/[3]), not the event column (cells[8]).
+            // Template: | 章节 | 说话者 | 对象 | 旧关系 | 新关系 | 说话者称呼变化 | 对方对说话者称呼 | 触发事件 |
+            let raw = &e.raw_row;
+            let cells: Vec<&str> = raw.split('|').map(|s| s.trim()).collect();
+            let col_a = cells.get(2).map(|s| s.to_lowercase()).unwrap_or_default();
+            let col_b = cells.get(3).map(|s| s.to_lowercase()).unwrap_or_default();
+            let a_match = col_a.contains(&a_lower) || col_b.contains(&a_lower);
             if let Some(ref t) = t_lower {
-                has_a && lower.contains(t)
+                a_match && (col_a.contains(t) || col_b.contains(t))
             } else {
-                has_a
+                a_match
             }
         })
         .cloned()
@@ -177,10 +188,10 @@ mod tests {
         write_relation_index(
             tmp.path(),
             "## 关系演变日志\n\
-             | 章节 | A | B | 关系 | A→B称呼 | B→A称呼 | 事件 |\n\
-             |------|---|---|------|---------|---------|------|\n\
-             | Ch3 | 陈默 | 林若烟 | 陌生 | —→\"陈前辈\" | —→\"丫头\" | 初见 |\n\
-             | Ch5 | 陈默 | 林若烟 | 亲近 | \"陈前辈\"→\"陈默\" | \"丫头\"→\"若烟\" | 救命之恩 |\n",
+             | 章节 | 说话者 | 对象 | 旧关系 | 新关系 | 说话者称呼变化 | 对方对说话者称呼 | 触发事件 |\n\
+             |------|--------|------|--------|--------|--------------|---------------|----------|\n\
+             | Ch3 | 陈默 | 林若烟 | 陌生 | 陌生 | 陈前辈 | 丫头 | 初见 |\n\
+             | Ch5 | 陈默 | 林若烟 | 陌生 | 亲近 | 陈默 | 若烟 | 救命之恩 |\n",
         );
         let tool = RelationQueryTool;
         let ctx = ToolContext {
@@ -200,11 +211,11 @@ mod tests {
         write_relation_index(
             tmp.path(),
             "## 关系演变日志\n\
-             | 章节 | A | B | 关系 | A→B称呼 | B→A称呼 | 事件 |\n\
-             |------|---|---|------|---------|---------|------|\n\
-             | Ch3 | 陈默 | 林若烟 | 陌生 | — | — | 初见 |\n\
-             | Ch4 | 陈默 | 苏婉清 | 敌对 | — | — | 冲突 |\n\
-             | Ch5 | 陈默 | 林若烟 | 亲近 | 陈前辈→陈默 | 丫头→若烟 | 救命 |\n",
+             | 章节 | 说话者 | 对象 | 旧关系 | 新关系 | 说话者称呼变化 | 对方对说话者称呼 | 触发事件 |\n\
+             |------|--------|------|--------|--------|--------------|---------------|----------|\n\
+             | Ch3 | 陈默 | 林若烟 | 陌生 | 陌生 | — | — | 初见 |\n\
+             | Ch4 | 陈默 | 苏婉清 | 陌生 | 敌对 | — | — | 冲突 |\n\
+             | Ch5 | 陈默 | 林若烟 | 陌生 | 亲近 | 陈默 | 若烟 | 救命 |\n",
         );
         let tool = RelationQueryTool;
         let ctx = ToolContext {
@@ -218,6 +229,30 @@ mod tests {
             .unwrap();
         assert!(out.content.contains("林若烟"));
         assert!(!out.content.contains("苏婉清"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn relation_query_excludes_third_party_in_event_column() {
+        let tmp = TempDir::new().unwrap();
+        write_relation_index(
+            tmp.path(),
+            "## 关系演变日志\n\
+             | 章节 | 说话者 | 对象 | 旧关系 | 新关系 | 说话者称呼变化 | 对方对说话者称呼 | 触发事件 |\n\
+             |------|--------|------|--------|--------|--------------|---------------|----------|\n\
+             | Ch8 | 陈默 | 林若烟 | 亲近 | 亲近 | 陈默 | 若烟 | 陈默向苏婉清提起林若烟 |\n",
+        );
+        let tool = RelationQueryTool;
+        let ctx = ToolContext {
+            permission_mode: PermissionMode::Auto,
+            project_root: tmp.path().to_path_buf(),
+            ..ToolContext::new(tmp.path().to_path_buf())
+        };
+        // "苏婉清" 只出现在事件列——不应匹配
+        let out = tool
+            .call(json!({"character": "苏婉清"}), &ctx)
+            .await
+            .unwrap();
+        assert!(out.content.contains("\"all_relations\": []"));
     }
 
     #[tokio::test(flavor = "current_thread")]

@@ -13,4 +13,5 @@ export const IPC_EVENTS = {
   subAgentStream: "sub-agent-stream",
   subAgentTool: "sub-agent-tool",
   subAgentComplete: "sub-agent-complete",
+  interruptibleStatusChanged: "interruptible-status-changed",
 } as const;

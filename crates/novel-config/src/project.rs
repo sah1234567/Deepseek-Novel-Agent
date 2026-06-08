@@ -60,6 +60,9 @@ fn default_max_tool_concurrency() -> usize {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
     pub knowledge_auditor_max_react_loops: u32,
+    /// Main Agent inner ReAct cap per user message. `0` = unlimited (interrupt / repeated-tool circuit breaker still apply).
+    #[serde(default)]
+    pub max_react_loops: u32,
     #[serde(default = "default_max_tool_concurrency")]
     pub max_tool_concurrency: usize,
 }
@@ -68,6 +71,7 @@ impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             knowledge_auditor_max_react_loops: 40,
+            max_react_loops: 0,
             max_tool_concurrency: default_max_tool_concurrency(),
         }
     }

@@ -1,5 +1,7 @@
 //! Session and work-directory helpers (no Tauri `AppHandle`).
 
+use crate::tauri::dto::{stored_messages_to_turn_bundles, validate_turn_range, UiTurnBundle};
+
 use novel_state::{Database, StateError, StoredMessage};
 use novel_tools::PermissionMode;
 use std::path::Path;
@@ -24,6 +26,21 @@ pub(crate) fn load_turn_range_messages(
             db.get_archived_messages_turn_range(session_id, epoch, range)
         }
     }
+}
+
+pub(crate) fn bundles_for_turn_range(
+    db: &Database,
+    session_id: &str,
+    from_turn: i32,
+    to_turn: i32,
+    source: TurnMessageSource,
+) -> Result<Vec<UiTurnBundle>, String> {
+    validate_turn_range(from_turn, to_turn)?;
+    let stored = load_turn_range_messages(db, session_id, from_turn, to_turn, source)
+        .map_err(|e| e.to_string())?;
+    let bundles = stored_messages_to_turn_bundles(&stored);
+    trace_turn_bundles_loaded(session_id, source, from_turn, to_turn, bundles.len());
+    Ok(bundles)
 }
 
 pub(crate) fn trace_turn_bundles_loaded(
@@ -151,5 +168,47 @@ mod tests {
         let msgs = load_turn_range_messages(&db, &sid, 1, 1, TurnMessageSource::Active).unwrap();
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0].turn_number, 1);
+    }
+
+    #[test]
+    fn bundles_for_turn_range_rejects_inverted_range() {
+        let tmp = TempDir::new().unwrap();
+        let db = novel_state::Database::open(tmp.path().join("t.db")).unwrap();
+        let sid = db
+            .create_session(tmp.path().to_str().unwrap(), "m")
+            .unwrap();
+        let err = bundles_for_turn_range(&db, &sid, 3, 1, TurnMessageSource::Active).unwrap_err();
+        assert!(err.contains("fromTurn"));
+    }
+
+    #[test]
+    fn bundles_for_turn_range_groups_messages() {
+        let tmp = TempDir::new().unwrap();
+        let db = novel_state::Database::open(tmp.path().join("t.db")).unwrap();
+        let sid = db
+            .create_session(tmp.path().to_str().unwrap(), "m")
+            .unwrap();
+        db.insert_message(
+            &sid,
+            1,
+            0,
+            "user",
+            &serde_json::json!({"content": "hi"}),
+            None,
+        )
+        .unwrap();
+        db.insert_message(
+            &sid,
+            1,
+            1,
+            "assistant",
+            &serde_json::json!({"content": "hello"}),
+            None,
+        )
+        .unwrap();
+        let bundles = bundles_for_turn_range(&db, &sid, 1, 1, TurnMessageSource::Active).unwrap();
+        assert_eq!(bundles.len(), 1);
+        assert_eq!(bundles[0].turn_number, 1);
+        assert_eq!(bundles[0].messages.len(), 2);
     }
 }

@@ -1,5 +1,7 @@
 use crate::AppConfig;
-use novel_core::{AbortController, AgentEngine};
+use novel_core::{
+    new_fork_stream_subscriptions, AbortController, AgentEngine, ForkStreamSubscriptions,
+};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tauri::AppHandle;
@@ -15,6 +17,7 @@ pub struct CommandContext {
     pub abort_controller: Arc<AbortController>,
     /// Mirrors engine turn activity for fast `set_permission_mode` rejection without queueing.
     pub turn_in_progress: Arc<AtomicBool>,
+    pub fork_stream_subs: ForkStreamSubscriptions,
 }
 
 pub struct AppState {
@@ -23,6 +26,7 @@ pub struct AppState {
     current_message_id: Arc<RwLock<String>>,
     abort_controller: Arc<AbortController>,
     turn_in_progress: Arc<AtomicBool>,
+    fork_stream_subs: ForkStreamSubscriptions,
 }
 
 impl AppState {
@@ -31,10 +35,15 @@ impl AppState {
         let config = Arc::new(RwLock::new(config));
         let abort_controller = AbortController::shared();
         let turn_in_progress = Arc::new(AtomicBool::new(false));
+        let fork_stream_subs = new_fork_stream_subscriptions();
         let engine = {
             let cfg = config.blocking_read();
-            AgentEngine::new_with_abort(cfg.engine_config(), Arc::clone(&abort_controller))
-                .map_err(|e| e.to_string())?
+            AgentEngine::new_with_abort(
+                cfg.engine_config(),
+                Arc::clone(&abort_controller),
+                Arc::clone(&fork_stream_subs),
+            )
+            .map_err(|e| e.to_string())?
         };
         let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
         spawn_engine_loop(
@@ -43,6 +52,7 @@ impl AppState {
             Arc::clone(&config),
             Arc::clone(&abort_controller),
             Arc::clone(&turn_in_progress),
+            Arc::clone(&fork_stream_subs),
         );
         Ok(Self {
             config,
@@ -50,6 +60,7 @@ impl AppState {
             current_message_id: Arc::new(RwLock::new(String::new())),
             abort_controller,
             turn_in_progress,
+            fork_stream_subs,
         })
     }
 
@@ -61,7 +72,12 @@ impl AppState {
             current_message_id: Arc::clone(&self.current_message_id),
             abort_controller: Arc::clone(&self.abort_controller),
             turn_in_progress: Arc::clone(&self.turn_in_progress),
+            fork_stream_subs: Arc::clone(&self.fork_stream_subs),
         }
+    }
+
+    pub fn fork_stream_subscriptions(&self) -> ForkStreamSubscriptions {
+        Arc::clone(&self.fork_stream_subs)
     }
 
     pub fn config(&self) -> Arc<RwLock<AppConfig>> {

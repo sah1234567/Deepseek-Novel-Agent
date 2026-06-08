@@ -118,9 +118,12 @@ impl AgentEngine {
             for (_, spec) in dispatch.pending_specs.drain() {
                 self.pending_tools.insert(spec.id.clone(), spec);
             }
-            self.has_interruptible_tool_in_progress = dispatch
-                .executor_mut()
-                .is_some_and(|e| e.has_interruptible_tool_in_progress());
+            self.set_interruptible_tool_in_progress(
+                dispatch
+                    .executor_mut()
+                    .is_some_and(|e| e.has_interruptible_tool_in_progress()),
+                event_tx,
+            );
             dispatch.poll_ui_results(event_tx);
             let executor = dispatch.take_executor().ok_or_else(|| {
                 AgentError::Validation("streaming tool executor already taken".into())
@@ -135,7 +138,7 @@ impl AgentEngine {
         for (id, (_, reason)) in denied_specs {
             results.push((id, Err(novel_tools::ToolError::PermissionDenied(reason))));
         }
-        self.has_interruptible_tool_in_progress = false;
+        self.set_interruptible_tool_in_progress(false, event_tx);
         for spec in &executed_specs {
             self.pending_tools.remove(&spec.id);
         }

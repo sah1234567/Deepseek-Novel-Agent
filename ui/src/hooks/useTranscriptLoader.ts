@@ -335,10 +335,11 @@ export function useTranscriptLoader(
   useEffect(() => {
     return onCompactionDone(() => {
       // Mid-turn compaction: skip transcript reset to keep the FSM alive.
-      // Covers: streaming (LLM output in progress), AskUserQuestion pause
-      // (turnInProgress), and app-level flags. Without this, RESET_TRANSCRIPT
-      // would set phase=idle and subsequent TOOL/STREAM events would be
-      // silently discarded by the idle guard in machine.ts.
+      // Backend may compact inside the inner ReAct loop before TurnComplete.
+      // Covers: streaming, AskUserQuestion pause (turnInProgress), app flags.
+      // Without this, RESET_TRANSCRIPT sets phase=idle and TOOL/STREAM events
+      // are silently dropped (machine.ts idle guard). Turn-end layout sync
+      // still runs via reloadActiveTail on TurnComplete.
       if (
         options.isStreamingRef.current ||
         options.turnInProgressRef.current ||

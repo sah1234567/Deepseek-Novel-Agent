@@ -47,7 +47,7 @@
 - `api_call_count += 1`
 - 刷新 `last_active_at` 与 `model`
 
-主 Agent 与 SubAgent 的 LLM 调用均经此 API 落库计费；仅主 Agent 更新 `context_tokens`。用户对话轮数由 `sync_user_turn_count` 独立写入（不刷新时间戳；`[上下文刷新]` user 不计入）。
+主 Agent 与 SubAgent 的 LLM 调用均经此 API 落库计费；仅主 Agent 更新 `context_tokens`。成功后 `novel-core::apply_session_usage` **始终** emit `session-tokens-updated`（SubAgent 推送时 `context_tokens` 仍为父快照）。用户对话轮数由 `sync_user_turn_count` 独立写入（不刷新时间戳；`[上下文刷新]` user 不计入）。
 
 **Message：** 增量 `insert_message`；Compaction **先** `archive_session_messages(epoch)` **再** `replace_session_messages`（工作集全量替换）。
 

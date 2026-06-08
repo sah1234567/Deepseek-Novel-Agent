@@ -1,6 +1,7 @@
 //! Helpers for [`crate::subagent::runner::run_subagent_job`] (tool context, tool batch, stream events).
 
 use crate::agent::merge_tool_always_allow;
+use crate::fork_stream_subs::{try_send_fork_overlay_event, ForkStreamSubscriptions};
 use crate::message::{parse_tool_call_input, tool_result_message};
 use crate::turn::TurnContext;
 use crate::turn::{format_tool, StreamingToolDispatch};
@@ -32,6 +33,7 @@ pub(crate) fn subagent_fork_tool_context(shared: &crate::EngineShared) -> ToolCo
         db: Some(Arc::new(shared.session.db.clone())),
         permission_mode_override: Some(Arc::clone(&shared.permission_mode_override)),
         read_file_cache: Some(Arc::clone(&shared.read_file_cache)),
+        file_op_locks: Some(Arc::clone(&shared.file_op_locks)),
         allow_fork: false,
         subagent_queue: None,
         current_tool_call_id: None,
@@ -41,51 +43,47 @@ pub(crate) fn subagent_fork_tool_context(shared: &crate::EngineShared) -> ToolCo
 }
 
 pub(crate) fn forward_subagent_stream_event(
+    subs: &ForkStreamSubscriptions,
     tx: &mpsc::UnboundedSender<Event>,
     fork_run_id: &str,
     ev: StreamEvent,
 ) {
-    match ev {
-        StreamEvent::ContentBlockDelta { delta, kind, .. } => {
-            let _ = tx.send(Event::SubAgentStreamDelta {
-                fork_run_id: fork_run_id.to_string(),
-                delta,
-                kind,
-            });
-        }
+    let event = match ev {
+        StreamEvent::ContentBlockDelta { delta, kind, .. } => Event::SubAgentStreamDelta {
+            fork_run_id: fork_run_id.to_string(),
+            delta,
+            kind,
+        },
         StreamEvent::ToolUseStarted {
             tool_call_id, name, ..
-        } => {
-            let _ = tx.send(Event::SubAgentToolUpdate {
-                fork_run_id: fork_run_id.to_string(),
-                phase: "start".into(),
-                tool_call_id,
-                tool_name: Some(name),
-                input: None,
-                content: None,
-                needs_approval: None,
-                status: None,
-                description: None,
-            });
-        }
+        } => Event::SubAgentToolUpdate {
+            fork_run_id: fork_run_id.to_string(),
+            phase: "start".into(),
+            tool_call_id,
+            tool_name: Some(name),
+            input: None,
+            content: None,
+            needs_approval: None,
+            status: None,
+            description: None,
+        },
         StreamEvent::ToolInputDelta {
             tool_call_id,
             delta,
-        } => {
-            let _ = tx.send(Event::SubAgentToolUpdate {
-                fork_run_id: fork_run_id.to_string(),
-                phase: "input_delta".into(),
-                tool_call_id,
-                tool_name: None,
-                input: None,
-                content: Some(delta),
-                needs_approval: None,
-                status: None,
-                description: None,
-            });
-        }
-        StreamEvent::MessageStop { .. } | StreamEvent::StreamError { .. } => {}
-    }
+        } => Event::SubAgentToolUpdate {
+            fork_run_id: fork_run_id.to_string(),
+            phase: "input_delta".into(),
+            tool_call_id,
+            tool_name: None,
+            input: None,
+            content: Some(delta),
+            needs_approval: None,
+            status: None,
+            description: None,
+        },
+        StreamEvent::MessageStop { .. } | StreamEvent::StreamError { .. } => return,
+    };
+    try_send_fork_overlay_event(subs, tx, event);
 }
 
 pub(crate) async fn execute_subagent_tool_batch(
@@ -95,6 +93,7 @@ pub(crate) async fn execute_subagent_tool_batch(
     tool_calls: &[LlmToolCall],
     event_tx: Option<&mpsc::UnboundedSender<Event>>,
     fork_run_id: &str,
+    subs: &ForkStreamSubscriptions,
 ) -> Result<
     Vec<(
         String,
@@ -105,17 +104,21 @@ pub(crate) async fn execute_subagent_tool_batch(
     if let Some(tx) = event_tx {
         for tc in tool_calls {
             let input = parse_tool_call_input(&tc.arguments, &tc.id, &tc.name);
-            let _ = tx.send(Event::SubAgentToolUpdate {
-                fork_run_id: fork_run_id.to_string(),
-                phase: "input_complete".into(),
-                tool_call_id: tc.id.clone(),
-                tool_name: Some(tc.name.clone()),
-                input: Some(input),
-                content: None,
-                needs_approval: None,
-                status: None,
-                description: None,
-            });
+            try_send_fork_overlay_event(
+                subs,
+                tx,
+                Event::SubAgentToolUpdate {
+                    fork_run_id: fork_run_id.to_string(),
+                    phase: "input_complete".into(),
+                    tool_call_id: tc.id.clone(),
+                    tool_name: Some(tc.name.clone()),
+                    input: Some(input),
+                    content: None,
+                    needs_approval: None,
+                    status: None,
+                    description: None,
+                },
+            );
         }
     }
     if let Some(dispatch_arc) = fork_dispatch {
@@ -168,6 +171,7 @@ pub(crate) fn subagent_push_tool_results(
         Result<novel_tools::ToolOutput, novel_tools::ToolError>,
     )>,
     event_tx: Option<&mpsc::UnboundedSender<Event>>,
+    subs: &ForkStreamSubscriptions,
 ) -> Result<(), AgentError> {
     let result_ids: std::collections::HashSet<String> =
         results.iter().map(|(id, _)| id.clone()).collect();
@@ -208,17 +212,21 @@ pub(crate) fn subagent_push_tool_results(
         let spec = spec_by_id.get(&id);
         let content = format_tool(spec, result).content;
         if let Some(tx) = event_tx {
-            let _ = tx.send(Event::SubAgentToolUpdate {
-                fork_run_id: fork_run_id.to_string(),
-                phase: "result".into(),
-                tool_call_id: id.clone(),
-                tool_name: spec.map(|s| s.name.clone()),
-                input: None,
-                content: Some(content.clone()),
-                needs_approval: None,
-                status: None,
-                description: None,
-            });
+            try_send_fork_overlay_event(
+                subs,
+                tx,
+                Event::SubAgentToolUpdate {
+                    fork_run_id: fork_run_id.to_string(),
+                    phase: "result".into(),
+                    tool_call_id: id.clone(),
+                    tool_name: spec.map(|s| s.name.clone()),
+                    input: None,
+                    content: Some(content.clone()),
+                    needs_approval: None,
+                    status: None,
+                    description: None,
+                },
+            );
         }
         fork_child_push(
             db,
@@ -233,6 +241,7 @@ pub(crate) fn subagent_push_tool_results(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fork_stream_subs::new_fork_stream_subscriptions;
     use novel_deepseek::{ContentBlockKind, LlmToolCall, StreamEvent};
     use novel_tools::{default_registry, PermissionMode};
     use std::sync::Arc;
@@ -240,32 +249,31 @@ mod tests {
     use tokio::sync::mpsc;
 
     #[test]
-    fn forward_subagent_stream_event_covers_variants() {
+    fn forward_subagent_stream_event_gated_until_subscribed() {
+        let subs = new_fork_stream_subscriptions();
         let (tx, mut rx) = mpsc::unbounded_channel();
+        for _ in 0..5 {
+            forward_subagent_stream_event(
+                &subs,
+                &tx,
+                "fr-1",
+                StreamEvent::ContentBlockDelta {
+                    index: 0,
+                    delta: "hi".into(),
+                    kind: ContentBlockKind::Text,
+                },
+            );
+        }
+        assert!(rx.try_recv().is_err());
+        subs.write().unwrap().insert("fr-1".into());
         forward_subagent_stream_event(
+            &subs,
             &tx,
             "fr-1",
             StreamEvent::ContentBlockDelta {
                 index: 0,
                 delta: "hi".into(),
                 kind: ContentBlockKind::Text,
-            },
-        );
-        forward_subagent_stream_event(
-            &tx,
-            "fr-1",
-            StreamEvent::ToolUseStarted {
-                index: 0,
-                tool_call_id: "t1".into(),
-                name: "Read".into(),
-            },
-        );
-        forward_subagent_stream_event(
-            &tx,
-            "fr-1",
-            StreamEvent::ToolInputDelta {
-                tool_call_id: "t1".into(),
-                delta: "{}".into(),
             },
         );
         assert!(rx.try_recv().is_ok());
@@ -286,6 +294,7 @@ mod tests {
             name: "Read".into(),
             arguments: r#"{"file_path":"sub.txt"}"#.into(),
         };
+        let subs = new_fork_stream_subscriptions();
         let results = execute_subagent_tool_batch(
             &reg,
             &ctx,
@@ -293,6 +302,7 @@ mod tests {
             std::slice::from_ref(&tc),
             None,
             "fork-test",
+            &subs,
         )
         .await
         .unwrap();
@@ -354,6 +364,7 @@ mod tests {
                 }),
             )],
             None,
+            &engine.shared.fork_stream_subs,
         )
         .unwrap();
         assert!(child_messages.iter().any(|m| m.role == "tool"));

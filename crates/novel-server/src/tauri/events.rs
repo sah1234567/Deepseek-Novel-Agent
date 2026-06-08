@@ -1,5 +1,6 @@
 use novel_core::Event;
 use serde::Serialize;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::{AppHandle, Emitter};
 
 use super::event_payload;
@@ -51,10 +52,24 @@ pub struct SubAgentCompletePayload {
     pub output: String,
 }
 
+static LAST_EMIT_FAIL_MS: AtomicU64 = AtomicU64::new(0);
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 pub fn emit_core_event(app: &AppHandle, event: Event, message_id: &str) {
     if let Some((name, payload)) = event_payload::core_event_payload(&event, message_id) {
         if let Err(e) = app.emit(&name, payload) {
-            tracing::warn!(event = %name, error = %e, "tauri emit failed");
+            let now = now_ms();
+            let last = LAST_EMIT_FAIL_MS.load(Ordering::Relaxed);
+            if now.saturating_sub(last) >= 1000 {
+                LAST_EMIT_FAIL_MS.store(now, Ordering::Relaxed);
+                tracing::warn!(event = %name, error = %e, "tauri emit failed");
+            }
         }
     }
 }

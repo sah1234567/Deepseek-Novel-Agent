@@ -2,6 +2,7 @@
 //! `EngineShared.subagent_queue` (`parent_tool_call_id: None`); drained by `drain_subagent_jobs`.
 
 use novel_config::{HookConfig, HookMatcher};
+use novel_knowledge::truncate_chars;
 use novel_tools::{normalize_rel_path, optional_file_path, ToolRegistry};
 use serde_json::Value;
 
@@ -31,7 +32,7 @@ pub(crate) fn run_post_tool_use_hooks(
                     prompts.push(format!(
                         "{}\n\nTool: {tool_name}\nOutput preview: {}",
                         rule.prompt,
-                        truncate(tool_output, 500)
+                        truncate_chars(tool_output, 500)
                     ));
                 }
             }
@@ -96,14 +97,6 @@ fn matcher_matches(matcher: &str, tool_name: &str, tool_input: Option<&Value>) -
     matcher == tool_name
 }
 
-fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        s.to_string()
-    } else {
-        format!("{}…", &s[..max])
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,6 +130,24 @@ mod tests {
         let hooks = default_hook_config();
         let input = serde_json::json!({"file_path": "chapters/chapter-031.md"});
         assert!(knowledge_auditor_hook_task(&hooks, "Write", Some(&input), "w").is_none());
+    }
+
+    #[test]
+    fn post_tool_use_truncates_utf8_output_preview() {
+        let hooks = HookConfig {
+            post_tool_use: vec![HookMatcher {
+                matcher: "*".into(),
+                hooks: vec![novel_config::HookRule {
+                    hook_type: "prompt".into(),
+                    prompt: "check".into(),
+                    timeout: 60,
+                }],
+            }],
+        };
+        let long = "测".repeat(600);
+        let prompts = run_post_tool_use_hooks(&hooks, "Read", None, &long);
+        assert_eq!(prompts.len(), 1);
+        assert!(prompts[0].contains('…'));
     }
 
     #[test]

@@ -69,66 +69,80 @@ impl Tool for TailTool {
             }
         }
 
-        let metadata = fs::metadata(&full).await.map_err(ToolError::Io)?;
-        if metadata.len() == 0 {
+        ctx.with_file_lock(&full, || async {
+            let metadata = fs::metadata(&full).await.map_err(ToolError::Io)?;
+            if metadata.len() == 0 {
+                let mtime = file_mtime_secs(&metadata);
+                ctx.store_read_cache(
+                    &full,
+                    ReadCacheEntry {
+                        mtime_secs: mtime,
+                        raw_content: String::new(),
+                        offset: None,
+                        limit: None,
+                        total_lines: 0,
+                        source: ReadCacheSource::Tail,
+                        transcript_committed: false,
+                        committed_offset: None,
+                        committed_limit: None,
+                    },
+                    &path,
+                    None,
+                    None,
+                )?;
+                return Ok(ToolOutput {
+                    content: "<system-reminder>Warning: the file exists but the contents are empty.</system-reminder>"
+                        .into(),
+                    is_error: false,
+                });
+            }
+
             let mtime = file_mtime_secs(&metadata);
+            let content = fs::read_to_string(&full).await.map_err(ToolError::Io)?;
+            let all_lines: Vec<&str> = content.lines().collect();
+            let total_lines = all_lines.len();
+            let take = lines_n.min(total_lines);
+            let start_idx = total_lines.saturating_sub(take);
+            let start_line = if take == 0 { 1 } else { start_idx + 1 };
+
+            if ctx.tail_dedup_hit(&full, start_line, take, total_lines, mtime) {
+                return Ok(ToolOutput {
+                    content: FILE_UNCHANGED_STUB.into(),
+                    is_error: false,
+                });
+            }
+
+            let slice: Vec<&str> = all_lines[start_idx..].to_vec();
+            let raw = slice.join("\n");
+
+            crate::read_economy::read_pre_check(&path, Some(lines_n), total_lines)?;
+
+            let formatted = add_line_numbers(&raw, start_line);
+
             ctx.store_read_cache(
                 &full,
                 ReadCacheEntry {
                     mtime_secs: mtime,
-                    raw_content: String::new(),
-                    offset: None,
-                    limit: None,
-                    total_lines: 0,
+                    raw_content: raw,
+                    offset: Some(start_line),
+                    limit: Some(take),
+                    total_lines,
                     source: ReadCacheSource::Tail,
+                    transcript_committed: false,
+                    committed_offset: None,
+                    committed_limit: None,
                 },
-            );
-            return Ok(ToolOutput {
-                content: "<system-reminder>Warning: the file exists but the contents are empty.</system-reminder>"
-                    .into(),
+                &path,
+                Some(&content),
+                None,
+            )?;
+
+            Ok(ToolOutput {
+                content: formatted,
                 is_error: false,
-            });
-        }
-
-        let mtime = file_mtime_secs(&metadata);
-
-        let content = fs::read_to_string(&full).await.map_err(ToolError::Io)?;
-        let all_lines: Vec<&str> = content.lines().collect();
-        let total_lines = all_lines.len();
-        let take = lines_n.min(total_lines);
-        let start_idx = total_lines.saturating_sub(take);
-        let start_line = if take == 0 { 1 } else { start_idx + 1 };
-
-        if ctx.tail_dedup_hit(&full, start_line, take, total_lines, mtime) {
-            return Ok(ToolOutput {
-                content: FILE_UNCHANGED_STUB.into(),
-                is_error: false,
-            });
-        }
-
-        let slice: Vec<&str> = all_lines[start_idx..].to_vec();
-        let raw = slice.join("\n");
-
-        crate::read_economy::read_pre_check(&path, Some(lines_n), total_lines)?;
-
-        let formatted = add_line_numbers(&raw, start_line);
-
-        ctx.store_read_cache(
-            &full,
-            ReadCacheEntry {
-                mtime_secs: mtime,
-                raw_content: raw,
-                offset: Some(start_line),
-                limit: Some(take),
-                total_lines,
-                source: ReadCacheSource::Tail,
-            },
-        );
-
-        Ok(ToolOutput {
-            content: formatted,
-            is_error: false,
+            })
         })
+        .await
     }
 }
 

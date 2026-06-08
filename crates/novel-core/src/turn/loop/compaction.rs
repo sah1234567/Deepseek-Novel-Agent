@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::context::dynamic_context::{
     filter_loadable_reference_paths, filter_loadable_skill_ids, format_activated_skill_block,
 };
+use crate::engine::session_llm::{apply_session_usage, read_session_llm};
 use crate::interrupt::ERROR_MESSAGE_USER_ABORT;
 use crate::message::{
     chat_slice_to_compaction, chat_to_compaction, compaction_slice_to_chat, to_llm_messages,
@@ -25,6 +26,7 @@ impl AgentEngine {
 
     async fn generate_summary_text(
         &mut self,
+        event_tx: Option<&mpsc::UnboundedSender<Event>>,
         summarize_to: usize,
         to_summarize: &[novel_compaction::CompactionMessage],
         max_chars: usize,
@@ -63,11 +65,17 @@ impl AgentEngine {
             .complete_via_stream(&llm_msgs, &[], max_output_tokens, cancel)
             .await
         {
-            Ok(r) => r
-                .content
-                .filter(|c| !c.contains(ERROR_MESSAGE_USER_ABORT) && !c.trim().is_empty())
-                .map(|c| truncate_summary(&c, max_chars))
-                .unwrap_or_else(fallback),
+            Ok(completion) => {
+                if let Some(u) = &completion.usage {
+                    let snap = read_session_llm(&self.shared);
+                    apply_session_usage(&self.shared, u, &snap, event_tx, false);
+                }
+                completion
+                    .content
+                    .filter(|c| !c.contains(ERROR_MESSAGE_USER_ABORT) && !c.trim().is_empty())
+                    .map(|c| truncate_summary(&c, max_chars))
+                    .unwrap_or_else(fallback)
+            }
             Err(LlmError::Cancelled) => fallback(),
             Err(_) => fallback(),
         }
@@ -131,6 +139,7 @@ impl AgentEngine {
         emit(event_tx, CompactionAction::GeneratingSummary);
         let summary_text = self
             .generate_summary_text(
+                event_tx,
                 partition.summarize_to,
                 to_summarize,
                 retain.summary_max_chars,

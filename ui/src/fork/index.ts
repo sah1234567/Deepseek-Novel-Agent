@@ -14,6 +14,5 @@ export {
 export {
   dispatchForkEvent,
   emptyForkMachine,
-  forkRunAcceptsDbSnapshot,
   hydrateForkMachine,
 } from "./transcript";

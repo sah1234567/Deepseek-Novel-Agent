@@ -12,6 +12,7 @@ mod parser;
 mod project_tree;
 mod scaffold;
 mod scaffold_templates;
+mod text_util;
 
 pub use audit_status::{
     ensure_audit_status, format_progress_hint, list_pending, mark_audited, parse_chapter_numbers,
@@ -29,6 +30,7 @@ pub use index::{ensure_index, rebuild_index};
 pub use parser::parse_frontmatter;
 pub use project_tree::{list_project_files, read_project_file, ProjectFileEntry};
 pub use scaffold::init_project_scaffold;
+pub use text_util::{truncate_bytes_utf8, truncate_chars, utf8_byte_prefix};
 
 use std::path::{Path, PathBuf};
 

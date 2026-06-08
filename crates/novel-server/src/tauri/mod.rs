@@ -10,6 +10,7 @@ mod event_payload;
 mod events;
 mod session_api;
 mod state;
+mod stream_coalesce;
 
 pub use commands::*;
 pub use dto::{SessionTranscriptLayout, UiMessage, UiTurnBundle};

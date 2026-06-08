@@ -190,7 +190,7 @@ function AppShell({
 export default function App() {
   const appStatus = useAppStatus();
   return (
-    <AgentProvider onTurnComplete={() => void appStatus.refresh()}>
+    <AgentProvider onTurnComplete={(s) => void appStatus.refresh(s)}>
       <AppShell appStatus={appStatus} />
     </AgentProvider>
   );

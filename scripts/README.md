@@ -65,6 +65,7 @@ bash scripts/ci-security-audit.sh
 | 脚本 | 用途 |
 |------|------|
 | `reset-work-databases.ps1` / `.sh` | 删除 `works/*/.novel-agent/state.db` 后由应用重建。**升级后若移除旧 transcript/tool 显示兼容层，或 metadata 报 legacy format、无法 resume，须先跑此脚本再开新会话**（与 `novel-state` metadata 策略一致） |
+| `smoke-ipc-fork.ps1` / `.sh` | **本地冒烟**：Phase 1 自动跑 IPC 相关 nextest + `ipc-flood-acceptance`；Phase 2 手动 `cargo tauri dev` 后 `.\scripts\smoke-ipc-fork.ps1 -LogFile <log>` 扫 `PostMessage`。**不进 CI** |
 
 ## Node 24
 

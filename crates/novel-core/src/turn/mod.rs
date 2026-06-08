@@ -1,5 +1,8 @@
 //! Main-session turn execution: inner ReAct loop, LLM streaming, tool dispatch.
 
+/// Consecutive identical tool failures before ending the turn early.
+pub(crate) const TOOL_FAILURE_CIRCUIT_THRESHOLD: u32 = 5;
+
 mod context;
 mod llm_stream;
 pub mod r#loop;

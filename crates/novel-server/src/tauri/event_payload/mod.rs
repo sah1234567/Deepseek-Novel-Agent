@@ -1,6 +1,7 @@
 //! Map core engine events to Tauri emit `(event_name, payload)` pairs.
 
 mod compaction;
+mod status;
 mod stream;
 mod subagent;
 mod tool;
@@ -28,7 +29,8 @@ pub(crate) fn core_event_payload(
     if let Some(pair) = subagent::subagent_payload(event) {
         return Some(pair);
     }
-    stream::stream_payload(event, message_id)
+    status::interruptible_payload(event)
+        .or_else(|| stream::stream_payload(event, message_id))
         .or_else(|| tool::tool_payload(event))
         .or_else(|| compaction::compaction_payload(event))
 }
@@ -327,5 +329,15 @@ mod tests {
     fn turn_start_not_routed_via_subagent_helper() {
         let (name, _) = core_event_payload(&Event::TurnStart { turn_number: 1 }, "m").unwrap();
         assert_eq!(name, "turn-complete");
+    }
+
+    #[test]
+    fn interruptible_status_payload() {
+        let event = Event::InterruptibleStatusChanged {
+            has_interruptible_tool_in_progress: true,
+        };
+        let (name, payload) = core_event_payload(&event, "m").unwrap();
+        assert_eq!(name, "interruptible-status-changed");
+        assert_eq!(payload["hasInterruptibleToolInProgress"], true);
     }
 }

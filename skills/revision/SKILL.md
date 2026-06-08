@@ -30,7 +30,19 @@ allowed-tools: Read, Write, Edit, Glob, Grep, Bash, CharacterSearch, PlotGraph, 
 
 修订正文时同步清除 AI 味：删改「不是…而是…」、破折号泛滥、「然后/首先/其次」堆砌、句长均匀、情感空标签、说明书式叙述；补入具体细节与闲笔，长短句交替。
 
-**Edit 后读盘**：每文件 Edit 后 Read/Tail **改动段一次**再改下一处；禁止对同一 `offset`/`limit`（或 Tail `lines`）连读两次——第二次可能读到缓存副本而非落盘最新内容，导致后续 Edit 基于过时文本。
+**同文件连续改稿**：
+- 只能 Edit **对话里已出现 Read/Tail tool_result 的行域**（旧 cache 未覆盖的新行须等 Read 进上下文）
+- 同轮对新区域 `Read`/`Tail` 后立刻 `Edit` 会被工具拒绝（未改盘）；**下一条消息重试 Edit** 即可，文件未变则无需再 Read
+- 已在上下文覆盖的行内：可连续多次 Edit，无需每次 Edit 后再 Read
+- 下一处超出已读行域：先 Read/Tail 扩大窗口（章末用 Tail `lines`），**等结果进入对话后**再 Edit
+- 多轮分段 Read 会扩大可改行域（例：先读 80–100、再读 50–90 → 可改 50–100）；文件未变时勿用相同 Read 参数重读
+- Edit 成功后同参 Read 会 dedup stub，对话仍是改前正文；下一条 Edit 用 **Grep + 更新后磁盘文本**，或 Read **不同** offset/limit
+
+**按 Subagent 报告 Edit（强制）**：
+- `old_string` **只能**来自 Read/Tail `tool_result`（去掉 `行号\t`），**禁止**用 CCA/KA 概括句、示例句、禁用模式描述当 `old_string`
+- 报告给行号：`Grep` 该行附近独特词 → `Read offset/limit` → 复制 exact 片段
+- 报告写「保留 / 无需修改」→ **跳过** Edit（避免 identical）
+- `old_string not found on disk`：**不是** cache 失效；先 Grep，禁止同参反复 Read
 
 修改优先级（从基础到表层）：
 1. **世界观/战力文件**

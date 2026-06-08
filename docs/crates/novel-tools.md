@@ -49,13 +49,24 @@ CharacterSearch, PlotGraph, PlotGrid, ForeshadowTracker, Stats, Corkboard, Chara
 
 **PermissionResult：** Allow / Deny / Ask
 
-**ToolContext** 为每个工具调用提供：权限配置（mode/deny_rules/always_allow）、项目路径、会话 DB（TodoWrite 读写）、权限模式覆盖（前端下拉切换）、Read 文件缓存（用于同文件同 range 去重与 Edit 一致性校验）、Skills 目录、fork 控制（`allow_fork` / `subagent_queue`）。压缩后缓存清空，避免 dedup 指向已摘要的历史 tool_result。
+**ToolContext** 为每个工具调用提供：权限配置（mode/deny_rules/always_allow）、项目路径、会话 DB（TodoWrite 读写）、权限模式覆盖（前端下拉切换）、**内存** Read 文件缓存（同 path 去重、Edit 行域门禁、Edit 后 patch 并标记 `EditPatched` 禁用 dedup；**不持久化**到 SQLite；resume 空表）、同路径 `file_op_locks`（Read/Tail/Edit/Write 串行）、Skills 目录、fork 控制（`allow_fork` / `subagent_queue`）。Compaction 后 `clear_read_file_cache()`，避免 dedup 指向已摘要的历史 tool_result。
 
 **写路径约束：** 仅 `validate_write_root`（作品 sandbox 内 + 非受保护路径）。无 `allow_chapter_write` / 章节专禁。
 
-### 1.4 Read-before-write
+### 1.4 Read-before-write 与 read cache
 
-Normal 模式下 Write/Edit 要求目标 path 已在 `read_file_cache` 中（本会话曾 Read）。Plan/Auto/Unattended 可跳过。
+Normal 模式下 Write/Edit 要求目标 path 已在 `read_file_cache` 中（本会话曾 Read/Tail）。Plan/Auto/Unattended 可跳过。
+
+**Cache 规则（工具 `call` 内真相源，非 middleware）：**
+
+| 规则 | 行为 |
+|------|------|
+| R0 窗口并集 | 同 mtime 的 partial Read/Tail 合并 span（例 80–100 + 50–90 → 50–100），从磁盘重切 `raw_content` |
+| R1 Edit 行域 | `replace_all` 时**全部**匹配行须在 cached span 内；单次替换仅校验首匹配 |
+| R2 Edit patch | partial cache Edit 后增量 patch（保留 offset/limit/source）；Write 仍整文件 `WriteRefresh` |
+| R3 Compaction | 压缩后清空 cache |
+
+**Pipeline 分层：** `format_tool_result_for_llm` 仅追加 LLM 文案（`enhance_tool_error_for_llm` / `[fact]` / `[read-dedup]`），不读写 cache。
 
 ### 1.5 AskUserQuestion
 
@@ -73,7 +84,7 @@ SSE 流开始前创建，Allow 权限的工具在 arguments JSON 完整时即可
 |------|------|
 | Read | 行号分页；knowledge/** 无 limit 且 >80 行工具内拒绝；全量 ≤256KB；相同 path+range+mtime 重复 → stub |
 | **Tail** | 读文件物理末尾 N 行（默认 80）；续写衔接；写入 partial read cache（source=Tail）；knowledge ≤80 / chapters ≤200 行硬限 |
-| Write / Edit | 写/精确替换；`replace_all`；Edit 要求唯一匹配（非 replace_all）；stale/partial read 守卫 |
+| Write / Edit | Write 整文件入 cache（`WriteRefresh`）；Edit `replace_all` + 行域 ⊆ cached span；Edit 后 partial patch；同路径 file lock；stale mtime 守卫 |
 | Grep | ripgrep 生态；`search_root` 可选（默认作品根）；匹配 ≤80 行 |
 | Glob | 通配符搜路径（`*`/`**`/`?`；带 `/` 的前缀 pattern；无 `/` 则任意深度；`dir/*` 等价 `dir/**`）；`search_root` 可选；输出统一 `/` |
 | Bash | Shell 命令 |

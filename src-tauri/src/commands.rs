@@ -219,6 +219,26 @@ pub async fn get_fork_messages(
 }
 
 #[tauri::command]
+pub fn subscribe_fork_stream(
+    state: State<'_, AppState>,
+    app: AppHandle,
+    run_id: String,
+) -> Result<(), String> {
+    let ctx = state.command_context(app);
+    novel_server::tauri::subscribe_fork_stream(&ctx, run_id)
+}
+
+#[tauri::command]
+pub fn unsubscribe_fork_stream(
+    state: State<'_, AppState>,
+    app: AppHandle,
+    run_id: String,
+) -> Result<(), String> {
+    let ctx = state.command_context(app);
+    novel_server::tauri::unsubscribe_fork_stream(&ctx, run_id)
+}
+
+#[tauri::command]
 pub async fn set_api_config(
     state: State<'_, AppState>,
     app: AppHandle,

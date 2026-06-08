@@ -1,5 +1,7 @@
 //! Hardcoded partial reports when a sub-agent hits context limits.
 
+use novel_knowledge::truncate_chars;
+
 pub const OVERFLOW_KIND_INPUT_REJECTED: &str = "请求被拒绝：输入 token 超出模型窗口";
 pub const OVERFLOW_KIND_OUTPUT_TRUNCATED: &str = "末轮输出被截断：生成触达 token 上限";
 
@@ -17,12 +19,7 @@ pub fn build_partial_report(agent_type: &str, task_preview: &str, overflow_kind:
 }
 
 pub fn task_preview_120(task: &str) -> String {
-    let preview: String = task.chars().take(120).collect();
-    if task.chars().count() > 120 {
-        format!("{preview}…")
-    } else {
-        preview
-    }
+    truncate_chars(task, 120)
 }
 
 #[cfg(test)]
@@ -47,5 +44,13 @@ mod tests {
         let long = "a".repeat(200);
         let p = task_preview_120(&long);
         assert!(p.chars().count() <= 121);
+    }
+
+    #[test]
+    fn task_preview_truncates_cjk_without_panic() {
+        let long = "请".repeat(200);
+        let p = task_preview_120(&long);
+        assert!(p.chars().count() <= 121);
+        assert!(p.ends_with('…'));
     }
 }

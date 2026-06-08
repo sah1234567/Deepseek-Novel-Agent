@@ -426,6 +426,9 @@ fn clear_read_file_cache_removes_all_entries() {
             limit: None,
             total_lines: 1,
             source: ReadCacheSource::WriteRefresh,
+            transcript_committed: true,
+            committed_offset: None,
+            committed_limit: None,
         },
     );
     assert_eq!(engine.shared.read_file_cache.len(), 1);

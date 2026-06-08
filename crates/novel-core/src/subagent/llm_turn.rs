@@ -1,6 +1,7 @@
 //! Subagent LLM stream fetch (`subagent/runner::run_subagent_job` 抽出)。
 
 use crate::engine::session_llm::{apply_session_usage, SessionLlmSnapshot};
+use crate::fork_stream_subs::try_send_fork_overlay_event;
 use crate::interrupt::finalize::{
     finalize_stream_cancel, FinalizeStreamCancelParams, ForkTranscriptSink,
 };
@@ -65,6 +66,7 @@ pub(crate) async fn fetch_subagent_llm_completion(
         let _ = abort_tx;
         let fork_run_id_stream = fork_run_id.to_string();
         let event_tx_stream = event_tx.cloned();
+        let subs_stream = Arc::clone(&shared.fork_stream_subs);
         let result = client
             .create_stream(
                 llm_msgs,
@@ -72,7 +74,7 @@ pub(crate) async fn fetch_subagent_llm_completion(
                 shared.settings.model.max_output_tokens,
                 move |ev: StreamEvent| {
                     if let Some(ref tx) = event_tx_stream {
-                        forward_subagent_stream_event(tx, &fork_run_id_stream, ev);
+                        forward_subagent_stream_event(&subs_stream, tx, &fork_run_id_stream, ev);
                     }
                 },
                 Some(on_tool),
@@ -197,10 +199,14 @@ pub(crate) fn subagent_after_completion(
         apply_session_usage(shared, u, llm_snap, event_tx, false);
     }
     if let Some(tx) = event_tx {
-        let _ = tx.send(Event::AssistantSegmentComplete {
-            segment_index: inner_turn,
-            fork_run_id: Some(fork_run_id.to_string()),
-        });
+        try_send_fork_overlay_event(
+            &shared.fork_stream_subs,
+            tx,
+            Event::AssistantSegmentComplete {
+                segment_index: inner_turn,
+                fork_run_id: Some(fork_run_id.to_string()),
+            },
+        );
     }
     Ok(None)
 }

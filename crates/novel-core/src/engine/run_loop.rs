@@ -53,6 +53,7 @@ impl AgentEngine {
             db: Some(Arc::new(self.shared.session.db.clone())),
             permission_mode_override: Some(Arc::clone(&self.shared.permission_mode_override)),
             read_file_cache: Some(Arc::clone(&self.shared.read_file_cache)),
+            file_op_locks: Some(Arc::clone(&self.shared.file_op_locks)),
             allow_fork: self.shared.sub_agent_count.load(Ordering::SeqCst) == 0,
             subagent_queue: Some(Arc::clone(&self.shared.subagent_queue)),
             current_tool_call_id: None,

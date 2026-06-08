@@ -1,7 +1,9 @@
 use crate::tauri::engine_loop::EngineCommand;
 use crate::tauri::events::emit_core_event;
 use crate::tauri::state::CommandContext;
+use crate::tauri::stream_coalesce::StreamCoalescer;
 use tokio::sync::mpsc;
+use tokio::time::{interval, MissedTickBehavior};
 
 use super::engine_ipc::send_engine_reply;
 
@@ -19,8 +21,31 @@ pub fn spawn_event_forwarder(
         } else {
             current_message_id.read().await.clone()
         };
-        while let Some(event) = event_rx.recv().await {
-            emit_core_event(&app_handle, event, &mid);
+        let mut coalescer = StreamCoalescer::new();
+        let mut tick = interval(StreamCoalescer::coalesce_window());
+        tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                maybe_event = event_rx.recv() => {
+                    match maybe_event {
+                        Some(event) => {
+                            if StreamCoalescer::should_flush_before(&event) {
+                                coalescer.flush_all(&app_handle, &mid);
+                            }
+                            if let Some(passthrough) = coalescer.try_buffer(event) {
+                                emit_core_event(&app_handle, passthrough, &mid);
+                            }
+                        }
+                        None => {
+                            coalescer.flush_all(&app_handle, &mid);
+                            break;
+                        }
+                    }
+                }
+                _ = tick.tick() => {
+                    coalescer.flush_all(&app_handle, &mid);
+                }
+            }
         }
     });
     event_tx

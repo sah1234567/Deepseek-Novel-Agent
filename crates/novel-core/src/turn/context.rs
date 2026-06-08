@@ -34,12 +34,12 @@ impl TurnContext {
     }
 
     pub fn needs_continuation(&self) -> bool {
-        self.inner_spent() < self.max_inner_turns
+        self.max_inner_turns == 0 || self.inner_spent() < self.max_inner_turns
     }
 
     pub fn increment_inner(&mut self) -> Result<(), TerminalReason> {
         self.inner_turn += 1;
-        if self.inner_spent() >= self.max_inner_turns {
+        if self.max_inner_turns > 0 && self.inner_spent() >= self.max_inner_turns {
             return Err(TerminalReason::MaxReactLoops(self.max_inner_turns));
         }
         Ok(())
@@ -56,6 +56,15 @@ mod tests {
         assert!(t.needs_continuation());
         assert!(t.increment_inner().is_ok());
         assert!(t.increment_inner().is_err());
+    }
+
+    #[test]
+    fn zero_max_means_unlimited_inner_turns() {
+        let mut t = TurnContext::new(0);
+        for _ in 0..200 {
+            assert!(t.needs_continuation());
+            assert!(t.increment_inner().is_ok());
+        }
     }
 
     #[test]

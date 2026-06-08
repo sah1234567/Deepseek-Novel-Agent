@@ -22,7 +22,7 @@
 | 情节 | `knowledge/plot/`（大纲、细纲、伏笔、因果链） |
 | 共享设定 | `knowledge/shared-systems/`（世界观、时间线、场景/道具/势力追踪表等） |
 | 多世界 | `knowledge/worlds/<名>/`（Skill 驱动创建） |
-| 审计台账 | `knowledge/meta/audit-status.md`（PA/KA/CCA 状态 + 修复记录；**不**写入 `INDEX.md`，`rebuild_index` 会覆写 INDEX） |
+| 审计台账 | `knowledge/meta/audit-status.md`（PA/KA/CCA 状态表；**不**写入 `INDEX.md`，`rebuild_index` 会覆写 INDEX） |
 
 场景/道具/势力等追踪表以 **Markdown 表格** 存在于 `shared-systems/`；查询由 **`TrackingQuery` 工具**（`novel-tools`）解析，不再单独 Rust 模块。
 

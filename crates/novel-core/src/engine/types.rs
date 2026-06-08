@@ -1,4 +1,5 @@
 use crate::engine::session_llm::{write_session_llm, SessionLlm, SessionLlmSnapshot};
+use crate::fork_stream_subs::ForkStreamSubscriptions;
 use crate::interrupt::AbortController;
 use crate::{ChatMessage, ContextManager, SessionHandle};
 
@@ -52,6 +53,7 @@ pub struct EngineShared {
     pub abort_controller: Arc<AbortController>,
     pub permission_mode_override: Arc<Mutex<PermissionMode>>,
     pub read_file_cache: Arc<DashMap<PathBuf, ReadCacheEntry>>,
+    pub file_op_locks: Arc<DashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>,
     pub subagent_queue: SubagentWorkQueue,
     pub session_llm: SessionLlm,
     pub drain_in_progress: Arc<std::sync::atomic::AtomicBool>,
@@ -60,6 +62,8 @@ pub struct EngineShared {
     pub global_config_path: PathBuf,
     pub system_prompt: String,
     pub sub_agent_count: Arc<AtomicU32>,
+    /// UI overlay subscriptions; gates fork stream/tool IPC at source.
+    pub fork_stream_subs: ForkStreamSubscriptions,
 
     /// Ensures only one compaction runs at a time on the main session.
     pub compaction_lock: Arc<tokio::sync::Mutex<()>>,
@@ -137,6 +141,9 @@ pub struct AgentEngine {
     pub(crate) read_skill_reference_paths: Vec<String>,
     pub(crate) last_chapter_written: Option<String>,
     pub(crate) compaction_fail_count: u32,
+    /// Consecutive identical tool failure signature within the active turn.
+    pub(crate) consecutive_tool_failure_key: Option<String>,
+    pub(crate) consecutive_tool_failure_count: u32,
     /// Monotonic `(turn_number, sequence)` counter for the active user turn.
     /// User message is `0`; assistant/tool messages use `1, 2, 3…` in chat order.
     pub(crate) turn_message_seq: i32,
@@ -193,5 +200,10 @@ impl AgentEngine {
             message: message.into(),
             recoverable,
         });
+    }
+
+    /// Re-attach the shared subscription set after engine replace (resume / new session).
+    pub fn attach_fork_stream_subs(&mut self, subs: ForkStreamSubscriptions) {
+        self.shared.fork_stream_subs = subs;
     }
 }

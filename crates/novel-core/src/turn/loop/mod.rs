@@ -18,8 +18,6 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-use inner_turn::MAIN_MAX_INNER_TURNS;
-
 impl AgentEngine {
     pub fn init_llm(&mut self) {
         if self.llm.is_some() {
@@ -140,7 +138,9 @@ impl AgentEngine {
 
         self.init_llm();
 
-        let mut turn_ctx = TurnContext::new(MAIN_MAX_INNER_TURNS);
+        self.reset_tool_failure_circuit();
+        let max_react = self.shared.settings.agent.max_react_loops;
+        let mut turn_ctx = TurnContext::new(max_react);
         let reason = self.run_inner_turn_loop(&mut turn_ctx, event_tx).await?;
 
         let (hit, miss, comp, _ctx) = self.session_token_summary();
@@ -312,6 +312,9 @@ impl AgentEngine {
         let tool_msg = tool_result_message(tool_call_id, &content);
         self.messages.push(tool_msg.clone());
         self.persist_message_alloc(&tool_msg)?;
+        if success {
+            ctx.promote_read_cache_for_tool_result(&spec.name, &spec.input);
+        }
         if event_tx.is_some()
             && self.pending_tools.is_empty()
             && self.pending_user_question.is_none()
@@ -429,7 +432,8 @@ impl AgentEngine {
         );
         self.init_llm();
         self.init_turn_message_seq_from_db()?;
-        let mut turn_ctx = TurnContext::new(MAIN_MAX_INNER_TURNS);
+        let max_react = self.shared.settings.agent.max_react_loops;
+        let mut turn_ctx = TurnContext::new(max_react);
         let resume_inner = self.resume_inner_turn_from_messages();
         turn_ctx.inner_turn = resume_inner;
         turn_ctx.inner_turn_at_start = resume_inner;

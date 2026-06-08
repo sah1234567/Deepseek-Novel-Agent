@@ -5,10 +5,9 @@ use super::common::{
 use crate::{Tool, ToolContext, ToolError, ToolOutput};
 use async_trait::async_trait;
 use novel_knowledge::KnowledgeStore;
-use serde::Serialize;
 use serde_json::{json, Value};
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 pub(crate) struct GridRow {
     chapter: String,
     scene: String,
@@ -21,10 +20,9 @@ pub(crate) struct GridRow {
     structure_unit: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 pub(crate) struct PlotGridResult {
     grid: Vec<GridRow>,
-    dimensions: Vec<String>,
 }
 
 const ALL_DIMENSIONS: &[&str] = &[
@@ -193,10 +191,70 @@ impl Tool for PlotGridTool {
             .unwrap_or_else(|| ALL_DIMENSIONS.iter().map(|s| s.to_string()).collect());
         let result = build_plot_grid(&ctx.project_root, range, dimensions)?;
         Ok(ToolOutput {
-            content: serde_json::to_string_pretty(&result)
-                .map_err(|e| ToolError::Execution(format!("json serialize: {e}")))?,
+            content: format_plot_grid_markdown(&result),
             is_error: false,
         })
+    }
+}
+
+fn merge_detail_into_row(row: &mut GridRow, detail: &GridRow) {
+    if row.scene.is_empty() {
+        row.scene = detail.scene.clone();
+    }
+    if row.pov_character == "—" {
+        row.pov_character = detail.pov_character.clone();
+    }
+    if row.foreshadowings.is_empty() {
+        row.foreshadowings = detail.foreshadowings.clone();
+    }
+    if row.core_event.is_empty() {
+        row.core_event = detail.core_event.clone();
+    }
+    if detail.tension_level > row.tension_level {
+        row.tension_level = detail.tension_level;
+    }
+}
+
+fn merge_outline_master(
+    grid_map: &mut std::collections::BTreeMap<u32, GridRow>,
+    project_root: &std::path::Path,
+    range: Option<(u32, u32)>,
+) {
+    let store = KnowledgeStore::new(project_root);
+    let Ok(outline) = store.read_file("knowledge/plot/大纲.md") else {
+        return;
+    };
+    let (colmap, current_unit, data_rows) = parse_outline_with_header(&outline);
+    let map: &super::common::OutlineColumnMap = match &colmap {
+        Some(m) => m,
+        None => default_outline_column_map(),
+    };
+    for cells in data_rows {
+        if let Some((num, row)) = parse_outline_row(&cells, map, &current_unit) {
+            if in_chapter_range(num, range) {
+                grid_map.insert(num, row);
+            }
+        }
+    }
+}
+
+fn merge_detail_outlines(
+    grid_map: &mut std::collections::BTreeMap<u32, GridRow>,
+    project_root: &std::path::Path,
+    range: Option<(u32, u32)>,
+) {
+    for (num, path) in list_outline_files(project_root) {
+        if !in_chapter_range(num, range) {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let detail = parse_detailed_outline(&content, num);
+        grid_map
+            .entry(num)
+            .and_modify(|r| merge_detail_into_row(r, &detail))
+            .or_insert(detail);
     }
 }
 
@@ -205,63 +263,47 @@ pub(crate) fn build_plot_grid(
     range: Option<(u32, u32)>,
     dimensions: Vec<String>,
 ) -> Result<PlotGridResult, ToolError> {
-    let store = KnowledgeStore::new(project_root);
     let mut grid_map: std::collections::BTreeMap<u32, GridRow> = std::collections::BTreeMap::new();
-
-    if let Ok(outline) = store.read_file("knowledge/plot/大纲.md") {
-        let (colmap, current_unit, data_rows) = parse_outline_with_header(&outline);
-        let map: &super::common::OutlineColumnMap = match &colmap {
-            Some(m) => m,
-            None => default_outline_column_map(),
-        };
-        for cells in data_rows {
-            if let Some((num, row)) = parse_outline_row(&cells, map, &current_unit) {
-                if in_chapter_range(num, range) {
-                    grid_map.insert(num, row);
-                }
-            }
-        }
-    }
-
-    for (num, path) in list_outline_files(project_root) {
-        if !in_chapter_range(num, range) {
-            continue;
-        }
-        if let Ok(content) = std::fs::read_to_string(path) {
-            let detail = parse_detailed_outline(&content, num);
-            grid_map
-                .entry(num)
-                .and_modify(|r| {
-                    if r.scene.is_empty() {
-                        r.scene = detail.scene.clone();
-                    }
-                    if r.pov_character == "—" {
-                        r.pov_character = detail.pov_character.clone();
-                    }
-                    if r.foreshadowings.is_empty() {
-                        r.foreshadowings = detail.foreshadowings.clone();
-                    }
-                    if r.core_event.is_empty() {
-                        r.core_event = detail.core_event.clone();
-                    }
-                    if detail.tension_level > r.tension_level {
-                        r.tension_level = detail.tension_level;
-                    }
-                })
-                .or_insert(detail);
-        }
-    }
+    merge_outline_master(&mut grid_map, project_root, range);
+    merge_detail_outlines(&mut grid_map, project_root, range);
 
     let mut grid: Vec<GridRow> = grid_map.into_values().collect();
     apply_dimension_masks(&mut grid, &dimensions);
 
-    Ok(PlotGridResult {
-        grid,
-        dimensions: dimensions
-            .into_iter()
-            .filter(|d| ALL_DIMENSIONS.contains(&d.as_str()))
-            .collect(),
-    })
+    Ok(PlotGridResult { grid })
+}
+
+fn format_plot_grid_markdown(result: &PlotGridResult) -> String {
+    if result.grid.is_empty() {
+        return "(大纲索引无数据)".to_string();
+    }
+    let mut lines = vec![
+        "| Ch | 卷/单元 | 章节标题 | 核心事件 | POV | 张力 | 伏笔 | 时间点 |".to_string(),
+        "|-----|---------|---------|---------|-----|------|------|--------|".to_string(),
+    ];
+    for row in &result.grid {
+        let fs = if row.foreshadowings.is_empty() {
+            "—".into()
+        } else {
+            row.foreshadowings.join(", ")
+        };
+        lines.push(format!(
+            "| {} | {} | {} | {} | {} | {} | {} | {} |",
+            row.chapter.trim_start_matches("Ch"),
+            row.structure_unit,
+            row.scene,
+            row.core_event,
+            row.pov_character,
+            if row.tension_level > 0 {
+                row.tension_level.to_string()
+            } else {
+                "—".into()
+            },
+            fs,
+            row.timeline_point,
+        ));
+    }
+    lines.join("\n")
 }
 
 pub(crate) fn apply_dimension_masks(grid: &mut [GridRow], dimensions: &[String]) {
@@ -337,6 +379,60 @@ POV ✓ | 林若烟 |
     }
 
     #[test]
+    fn build_plot_grid_respects_chapter_range() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("knowledge/plot")).unwrap();
+        std::fs::write(
+            tmp.path().join("knowledge/plot/大纲.md"),
+            "| 卷 | 章 | 章节标题 | 核心事件 | 需推进的伏笔 | 张力 | POV | 时间点 |\n\
+             |----|-----|---------|---------|------------|-----|-----|-------|\n\
+             | 一 | 1 | 入门 | 事件一 | — | 3 | 甲 | 春 |\n\
+             | 一 | 2 | 试炼 | 事件二 | — | 3 | 乙 | 夏 |\n\
+             | 一 | 3 | 决战 | 事件三 | — | 3 | 丙 | 秋 |\n",
+        )
+        .unwrap();
+        let result = build_plot_grid(
+            tmp.path(),
+            Some((2, 2)),
+            ALL_DIMENSIONS.iter().map(|s| s.to_string()).collect(),
+        )
+        .expect("build_plot_grid");
+        assert_eq!(result.grid.len(), 1);
+        assert_eq!(result.grid[0].chapter, "Ch2");
+        assert_eq!(result.grid[0].pov_character, "乙");
+    }
+
+    #[test]
+    fn merge_detail_into_row_fills_empty_fields() {
+        let mut row = GridRow {
+            chapter: "Ch7".into(),
+            scene: String::new(),
+            pov_character: "—".into(),
+            timeline_point: "春".into(),
+            tension_level: 2,
+            foreshadowings: vec![],
+            core_event: String::new(),
+            structure_unit: "卷一".into(),
+        };
+        let detail = GridRow {
+            chapter: "Ch7".into(),
+            scene: "山门试炼".into(),
+            pov_character: "林若烟".into(),
+            timeline_point: "夏".into(),
+            tension_level: 4,
+            foreshadowings: vec!["F03".into()],
+            core_event: "测试灵根".into(),
+            structure_unit: "卷一".into(),
+        };
+        merge_detail_into_row(&mut row, &detail);
+        assert_eq!(row.scene, "山门试炼");
+        assert_eq!(row.pov_character, "林若烟");
+        assert_eq!(row.foreshadowings, vec!["F03"]);
+        assert_eq!(row.core_event, "测试灵根");
+        assert_eq!(row.tension_level, 4);
+    }
+
+    #[test]
     fn build_plot_grid_filters_dimensions() {
         let tmp = TempDir::new().unwrap();
         std::fs::create_dir_all(tmp.path().join("knowledge/plot")).unwrap();
@@ -349,9 +445,8 @@ POV ✓ | 林若烟 |
         .unwrap();
         let result =
             build_plot_grid(tmp.path(), None, vec!["pov".into()]).expect("build_plot_grid");
-        assert_eq!(result.dimensions, vec!["pov"]);
-        assert_eq!(result.grid[0].scene, "—");
         assert_eq!(result.grid[0].pov_character, "林若烟");
+        assert_eq!(result.grid[0].scene, "—");
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -374,5 +469,9 @@ POV ✓ | 林若烟 |
         let out = tool.call(json!({}), &ctx).await.unwrap();
         assert!(out.content.contains("林若烟"));
         assert!(out.content.contains("F03"));
+        assert!(
+            !out.content.starts_with('{'),
+            "should return markdown, not JSON"
+        );
     }
 }

@@ -34,7 +34,7 @@ React (ui/) ──invoke/listen──► src-tauri/commands.rs
 
 ### 1.2 AppState
 
-`AppConfig` 以 `Arc<RwLock<_>>` 共享于 engine loop 与 Tauri commands 之间，切换作品时更新 `active_project`。`CommandContext` 封装 engine 命令通道、config、abort_controller，供所有 Tauri command 使用。Engine 产生的 `Event` 经 `spawn_event_forwarder` 推送到前端。
+`AppConfig` 以 `Arc<RwLock<_>>` 共享于 engine loop 与 Tauri commands 之间，切换作品时更新 `active_project`。`CommandContext` 封装 engine 命令通道、config、abort_controller、`fork_stream_subs`，供所有 Tauri command 使用。Engine 产生的 `Event` 经 `spawn_event_forwarder` + `stream_coalesce`（50ms 合并 `stream-chunk` / `sub-agent-stream`；segment/tool/lifecycle 前强制 flush）推送到前端；emit 失败 1s rate-limit warn。
 
 ### 1.3 EngineCommand
 
@@ -93,7 +93,7 @@ React (ui/) ──invoke/listen──► src-tauri/commands.rs
 | `interrupt` | 中断当前 turn | Esc / 发送中断 |
 | `approve_tool` / `deny_tool` | 工具批准/拒绝 | ChatPanel |
 | `answer_question` | AskUserQuestion | 问答 UI |
-| `get_app_status` | 轮询状态（30s）+ `permission-mode-changed` / `tool-call-request`(result) 刷新；turn 结束经 `AgentProvider.onTurnComplete` 单次 refresh；会话切换由 invoke 调用方 refresh | `useAppStatus` |
+| `get_app_status` | 初始/切 session 灌入；30s 非 token 兜底 + `permission-mode-changed` / `tool-call-request`(result) / turn 结束 `onTurnComplete` 刷新；token 四字段主路径为 `session-tokens-updated` | `useAppStatus` |
 | `set_permission_mode` | 权限模式 | ChatPanel 底栏 |
 | `list_works` | 作品列表 | StatusBar 下拉 |
 | `create_work(name)` | 新建作品 + 切换 + 新 session | StatusBar |
@@ -104,7 +104,8 @@ React (ui/) ──invoke/listen──► src-tauri/commands.rs
 | `get_session_transcript_layout` | active/archive turn 边界 + `hasContextRefresh` | `useTranscriptLoader` bootstrap |
 | `get_session_message_turns` | active 工作集按 turn 范围 | `transcript/service.fetchActiveTurns` |
 | `get_session_archive_turns` | 单 epoch 归档按 turn 范围 | `transcript/service.fetchArchiveTurns` |
-| `get_fork_messages` | 子 Agent transcript 回放 | `useAgent.openForkOverlay`（打开 overlay 时 hydrate） |
+| `get_fork_messages` | 子 Agent transcript 回放 | `useAgent.openForkOverlay`（subscribe 后 hydrate） |
+| `subscribe_fork_stream` / `unsubscribe_fork_stream` | overlay 流式订阅门控（AppState `Arc`，不经 engine 队列） | `openForkOverlay` / `closeForkOverlay` |
 
 **前端 Turn 内存（纯 UI，无额外 IPC）：** `useTranscriptLoader` bootstrap 加载 turn 0（若有）+ active 尾部 6 轮（`TAIL_LOADED_TURNS`）；上滑 `IntersectionObserver` 懒加载；浏览 VIEW 6 轮滑动窗口、超 18 轮 loaded 时 `planMemoryWindow` 溢出淘汰；贴底欠填时 `planTailContentFill` 向上预取；贴底区稳定后 `planMemoryReconcile` 收缩回 TAIL 6。策略常量见 `ui/src/transcript/loadPolicy.ts`；计划函数见 `turnLoadPlan` / `turnMemoryPolicy`。详见 [FRAMEWORK §2.5 Turn 级懒加载](../../FRAMEWORK.md#25-前端状态与-ipc)。
 | `init_novel_project` | 当前作品 scaffold | SettingsPanel |
@@ -112,7 +113,7 @@ React (ui/) ──invoke/listen──► src-tauri/commands.rs
 | `update_session_todo` | Todo 状态 | StatusBar Todo 下拉 |
 | `get_api_config` / `set_api_config` | 全局 API（json） | SettingsPanel |
 
-共 **23** 个 Tauri command（见 `src-tauri/src/main.rs` `generate_handler!`）。
+共 **25** 个 Tauri command（见 `src-tauri/src/main.rs` `generate_handler!`）。
 
 **Tauri invoke 参数命名：** 前端使用 camelCase，Rust 命令参数为 snake_case。示例：
 
@@ -151,12 +152,13 @@ invoke("approve_tool", { toolCallId });
 |------------|------|
 | `stream-chunk` | ContentBlockDelta |
 | `ask-user-question` | AskUserQuestion；`questions[]` 经 `ask_questions_for_ui` 输出 **camelCase**（`allowMultiple` / `allowCustom`） |
-| `turn-complete` | TurnComplete（含 `wasInterrupted`）/ TurnStart / Error（`phase: "error"`）；**含 turn 级 token 字段；`useAgent` 在 turn 结束时调用 `onTurnComplete` → `useAppStatus` 单次 refresh** |
-| `session-tokens-updated` | SessionTokensUpdated；**`useAppStatus` 局部 patch token 四字段**（不调用 `get_app_status`） |
+| `turn-complete` | TurnComplete（含 `wasInterrupted`）/ TurnStart / Error（`phase: "error"`）；含 turn 级 token 字段（终局 payload 标记）；`onTurnComplete` → `useAppStatus` 单次 `get_app_status`（非 StatusBar token 主路径） |
+| `session-tokens-updated` | SessionTokensUpdated；每次 LLM `accumulate_session_tokens` 成功后推送（含 SubAgent）；**`useAppStatus` 局部 patch token 四字段**（不调用 `get_app_status`） |
 | `session-resumed` | create/open work、create/resume session；`useAgent` 清 streaming；`useProjectFiles` refresh；**不**触发 `useAppStatus` refresh（避免与 invoke 竞态） |
 | `permission-mode-changed` | SetPermissionMode → `useAppStatus` refresh |
 | `sub-agent-started` / `sub-agent-complete` | 子 Agent；payload 含 `forkRunId`、`agentType`、`parentToolCallId`（前端据其推断 `source`: tool \| hook） |
-| `sub-agent-stream` / `sub-agent-tool` | 子 Agent overlay 流式正文与工具 |
+| `sub-agent-stream` / `sub-agent-tool` | 子 Agent overlay 流式正文与工具（**novel-core 源头 gate**：未 `subscribe_fork_stream` 不 emit） |
+| `interruptible-status-changed` | InterruptibleStatusChanged；`hasInterruptibleToolInProgress` |
 | `assistant-segment-complete` | AssistantSegmentComplete（`segmentIndex`；可选 `forkRunId`） |
 | `compaction-progress` | CompactionProgress → **CompactionBanner**（ChatPanel viewport 顶部；`action` + `attempt` / `tokensBefore`/`tokensAfter` / `reason`；`done` 另含 `epoch` + `retainedMinTurn`/`retainedMaxTurn` 压缩前保留的 turn 范围） |
 

@@ -101,7 +101,11 @@ pub enum Event {
         turn_comp_tokens: i64,
         was_interrupted: bool,
     },
-    /// Session token counters updated after each LLM API call (for StatusBar live refresh).
+    /// Main-session interruptible tool flag changed (replaces 500ms `get_app_status` polling).
+    InterruptibleStatusChanged {
+        has_interruptible_tool_in_progress: bool,
+    },
+    /// Session token counters updated after each LLM API call (main and subagent; StatusBar live refresh).
     SessionTokensUpdated {
         cache_hit_tokens: i64,
         cache_miss_tokens: i64,
@@ -177,9 +181,16 @@ pub enum CompactionAction {
 pub enum TerminalReason {
     Completed,
     MaxReactLoops(u32),
+    /// Same tool error repeated too many times in one turn (death-spiral guard).
+    RepeatedToolFailures {
+        tool: String,
+        detail: String,
+    },
     AbortedStreaming,
     AbortedTools,
-    ModelError { message: String },
+    ModelError {
+        message: String,
+    },
 }
 
 impl TerminalReason {

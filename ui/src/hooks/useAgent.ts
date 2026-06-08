@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { IPC_COMMANDS } from "../ipc/commands";
-import type { AppStatusSnapshot } from "../transcript/eventPayloads";
 import type {
   ContentBlock,
   ForkRunState,
   PendingQuestion,
   UIMessage,
 } from "../types/messages";
+import type { AppStatus } from "./useAppStatus";
 import { useAgentTauriListeners } from "./useAgentTauriListeners";
 
 export type {
@@ -34,7 +34,7 @@ import {
 import type { TranscriptEvent, TranscriptMachine } from "../transcript/types";
 import { createRafBatcher } from "../utils/rafDispatch";
 
-export function useAgent(onTurnComplete?: () => void) {
+export function useAgent(onTurnComplete?: (prefetched?: AppStatus) => void) {
   const onTurnCompleteRef = useRef(onTurnComplete);
   onTurnCompleteRef.current = onTurnComplete;
 
@@ -80,9 +80,12 @@ export function useAgent(onTurnComplete?: () => void) {
   );
   const forkStreamBatchRef = useRef(
     createRafBatcher<{ forkRunId: string; event: TranscriptEvent }>((items) => {
+      const openId = openForkRunIdRef.current;
+      if (!openId) return;
       setForkRuns((prev) => {
         let next: Map<string, ForkRunState> | null = null;
         for (const { forkRunId, event } of items) {
+          if (forkRunId !== openId) continue;
           const source: Map<string, ForkRunState> = next ?? prev;
           const run = source.get(forkRunId);
           if (!run) continue;
@@ -121,19 +124,6 @@ export function useAgent(onTurnComplete?: () => void) {
 
   isStreamingRef.current = isStreaming;
 
-  const refreshInterruptibleStatus = useCallback(async () => {
-    if (!isStreamingRef.current) {
-      setHasInterruptibleToolInProgress(false);
-      return;
-    }
-    try {
-      const s = await invoke<AppStatusSnapshot>(IPC_COMMANDS.getAppStatus);
-      setHasInterruptibleToolInProgress(!!s.hasInterruptibleToolInProgress);
-    } catch {
-      setHasInterruptibleToolInProgress(false);
-    }
-  }, []);
-
   const drainMessageQueue = useCallback(() => {
     const next = messageQueueRef.current.shift();
     if (next) {
@@ -148,12 +138,8 @@ export function useAgent(onTurnComplete?: () => void) {
   useEffect(() => {
     if (!isStreaming) {
       setHasInterruptibleToolInProgress(false);
-      return;
     }
-    void refreshInterruptibleStatus();
-    const interval = setInterval(() => void refreshInterruptibleStatus(), 500);
-    return () => clearInterval(interval);
-  }, [isStreaming, refreshInterruptibleStatus]);
+  }, [isStreaming]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -177,7 +163,6 @@ export function useAgent(onTurnComplete?: () => void) {
   useAgentTauriListeners({
     dispatchMain,
     drainMessageQueue,
-    refreshInterruptibleStatus,
     flushStreamBatches,
     streamChunkBatchRef,
     forkStreamBatchRef,
@@ -339,6 +324,7 @@ export function useAgent(onTurnComplete?: () => void) {
     setOpenForkRunId(forkRunId);
     setForkRuns((prev) => mergeForkRunOnOpen(prev, forkRunId));
     try {
+      await invoke(IPC_COMMANDS.subscribeForkStream, { runId: forkRunId });
       const raw = await invoke<
         Array<{
           id: string;
@@ -356,6 +342,10 @@ export function useAgent(onTurnComplete?: () => void) {
   }, []);
 
   const closeForkOverlay = useCallback(() => {
+    const runId = openForkRunIdRef.current;
+    if (runId) {
+      void invoke(IPC_COMMANDS.unsubscribeForkStream, { runId }).catch(() => {});
+    }
     setOpenForkRunId(null);
   }, []);
 

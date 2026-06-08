@@ -1,4 +1,4 @@
-use crate::{KnowledgeError, KnowledgeStore};
+use crate::{text_util::truncate_chars, KnowledgeError, KnowledgeStore};
 use regex::Regex;
 use serde::Serialize;
 use std::sync::OnceLock;
@@ -232,11 +232,9 @@ fn rebuild_status_table(content: &str, rows: &[AuditChapterRow]) -> String {
 
 fn split_status_section(content: &str) -> (String, String) {
     let start = content.find(STATUS_TABLE_HEADING).unwrap_or(content.len());
-    let rest = &content[start + STATUS_TABLE_HEADING.len()..];
-    let repair_start = rest.find("## 修复记录").unwrap_or(rest.len());
     let before = content[..start].to_string();
-    let after = rest[repair_start..].to_string();
-    (before, after)
+    // Status table only; trailing content after the table is dropped on rebuild.
+    (before, String::new())
 }
 
 /// Mark chapters as `已审计` after a subagent report is injected.
@@ -250,11 +248,7 @@ pub fn mark_audited(
         return Ok(());
     }
     let mut content = ensure_audit_status(store)?;
-    let note = if task_snippet.len() > 80 {
-        format!("{}…", &task_snippet[..80])
-    } else {
-        task_snippet.to_string()
-    };
+    let note = truncate_chars(task_snippet, 80);
     for &ch in chapters {
         content = upsert_status_cell(&content, ch, kind, "已审计");
         if !note.is_empty() {
@@ -406,6 +400,22 @@ mod tests {
         assert_eq!(row1.body_ka, "未审");
         let row2 = query_chapter(&store, 2).expect("q").expect("row");
         assert_eq!(row2.plan_pa, "已审计");
+    }
+
+    #[test]
+    fn mark_audited_long_chinese_task_does_not_panic() {
+        let tmp = TempDir::new().expect("tmpdir");
+        let store = KnowledgeStore::new(tmp.path());
+        ensure_audit_status(&store).expect("ensure");
+        let long_task = format!(
+            "请你fork subagent检查第一章{}",
+            "场景细纲与正文对照审计".repeat(20)
+        );
+        mark_audited(&store, AuditKind::KnowledgeAuditor, &[1], &long_task).expect("mark");
+        let row = query_chapter(&store, 1).expect("q").expect("row");
+        assert_eq!(row.body_ka, "已审计");
+        assert!(!row.note.is_empty());
+        assert!(row.note.chars().count() <= 80);
     }
 
     #[test]

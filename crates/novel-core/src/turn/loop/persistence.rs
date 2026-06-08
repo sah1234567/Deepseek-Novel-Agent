@@ -1,5 +1,6 @@
 use crate::engine::session_llm::{apply_session_usage, read_session_llm};
 use crate::message::chat_to_json;
+use crate::turn::TOOL_FAILURE_CIRCUIT_THRESHOLD;
 use crate::Event;
 use crate::{AgentEngine, AgentError, ChatMessage};
 use novel_deepseek::LlmCompletion;
@@ -159,6 +160,35 @@ impl AgentEngine {
                 );
                 AgentError::State(e)
             })
+    }
+
+    pub(in crate::turn::r#loop) fn reset_tool_failure_circuit(&mut self) {
+        self.consecutive_tool_failure_key = None;
+        self.consecutive_tool_failure_count = 0;
+    }
+
+    pub(crate) fn record_tool_success(&mut self) {
+        self.reset_tool_failure_circuit();
+    }
+
+    pub(crate) fn record_tool_failure(&mut self, tool_name: &str, detail: &str) {
+        let key = format!("{tool_name}\x1f{detail}");
+        if self.consecutive_tool_failure_key.as_deref() == Some(key.as_str()) {
+            self.consecutive_tool_failure_count += 1;
+        } else {
+            self.consecutive_tool_failure_key = Some(key);
+            self.consecutive_tool_failure_count = 1;
+        }
+    }
+
+    pub(crate) fn take_repeated_tool_failure_trip(&mut self) -> Option<(String, String)> {
+        if self.consecutive_tool_failure_count < TOOL_FAILURE_CIRCUIT_THRESHOLD {
+            return None;
+        }
+        let key = self.consecutive_tool_failure_key.take()?;
+        self.consecutive_tool_failure_count = 0;
+        let (tool, detail) = key.split_once('\x1f')?;
+        Some((tool.to_string(), detail.to_string()))
     }
 
     pub(crate) fn record_usage(

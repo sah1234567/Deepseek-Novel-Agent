@@ -26,8 +26,21 @@ struct CharacterRotateResult {
 pub struct CharacterRotateTool;
 
 fn parse_appearance_chapters(content: &str) -> Vec<u32> {
+    // Only scan the 出场记录日志 table to avoid picking up chapter numbers
+    // from other tables (性格演变, 关系演变, etc.).
+    let heading = "## 出场记录日志";
+    let Some(section_start) = content.find(heading) else {
+        return vec![];
+    };
+    let section = &content[section_start..];
+    // Find the end of this section (next ## heading, or EOF).
+    let section_end = section[heading.len()..]
+        .find("\n## ")
+        .map(|i| i + heading.len())
+        .unwrap_or(section.len());
+    let bounded = &section[..section_end];
     let mut chapters = Vec::new();
-    for line in content.lines() {
+    for line in bounded.lines().skip(2) {
         if !line.starts_with('|') || line.contains("章节") || line.contains("---") {
             continue;
         }
@@ -205,5 +218,41 @@ mod tests {
             .await
             .unwrap();
         assert!(out.content.contains("\"is_missing\": true") || out.content.contains("is_missing"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn appearance_only_from_appearance_table() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("knowledge/characters")).unwrap();
+        // 关系演变日志 has Ch20, 出场记录日志 has Ch5. Should report Ch5 as last_appearance.
+        std::fs::write(
+            tmp.path().join("knowledge/characters/林若烟.md"),
+            "---\nname: 林若烟\ncategory: human\nfirstAppearance: Ch1\nlastUpdate: Ch1\nstatus: alive\npovCharacter: true\n---\n\
+             ## 出场记录日志\n| 章节 | 关键事件 | 伏笔关联 | 情绪弧线 |\n\
+             |------|---------|---------|---------|\n\
+             | Ch5 | 重逢 | — | 喜悦 |\n\
+             \n\
+             ## 关系演变日志\n| 章节 | 对象 | 旧关系 | 新关系 | 说话者称呼变化 | 对方对说话者称呼 | 触发事件 |\n\
+             |------|------|--------|--------|--------------|---------------|----------|\n\
+             | Ch20 | 陈默 | 陌生 | 亲近 | 前辈→陈默 | 丫头→若烟 | 救命 |\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(tmp.path().join("chapters")).unwrap();
+        for n in 2..=25 {
+            std::fs::write(
+                tmp.path().join(format!("chapters/chapter-{n:03}.md")),
+                "placeholder",
+            )
+            .unwrap();
+        }
+        let tool = CharacterRotateTool;
+        let ctx = ToolContext {
+            permission_mode: PermissionMode::Auto,
+            project_root: tmp.path().to_path_buf(),
+            ..ToolContext::new(tmp.path().to_path_buf())
+        };
+        let out = tool.call(json!({}), &ctx).await.unwrap();
+        // Should report "Ch5" as last chapter, not "Ch20" from 关系演变日志
+        assert!(out.content.contains("\"last_chapter\": \"Ch5\""));
     }
 }

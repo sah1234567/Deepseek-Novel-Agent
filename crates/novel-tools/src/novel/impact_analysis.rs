@@ -33,14 +33,20 @@ fn collect_appearance_impacts(
         let Ok(content) = store.read_file(&rel) else {
             continue;
         };
-        for line in content.lines() {
-            if !line.starts_with('|') || line.contains("章节") {
+        // Scope to 出场记录日志 table only — same fix as CharacterRotate.
+        let section = content
+            .find("## 出场记录日志")
+            .map(|i| &content[i..])
+            .unwrap_or(&content);
+        let section_end = section.find("\n## ").unwrap_or(section.len());
+        for line in section[..section_end].lines() {
+            if !line.starts_with('|') || line.contains("章节") || line.contains("---") {
                 continue;
             }
             if parse_chapter_num(line) >= target_ch {
                 out.push(ImpactFile {
                     path: rel.clone(),
-                    reason: format!("出场/演变日志含 Ch{target_ch} 及之后记录"),
+                    reason: format!("出场记录 Ch{target_ch} 及之后"),
                 });
                 break;
             }

@@ -1,6 +1,10 @@
-use crate::paths::{normalize_rel_path, resolve_under_project};
-use crate::read_cache::{read_range_key, ReadCacheEntry};
+use crate::paths::{normalize_rel_path, optional_file_path, resolve_under_project};
+use crate::read_cache::{
+    merge_read_cache_on_store, patch_read_cache_after_edit, read_range_key, ReadCacheEntry,
+    ReadCacheSource,
+};
 use crate::ToolError;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -75,6 +79,8 @@ pub struct ToolContext {
     pub permission_mode_override: Option<Arc<Mutex<PermissionMode>>>,
     /// Paths read this session (canonical) for read-before-write enforcement and dedup.
     pub read_file_cache: Option<Arc<dashmap::DashMap<PathBuf, ReadCacheEntry>>>,
+    /// Per-path serialization for Read/Tail/Edit/Write on the same file.
+    pub file_op_locks: Option<Arc<dashmap::DashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>>,
     /// Main session only; false while any sub-agent inner loop runs (blocks nested fork).
     pub allow_fork: bool,
     /// Engine subagent work queue; present only on main-session tool context.
@@ -103,6 +109,7 @@ impl ToolContext {
             db: None,
             permission_mode_override: None,
             read_file_cache: None,
+            file_op_locks: None,
             allow_fork: false,
             subagent_queue: None,
             current_tool_call_id: None,
@@ -189,7 +196,50 @@ impl ToolContext {
         resolve_under_project(&self.project_root, rel)
     }
 
-    pub fn store_read_cache(&self, path: &Path, entry: ReadCacheEntry) {
+    /// Serialize disk + cache ops for one path (Read∥Edit races).
+    pub async fn with_file_lock<F, Fut, T>(&self, path: &Path, f: F) -> T
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = T>,
+    {
+        let Some(locks) = &self.file_op_locks else {
+            return f().await;
+        };
+        let lock = locks
+            .entry(path.to_path_buf())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone();
+        let guard = lock.lock().await;
+        let out = f().await;
+        drop(guard);
+        out
+    }
+
+    /// Store read cache; merges partial windows when `disk_full` or `premerged_raw` supplied.
+    pub fn store_read_cache(
+        &self,
+        path: &Path,
+        entry: ReadCacheEntry,
+        rel_path: &str,
+        disk_full: Option<&str>,
+        premerged_raw: Option<&str>,
+    ) -> Result<(), ToolError> {
+        if let Some(cache) = &self.read_file_cache {
+            let existing = cache.get(path).map(|e| e.clone());
+            let final_entry = merge_read_cache_on_store(
+                existing.as_ref(),
+                entry,
+                rel_path,
+                disk_full,
+                premerged_raw,
+            )?;
+            cache.insert(path.to_path_buf(), final_entry);
+        }
+        Ok(())
+    }
+
+    /// Direct insert without merge (Write refresh, tests).
+    pub fn store_read_cache_direct(&self, path: &Path, entry: ReadCacheEntry) {
         if let Some(cache) = &self.read_file_cache {
             cache.insert(path.to_path_buf(), entry);
         }
@@ -199,6 +249,27 @@ impl ToolContext {
         self.read_file_cache
             .as_ref()
             .and_then(|c| c.get(path).map(|e| e.clone()))
+    }
+
+    /// After Read/Tail tool_result is in the transcript, widen the Edit-eligible span.
+    pub fn promote_read_cache_committed(&self, path: &Path) {
+        let Some(cache) = &self.read_file_cache else {
+            return;
+        };
+        if let Some(mut entry) = cache.get_mut(path) {
+            entry.commit_to_transcript();
+        }
+    }
+
+    /// Call when persisting a successful Read/Tail tool_result to messages.
+    pub fn promote_read_cache_for_tool_result(&self, tool_name: &str, input: &serde_json::Value) {
+        if tool_name != "Read" && tool_name != "Tail" {
+            return;
+        }
+        let Some(path) = optional_file_path(input) else {
+            return;
+        };
+        self.promote_read_cache_committed(&self.resolve_path(&path));
     }
 
     pub fn was_read(&self, path: &PathBuf) -> bool {
@@ -234,25 +305,6 @@ impl ToolContext {
             )));
         }
         Ok(())
-    }
-
-    /// Edit only: old_string must lie in the cached Read/Tail slice (full read always OK).
-    pub fn require_edit_in_read_slice(
-        &self,
-        full: &PathBuf,
-        old_string: &str,
-    ) -> Result<(), ToolError> {
-        let Some(entry) = self.read_cache_entry(full) else {
-            return Ok(());
-        };
-        if entry.is_full_read() || entry.covers_edit_target(old_string) {
-            return Ok(());
-        }
-        Err(ToolError::Execution(
-            "Edit target not in the read slice (only read a portion of this file). \
-             Read with offset/limit covering old_string, or Read full file."
-                .into(),
-        ))
     }
 
     /// True if cached mtime matches and the same offset/limit was read before.
@@ -298,17 +350,46 @@ impl ToolContext {
         } else {
             raw_content.lines().count()
         };
-        self.store_read_cache(
-            path,
-            ReadCacheEntry {
-                mtime_secs,
-                raw_content: raw_content.to_string(),
-                offset: None,
-                limit: None,
-                total_lines,
-                source: crate::read_cache::ReadCacheSource::WriteRefresh,
-            },
+        let mut entry = ReadCacheEntry {
+            mtime_secs,
+            raw_content: raw_content.to_string(),
+            offset: None,
+            limit: None,
+            total_lines,
+            source: ReadCacheSource::WriteRefresh,
+            transcript_committed: false,
+            committed_offset: None,
+            committed_limit: None,
+        };
+        entry.commit_to_transcript();
+        self.store_read_cache_direct(path, entry);
+    }
+
+    /// Patch session read cache after Edit (partial slice preserved).
+    #[allow(clippy::too_many_arguments)]
+    pub fn patch_cache_after_edit(
+        &self,
+        path: &Path,
+        updated_disk: &str,
+        mtime_secs: u64,
+        old_string: &str,
+        new_string: &str,
+        replace_all: bool,
+        occurrences_replaced: usize,
+    ) {
+        let Some(mut entry) = self.read_cache_entry(&path.to_path_buf()) else {
+            return;
+        };
+        patch_read_cache_after_edit(
+            &mut entry,
+            updated_disk,
+            mtime_secs,
+            old_string,
+            new_string,
+            replace_all,
+            occurrences_replaced,
         );
+        self.store_read_cache_direct(path, entry);
     }
 
     // Paths within project root that must never be written or edited.

@@ -56,28 +56,31 @@ impl Tool for WriteTool {
         ctx.validate_plan_mode_write_path(self.name(), &path)?;
         ctx.require_read_before_write(self.name(), &full, &path, "overwriting", true)?;
 
-        if full.exists() {
-            let existing = blocking::read_to_string(full.clone()).await?;
-            if let Some(entry) = ctx.read_cache_entry(&full) {
-                let meta = tokio::fs::metadata(&full).await.map_err(ToolError::Io)?;
-                entry.check_fresh_for_disk(file_mtime_secs(&meta), &existing, "overwriting")?;
+        ctx.with_file_lock(&full, || async {
+            if full.exists() {
+                let existing = blocking::read_to_string(full.clone()).await?;
+                if let Some(entry) = ctx.read_cache_entry(&full) {
+                    let meta = tokio::fs::metadata(&full).await.map_err(ToolError::Io)?;
+                    entry.check_fresh_for_disk(file_mtime_secs(&meta), &existing, "overwriting")?;
+                }
             }
-        }
 
-        if let Some(parent) = full.parent() {
-            blocking::create_dir_all(parent.to_path_buf()).await?;
-        }
-        blocking::write(full.clone(), content.clone()).await?;
+            if let Some(parent) = full.parent() {
+                blocking::create_dir_all(parent.to_path_buf()).await?;
+            }
+            blocking::write(full.clone(), content.clone()).await?;
 
-        let mtime = tokio::fs::metadata(&full)
-            .await
-            .map(|m| file_mtime_secs(&m))
-            .unwrap_or(0);
-        ctx.refresh_cache_after_write(&full, &content, mtime);
+            let mtime = tokio::fs::metadata(&full)
+                .await
+                .map(|m| file_mtime_secs(&m))
+                .unwrap_or(0);
+            ctx.refresh_cache_after_write(&full, &content, mtime);
 
-        Ok(ToolOutput {
-            content: format!("Wrote {}", full.display()),
-            is_error: false,
+            Ok(ToolOutput {
+                content: format!("Wrote {}", full.display()),
+                is_error: false,
+            })
         })
+        .await
     }
 }

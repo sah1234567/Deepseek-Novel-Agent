@@ -1,6 +1,9 @@
 use crate::AppConfig;
 use novel_config::ensure_work_under_works;
-use novel_core::{AbortController, AgentEngine, AgentError, EngineStatus, Event, TerminalReason};
+use novel_core::{
+    AbortController, AgentEngine, AgentError, EngineStatus, Event, ForkStreamSubscriptions,
+    TerminalReason,
+};
 use novel_state::SessionTodo;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -120,6 +123,7 @@ pub fn spawn_engine_loop(
     config: Arc<RwLock<AppConfig>>,
     abort_controller: Arc<AbortController>,
     turn_in_progress: Arc<AtomicBool>,
+    fork_stream_subs: ForkStreamSubscriptions,
 ) {
     tauri::async_runtime::spawn(async move {
         let mut engine = engine;
@@ -222,8 +226,10 @@ pub fn spawn_engine_loop(
                         ecfg,
                         &session_id,
                         Arc::clone(&abort_controller),
+                        Arc::clone(&fork_stream_subs),
                     ) {
-                        Ok(e) => {
+                        Ok(mut e) => {
+                            e.attach_fork_stream_subs(Arc::clone(&fork_stream_subs));
                             let sid = e.session_id().to_string();
                             engine = e;
                             sync_turn_in_progress_flag(&turn_in_progress, &engine);
@@ -240,19 +246,23 @@ pub fn spawn_engine_loop(
                     tracing::debug!("engine_command CreateSession");
                     abort_controller.clear();
                     let ecfg = config.read().await.engine_config();
-                    let result =
-                        match AgentEngine::new_with_abort(ecfg, Arc::clone(&abort_controller)) {
-                            Ok(e) => {
-                                let sid = e.session_id().to_string();
-                                engine = e;
-                                sync_turn_in_progress_flag(&turn_in_progress, &engine);
-                                Ok(sid)
-                            }
-                            Err(e) => {
-                                tracing::warn!(error = %e, "engine_command CreateSession failed");
-                                Err(e.to_string())
-                            }
-                        };
+                    let result = match AgentEngine::new_with_abort(
+                        ecfg,
+                        Arc::clone(&abort_controller),
+                        Arc::clone(&fork_stream_subs),
+                    ) {
+                        Ok(mut e) => {
+                            e.attach_fork_stream_subs(Arc::clone(&fork_stream_subs));
+                            let sid = e.session_id().to_string();
+                            engine = e;
+                            sync_turn_in_progress_flag(&turn_in_progress, &engine);
+                            Ok(sid)
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "engine_command CreateSession failed");
+                            Err(e.to_string())
+                        }
+                    };
                     let _ = reply.send(result);
                 }
                 EngineCommand::SwitchProjectAndCreateSession {
@@ -276,26 +286,31 @@ pub fn spawn_engine_loop(
                     if let Some(parent) = ecfg.db_path.parent() {
                         let _ = std::fs::create_dir_all(parent);
                     }
-                    let result =
-                        match AgentEngine::new_with_abort(ecfg, Arc::clone(&abort_controller)) {
-                            Ok(e) => {
-                                let sid = e.session_id().to_string();
-                                engine = e;
-                                sync_turn_in_progress_flag(&turn_in_progress, &engine);
-                                Ok(sid)
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    error = %e,
-                                    project_root = %project_root_display,
-                                    "engine_command SwitchProjectAndCreateSession failed"
-                                );
-                                Err(e.to_string())
-                            }
-                        };
+                    let result = match AgentEngine::new_with_abort(
+                        ecfg,
+                        Arc::clone(&abort_controller),
+                        Arc::clone(&fork_stream_subs),
+                    ) {
+                        Ok(mut e) => {
+                            e.attach_fork_stream_subs(Arc::clone(&fork_stream_subs));
+                            let sid = e.session_id().to_string();
+                            engine = e;
+                            sync_turn_in_progress_flag(&turn_in_progress, &engine);
+                            Ok(sid)
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                project_root = %project_root_display,
+                                "engine_command SwitchProjectAndCreateSession failed"
+                            );
+                            Err(e.to_string())
+                        }
+                    };
                     let _ = reply.send(result);
                 }
             }
         }
+        tracing::error!("engine_loop_exited: command channel closed");
     });
 }

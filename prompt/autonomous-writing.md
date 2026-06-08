@@ -40,7 +40,7 @@
 | KnowledgeAuditor + ChapterCraftAnalyzer | 每 3 章一次 | task 含最近 3 章路径，提示按章分组；Fork 前查 `audit_type=ka`/`cca` |
 | 全局审计（KA 跨章模式） | 每 20 章一次 | task 含最近 20 章，额外检查伏笔回收率/人物弧线/战力一致性 |
 
-修复后更新 `knowledge/meta/audit-status.md`：标 `已通过` + append 修复记录（见 system §4.5）。
+修复后更新 `knowledge/meta/audit-status.md`：对应审计列标 `已通过`（见 system §4.5）。
 
 降频的章仍需做轻量自检：Stats 字数 + Tail 上章衔接 + 细纲「写后记录」和「知识库更新确认」填写。
 

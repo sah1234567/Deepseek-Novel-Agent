@@ -2,7 +2,6 @@ use super::common::parse_chapter_num;
 use crate::{require_str, Tool, ToolContext, ToolError, ToolOutput};
 use async_trait::async_trait;
 use novel_knowledge::KnowledgeStore;
-use serde::Serialize;
 use serde_json::{json, Value};
 
 const FILE_MAP: &[(&str, &str)] = &[
@@ -13,21 +12,6 @@ const FILE_MAP: &[(&str, &str)] = &[
     ("power", "knowledge/shared-systems/战力系统.md"),
     ("ability", "knowledge/shared-systems/功法技能.md"),
 ];
-
-#[derive(Debug, Serialize)]
-struct TrackingEntry {
-    chapter: String,
-    content: String,
-}
-
-#[derive(Debug, Serialize)]
-struct TrackingQueryResult {
-    file: String,
-    operation: String,
-    entries: Vec<TrackingEntry>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    current_state: Option<String>,
-}
 
 fn resolve_file_path(file: &str) -> Result<&'static str, ToolError> {
     FILE_MAP
@@ -41,50 +25,45 @@ fn resolve_file_path(file: &str) -> Result<&'static str, ToolError> {
         })
 }
 
-fn parse_table_rows(content: &str, table_heading: &str) -> Vec<String> {
+/// Returns (header_line, data_rows) for a markdown table section.
+fn parse_table_with_header(content: &str, table_heading: &str) -> (String, Vec<String>) {
     let heading = format!("## {table_heading}");
     let Some(section_start) = content.find(&heading) else {
-        return vec![];
+        return (String::new(), vec![]);
     };
     let section = &content[section_start..];
+    let mut header = String::new();
     let mut rows: Vec<String> = Vec::new();
-    for line in section.lines().skip(2) {
-        // skip heading and blank line after it
-        if line.starts_with('|') && !line.contains("---") && !line.contains("章节") {
-            rows.push(line.trim().to_string());
+    // Skip the `## heading` line only; process every line after it.
+    for line in section.lines().skip(1) {
+        let trimmed = line.trim();
+        if !trimmed.starts_with('|') || trimmed.contains("---") {
+            continue;
         }
+        if trimmed.contains("章节") {
+            header = trimmed.to_string();
+            continue;
+        }
+        rows.push(trimmed.to_string());
     }
-    rows
+    (header, rows)
 }
 
-fn extract_current_state(rows: &[String]) -> Option<String> {
-    rows.last().map(|r| r.to_string())
-}
-
-fn filter_by_chapter_range(rows: &[String], range: (u32, u32)) -> Vec<TrackingEntry> {
+fn filter_by_chapter_range(rows: &[String], range: (u32, u32)) -> Vec<String> {
     rows.iter()
-        .filter_map(|row| {
+        .filter(|row| {
             let ch = parse_chapter_num(row);
-            if ch >= range.0 && ch <= range.1 {
-                Some(TrackingEntry {
-                    chapter: format!("Ch{ch}"),
-                    content: row.clone(),
-                })
-            } else {
-                None
-            }
+            ch >= range.0 && ch <= range.1
         })
+        .cloned()
         .collect()
 }
 
-fn search_rows(rows: &[String], keyword: &str) -> Vec<TrackingEntry> {
+fn search_rows(rows: &[String], keyword: &str) -> Vec<String> {
     let kw = keyword.to_lowercase();
     rows.iter()
         .filter(|row| row.to_lowercase().contains(&kw))
-        .map(|row| TrackingEntry {
-            chapter: format!("Ch{}", parse_chapter_num(row)),
-            content: row.clone(),
-        })
+        .cloned()
         .collect()
 }
 
@@ -104,7 +83,7 @@ impl Tool for TrackingQueryTool {
         "TrackingQuery"
     }
     fn description(&self) -> &str {
-        "Query scene/prop/faction/timeline/power/skill tracking tables — current state, chapter range, or keyword search"
+        "Query scene/prop/faction/timeline/power/skill tracking tables — returns markdown table rows directly"
     }
     fn input_schema(&self) -> Value {
         json!({
@@ -165,29 +144,62 @@ pub(crate) fn run_tracking_query(
         _ => return Err(ToolError::Execution(format!("unknown file: {file}"))),
     };
 
-    let rows = parse_table_rows(content, table_heading);
+    let (header, rows) = parse_table_with_header(content, table_heading);
+    if rows.is_empty() {
+        return Ok(ToolOutput {
+            content: format!("({file} 尚无记录)"),
+            is_error: false,
+        });
+    }
 
-    let (entries, current_state) = match operation {
+    let result = match operation {
         "current" => {
-            let state = extract_current_state(&rows);
-            let entries = state
-                .iter()
-                .map(|r| TrackingEntry {
-                    chapter: format!("Ch{}", parse_chapter_num(r)),
-                    content: r.clone(),
-                })
-                .collect();
-            (entries, state)
+            let last = rows.last().cloned().unwrap_or_default();
+            if header.is_empty() {
+                format!("## {file} -- current\n\n{last}")
+            } else {
+                format!("## {file} -- current\n\n{header}\n{last}")
+            }
         }
         "range" => {
             let range = parse_chapter_range(input).ok_or_else(|| {
                 ToolError::Execution("chapter_range required for range operation".into())
             })?;
-            (filter_by_chapter_range(&rows, range), None)
+            let filtered = filter_by_chapter_range(&rows, range);
+            if filtered.is_empty() {
+                format!("({file} Ch{}-Ch{} 无记录)", range.0, range.1)
+            } else if header.is_empty() {
+                format!(
+                    "## {file} -- Ch{}-Ch{}\n\n{}",
+                    range.0,
+                    range.1,
+                    filtered.join("\n")
+                )
+            } else {
+                format!(
+                    "## {file} -- Ch{}-Ch{}\n\n{header}\n{}",
+                    range.0,
+                    range.1,
+                    filtered.join("\n")
+                )
+            }
         }
         "search" => {
             let keyword = require_str(input, "keyword")?;
-            (search_rows(&rows, &keyword), None)
+            let filtered = search_rows(&rows, &keyword);
+            if filtered.is_empty() {
+                format!("({file} search \"{keyword}\" 无结果)")
+            } else if header.is_empty() {
+                format!(
+                    "## {file} -- search \"{keyword}\"\n\n{}",
+                    filtered.join("\n")
+                )
+            } else {
+                format!(
+                    "## {file} -- search \"{keyword}\"\n\n{header}\n{}",
+                    filtered.join("\n")
+                )
+            }
         }
         _ => {
             return Err(ToolError::Execution(format!(
@@ -196,16 +208,8 @@ pub(crate) fn run_tracking_query(
         }
     };
 
-    let result = TrackingQueryResult {
-        file: file.to_string(),
-        operation: operation.to_string(),
-        entries,
-        current_state,
-    };
-
     Ok(ToolOutput {
-        content: serde_json::to_string_pretty(&result)
-            .map_err(|e| ToolError::Internal(e.to_string()))?,
+        content: result,
         is_error: false,
     })
 }
@@ -245,7 +249,14 @@ mod tests {
             .await
             .unwrap();
         assert!(out.content.contains("坍塌"));
-        assert!(out.content.contains("current_state"));
+        assert!(
+            out.content.contains("| 章节 |"),
+            "should include column headers"
+        );
+        assert!(
+            !out.content.starts_with('{'),
+            "should return markdown, not JSON"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -278,6 +289,7 @@ mod tests {
         assert!(out.content.contains("Ch1"));
         assert!(out.content.contains("Ch3"));
         assert!(!out.content.contains("Ch5"));
+        assert!(!out.content.starts_with('{'));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -309,16 +321,18 @@ mod tests {
         assert!(out.content.contains("结盟"));
         assert!(out.content.contains("背叛"));
         assert!(!out.content.contains("血月教"));
+        assert!(!out.content.starts_with('{'));
     }
 
     #[test]
     fn run_tracking_query_unknown_operation() {
-        let err = run_tracking_query("scene", "nope", "", &json!({})).unwrap_err();
+        let data = "## 场景演变日志\n| 章节 | a | b |\n|------|----|----|\n| Ch1 | x | y |";
+        let err = run_tracking_query("scene", "nope", data, &json!({})).unwrap_err();
         assert!(err.to_string().contains("unknown operation"));
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn missing_file_returns_empty() {
+    async fn missing_file_returns_empty_notice() {
         let tmp = TempDir::new().unwrap();
         let tool = TrackingQueryTool;
         let ctx = ToolContext {
@@ -330,6 +344,7 @@ mod tests {
             .call(json!({"file": "scene", "operation": "current"}), &ctx)
             .await
             .unwrap();
-        assert!(out.content.contains("\"entries\": []"));
+        assert!(out.content.contains("尚无记录"));
+        assert!(!out.content.starts_with('{'));
     }
 }

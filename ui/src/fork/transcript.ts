@@ -1,4 +1,4 @@
-import type { ForkRunState, UIMessage } from "../types/messages";
+import type { UIMessage } from "../types/messages";
 import { createInitialMachine, dispatchTranscriptEvent } from "../transcript";
 import { flatMessagesToMachine } from "../transcript/flatParse";
 import type { TranscriptEvent, TranscriptMachine } from "../transcript/types";
@@ -65,6 +65,3 @@ export function hydrateForkMachine(flatMessages: UIMessage[]): TranscriptMachine
   return machine;
 }
 
-export function forkRunAcceptsDbSnapshot(status: ForkRunState["status"]): boolean {
-  return status !== "running";
-}

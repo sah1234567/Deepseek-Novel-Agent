@@ -52,6 +52,8 @@ fn main() {
             commands::list_works,
             commands::resume_session,
             commands::get_fork_messages,
+            commands::subscribe_fork_stream,
+            commands::unsubscribe_fork_stream,
             commands::get_session_transcript_layout,
             commands::get_session_message_turns,
             commands::get_session_archive_turns,

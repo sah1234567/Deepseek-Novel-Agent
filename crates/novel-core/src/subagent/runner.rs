@@ -17,6 +17,7 @@ use crate::subagent::react::{
 use crate::subagent::{build_fork_child, SubagentJob, SubagentJobKind};
 use crate::turn::TurnContext;
 use crate::{AgentError, AgentType, Event, TerminalReason};
+use novel_knowledge::truncate_chars;
 use tokio::sync::mpsc;
 
 /// Run one subagent job (tool fork or PostToolUse hook). Transcript -> `fork_messages` only.
@@ -44,12 +45,7 @@ pub async fn run_subagent_job(
     let mut llm = build_chat_client(&llm_snap, &shared.global_config_path);
     let mut child = build_fork_child(&shared, agent_type, task.clone())?;
 
-    let task_preview: String = task.chars().take(80).collect();
-    let task_preview = if task.chars().count() > 80 {
-        format!("{task_preview}…")
-    } else {
-        task_preview
-    };
+    let task_preview = truncate_chars(&task, 80);
     if let Some(tx) = event_tx.as_ref() {
         let _ = tx.send(Event::SubAgentStarted {
             fork_run_id: fork_run_id.clone(),
@@ -103,12 +99,7 @@ fn subagent_finalize_output(
     if !was_interrupted {
         return last_assistant;
     }
-    let task_preview: String = child.fork.task_message.content.chars().take(200).collect();
-    let task_preview = if child.fork.task_message.content.len() > 200 {
-        format!("{task_preview}…")
-    } else {
-        task_preview
-    };
+    let task_preview = truncate_chars(&child.fork.task_message.content, 200);
     format!(
         "[子 Agent 已中断: {}]\n\n\
          ⚠ 用户中断。部分修改可能已写入磁盘，KB 可能处于不一致状态。\n\n\
@@ -265,6 +256,7 @@ async fn subagent_apply_completion_tools(
         &tool_calls,
         event_tx,
         fork_run_id,
+        &shared.fork_stream_subs,
     )
     .await?;
     subagent_push_tool_results(
@@ -277,6 +269,7 @@ async fn subagent_apply_completion_tools(
         completion,
         results,
         event_tx,
+        &shared.fork_stream_subs,
     )?;
 
     if let Err(TerminalReason::MaxReactLoops(_)) = turn_ctx.increment_inner() {

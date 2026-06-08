@@ -3,8 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { IPC_COMMANDS } from "../ipc/commands";
 import { IPC_EVENTS } from "../ipc/events";
+import type { AppStatus } from "./useAppStatus";
 import type {
-  AppStatusSnapshot,
   StreamChunkPayload,
   ToolCallRequestPayload,
   TurnCompletePayload,
@@ -30,7 +30,6 @@ type RafBatcher<T> = ReturnType<typeof createRafBatcher<T>>;
 export type AgentListenerDeps = {
   dispatchMain: (event: TranscriptEvent) => void;
   drainMessageQueue: () => void;
-  refreshInterruptibleStatus: () => Promise<void>;
   flushStreamBatches: () => void;
   streamChunkBatchRef: MutableRefObject<RafBatcher<TranscriptEvent>>;
   forkStreamBatchRef: MutableRefObject<
@@ -41,7 +40,7 @@ export type AgentListenerDeps = {
   openForkRunIdRef: MutableRefObject<string | null>;
   messageQueueRef: MutableRefObject<string[]>;
   reloadActiveTailRef: MutableRefObject<(() => Promise<void>) | undefined>;
-  onTurnCompleteRef: MutableRefObject<(() => void) | undefined>;
+  onTurnCompleteRef: MutableRefObject<((prefetched?: AppStatus) => void) | undefined>;
   setForkRuns: Dispatch<SetStateAction<Map<string, ForkRunState>>>;
   setPendingQuestion: Dispatch<SetStateAction<PendingQuestion | null>>;
   setQuestionSelections: Dispatch<SetStateAction<Record<string, string[]>>>;
@@ -56,7 +55,6 @@ export function useAgentTauriListeners(deps: AgentListenerDeps) {
   const {
     dispatchMain,
     drainMessageQueue,
-    refreshInterruptibleStatus,
     flushStreamBatches,
     streamChunkBatchRef,
     forkStreamBatchRef,
@@ -84,6 +82,7 @@ export function useAgentTauriListeners(deps: AgentListenerDeps) {
           (event) => {
             const { segmentIndex, forkRunId } = event.payload;
             if (forkRunId) {
+              if (openForkRunIdRef.current !== forkRunId) return;
               forkStreamBatchRef.current.flushNow();
               setForkRuns((prev) => {
                 const run = prev.get(forkRunId);
@@ -112,8 +111,14 @@ export function useAgentTauriListeners(deps: AgentListenerDeps) {
           const mapped = mapToolCallRequest(event.payload);
           if (!mapped) return;
           dispatchMain(mapped);
-          void refreshInterruptibleStatus();
         }),
+      () =>
+        listen<{ hasInterruptibleToolInProgress: boolean }>(
+          IPC_EVENTS.interruptibleStatusChanged,
+          (event) => {
+            setHasInterruptibleToolInProgress(!!event.payload.hasInterruptibleToolInProgress);
+          },
+        ),
       () =>
         listen<PendingQuestion>(IPC_EVENTS.askUserQuestion, (event) => {
           dispatchMain({ type: "ASK_USER_QUESTION" });
@@ -147,9 +152,13 @@ export function useAgentTauriListeners(deps: AgentListenerDeps) {
             return;
           }
           if (p.phase === "start") return;
-          if (p.turnHitTokens !== undefined || p.cacheHitTokens !== undefined) {
-            // Guard: keep FSM alive when tools are pending approval.
-            // TURN_COMPLETE would set phase=idle, discarding subsequent TOOL events.
+          // Terminal turn-complete has no phase (start/error handled above).
+          // StatusBar tokens use `session-tokens-updated`, not this payload.
+          if (!p.phase) {
+            // Defensive: backend already suppresses TurnComplete while pending_tools
+            // is non-empty (turn_paused). If a stray turn-complete still arrives,
+            // do not TURN_COMPLETE / setIsStreaming(false) — that would set
+            // phase=idle and discard subsequent TOOL events (machine.ts idle guard).
             if (hasPendingApproval(transcriptMachineRef.current)) return;
             dispatchMain({ type: "TURN_COMPLETE" });
             setIsStreaming(false);
@@ -157,12 +166,12 @@ export function useAgentTauriListeners(deps: AgentListenerDeps) {
             void (async () => {
               if (pendingQuestionRef.current) return;
               try {
-                const s = await invoke<AppStatusSnapshot>(IPC_COMMANDS.getAppStatus);
+                const s = await invoke<AppStatus>(IPC_COMMANDS.getAppStatus);
                 if (s.pendingUserQuestion) return;
+                onTurnCompleteRef.current?.(s);
               } catch {
-                // Fall through to normal turn end if status is unavailable.
+                onTurnCompleteRef.current?.();
               }
-              onTurnCompleteRef.current?.();
               void reloadActiveTailRef.current?.();
               drainMessageQueue();
             })();
@@ -203,6 +212,7 @@ export function useAgentTauriListeners(deps: AgentListenerDeps) {
           IPC_EVENTS.subAgentStream,
           (event) => {
             const { forkRunId, delta, kind, messageId } = event.payload;
+            if (openForkRunIdRef.current !== forkRunId) return;
             forkStreamBatchRef.current.push({
               forkRunId,
               event: mapStreamChunk({
@@ -218,6 +228,7 @@ export function useAgentTauriListeners(deps: AgentListenerDeps) {
           IPC_EVENTS.subAgentTool,
           (event) => {
             const { forkRunId, ...p } = event.payload;
+            if (openForkRunIdRef.current !== forkRunId) return;
             const mapped = mapToolCallRequest(p);
             if (!mapped) return;
             setForkRuns((prev) => {
@@ -277,7 +288,6 @@ export function useAgentTauriListeners(deps: AgentListenerDeps) {
   }, [
     dispatchMain,
     drainMessageQueue,
-    refreshInterruptibleStatus,
     flushStreamBatches,
     streamChunkBatchRef,
     forkStreamBatchRef,

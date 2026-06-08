@@ -308,6 +308,7 @@ describe("conversation scenarios — extended", () => {
     assertPlanHealthy(m);
   });
 
+  // Defensive invariant — not a reproducible IPC ordering bug (see machine.ts idle guard).
   it("idle rejects late tool events after turn complete", () => {
     let m = scenario([
       beginTurn(userMsg("u1")),

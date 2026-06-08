@@ -25,9 +25,9 @@ impl Tool for EditTool {
 
     fn description(&self) -> &str {
         "Exact string replacement in an existing file. Must Read or Tail the file first. \
-         Read/Tail output uses {line}\\t{content}; old_string/new_string must match file bytes only \
-         (no line-number prefix). Prefer Edit over Write for partial changes. \
-         old_string must be unique unless replace_all is true."
+         Read/Tail output uses {line}\\t{content}; old_string/new_string must match on-disk bytes only \
+         (no line-number prefix; copy from tool_result, not audit-report paraphrases). \
+         Prefer Edit over Write for partial changes. old_string must be unique unless replace_all is true."
     }
 
     fn usage_hint(&self) -> &str {
@@ -103,49 +103,64 @@ impl Tool for EditTool {
         ctx.validate_write_root(&full)?;
         ctx.validate_plan_mode_write_path(self.name(), &path)?;
         ctx.require_read_before_write(self.name(), &full, &path, "editing", false)?;
-        ctx.require_edit_in_read_slice(&full, &old_string)?;
 
-        let content = blocking::read_to_string(full.clone()).await?;
-        if let Some(entry) = ctx.read_cache_entry(&full) {
-            let meta = tokio::fs::metadata(&full).await.map_err(ToolError::Io)?;
-            entry.check_fresh_for_disk(file_mtime_secs(&meta), &content, "editing")?;
-        }
+        ctx.with_file_lock(&full, || async {
+            let content = blocking::read_to_string(full.clone()).await?;
+            crate::read_cache::verify_edit_against_read_cache(
+                ctx.read_cache_entry(&full).as_ref(),
+                &old_string,
+                &content,
+                &path,
+                replace_all,
+            )?;
+            if let Some(entry) = ctx.read_cache_entry(&full) {
+                let meta = tokio::fs::metadata(&full).await.map_err(ToolError::Io)?;
+                entry.check_fresh_for_disk(file_mtime_secs(&meta), &content, "editing")?;
+            }
 
-        if !content.contains(&old_string) {
-            let preview: String = old_string.chars().take(80).collect();
-            return Err(ToolError::Execution(format!(
-                "old_string not found in {}.\nPreview: {preview}",
-                full.display()
-            )));
-        }
+            if !content.contains(&old_string) {
+                return Err(crate::read_cache::edit_old_string_not_on_disk_error(
+                    &old_string,
+                ));
+            }
 
-        let matches = content.matches(&old_string).count();
-        if matches > 1 && !replace_all {
-            return Err(ToolError::Execution(format!(
-                "Found {matches} matches of old_string, but replace_all is false. \
-                 Set replace_all to true, or provide more context so old_string is unique."
-            )));
-        }
+            let matches = content.matches(&old_string).count();
+            if matches > 1 && !replace_all {
+                return Err(ToolError::Execution(format!(
+                    "Found {matches} matches of old_string, but replace_all is false. \
+                     Set replace_all to true, or provide more context so old_string is unique."
+                )));
+            }
 
-        let updated = if replace_all {
-            content.replace(&old_string, &new_string)
-        } else {
-            content.replacen(&old_string, &new_string, 1)
-        };
+            let updated = if replace_all {
+                content.replace(&old_string, &new_string)
+            } else {
+                content.replacen(&old_string, &new_string, 1)
+            };
 
-        blocking::write(full.clone(), updated.clone()).await?;
+            blocking::write(full.clone(), updated.clone()).await?;
 
-        let mtime = tokio::fs::metadata(&full)
-            .await
-            .map(|m| file_mtime_secs(&m))
-            .unwrap_or(0);
-        ctx.refresh_cache_after_write(&full, &updated, mtime);
+            let mtime = tokio::fs::metadata(&full)
+                .await
+                .map(|m| file_mtime_secs(&m))
+                .unwrap_or(0);
+            let occ = if replace_all { matches } else { 1 };
+            ctx.patch_cache_after_edit(
+                &full,
+                &updated,
+                mtime,
+                &old_string,
+                &new_string,
+                replace_all,
+                occ,
+            );
 
-        let occ = if replace_all { matches } else { 1 };
-        Ok(ToolOutput {
-            content: format!("Edited {} ({occ} occurrence(s) replaced)", full.display()),
-            is_error: false,
+            Ok(ToolOutput {
+                content: format!("Edited {} ({occ} occurrence(s) replaced)", full.display()),
+                is_error: false,
+            })
         })
+        .await
     }
 }
 
@@ -159,7 +174,13 @@ mod tests {
     fn ctx_with_cache(tmp: &TempDir) -> ToolContext {
         let mut ctx = ToolContext::new(tmp.path().to_path_buf());
         ctx.read_file_cache = Some(Arc::new(dashmap::DashMap::new()));
+        ctx.file_op_locks = Some(Arc::new(dashmap::DashMap::new()));
         ctx
+    }
+
+    fn seed_committed_read_cache(ctx: &ToolContext, full: &std::path::Path, entry: ReadCacheEntry) {
+        ctx.store_read_cache_direct(full, entry);
+        ctx.promote_read_cache_committed(full);
     }
 
     fn write_file(dir: &std::path::Path, name: &str, content: &str) {
@@ -172,7 +193,8 @@ mod tests {
         write_file(tmp.path(), "a.md", "foo bar foo");
         let ctx = ctx_with_cache(&tmp);
         let full = ctx.resolve_path("a.md");
-        ctx.store_read_cache(
+        seed_committed_read_cache(
+            &ctx,
             &full,
             ReadCacheEntry {
                 mtime_secs: 1,
@@ -181,6 +203,9 @@ mod tests {
                 limit: None,
                 total_lines: 1,
                 source: ReadCacheSource::Read,
+                transcript_committed: false,
+                committed_offset: None,
+                committed_limit: None,
             },
         );
         EditTool
@@ -200,12 +225,111 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn edit_allowed_when_target_line_in_partial_read_span() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("chapters")).unwrap();
+        let body = (1..=50)
+            .map(|n| format!("line {n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        write_file(tmp.path(), "chapters/ch01.md", &body);
+        let ctx = ctx_with_cache(&tmp);
+        let full = ctx.resolve_path("chapters/ch01.md");
+        let mtime = file_mtime_secs(&std::fs::metadata(&full).unwrap());
+        seed_committed_read_cache(
+            &ctx,
+            &full,
+            ReadCacheEntry {
+                mtime_secs: mtime,
+                raw_content: (33..=43)
+                    .map(|n| format!("line {n}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                offset: Some(33),
+                limit: Some(11),
+                total_lines: 50,
+                source: ReadCacheSource::Read,
+                transcript_committed: false,
+                committed_offset: None,
+                committed_limit: None,
+            },
+        );
+        EditTool
+            .call(
+                json!({
+                    "file_path": "chapters/ch01.md",
+                    "old_string": "line 35",
+                    "new_string": "line 35 edited"
+                }),
+                &ctx,
+            )
+            .await
+            .unwrap();
+        let s = std::fs::read_to_string(tmp.path().join("chapters/ch01.md")).unwrap();
+        assert!(s.contains("line 35 edited"));
+        let entry = ctx.read_cache_entry(&full).unwrap();
+        assert_eq!(entry.source, ReadCacheSource::EditPatched);
+        assert_eq!(entry.offset, Some(33));
+        assert_eq!(entry.total_lines, 50);
+        assert_eq!(entry.limit, Some(11));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn partial_edit_expands_lines_in_cache() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("chapters")).unwrap();
+        let body = (1..=30)
+            .map(|n| format!("line {n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        write_file(tmp.path(), "chapters/ch01.md", &body);
+        let ctx = ctx_with_cache(&tmp);
+        let full = ctx.resolve_path("chapters/ch01.md");
+        let mtime = file_mtime_secs(&std::fs::metadata(&full).unwrap());
+        seed_committed_read_cache(
+            &ctx,
+            &full,
+            ReadCacheEntry {
+                mtime_secs: mtime,
+                raw_content: (10..=20)
+                    .map(|n| format!("line {n}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                offset: Some(10),
+                limit: Some(11),
+                total_lines: 30,
+                source: ReadCacheSource::Read,
+                transcript_committed: false,
+                committed_offset: None,
+                committed_limit: None,
+            },
+        );
+        let replacement = "line 15 expanded\nline 15 extra";
+        EditTool
+            .call(
+                json!({
+                    "file_path": "chapters/ch01.md",
+                    "old_string": "line 15",
+                    "new_string": replacement
+                }),
+                &ctx,
+            )
+            .await
+            .unwrap();
+        let entry = ctx.read_cache_entry(&full).unwrap();
+        assert_eq!(entry.total_lines, 31);
+        assert_eq!(entry.limit, Some(12));
+        assert!(entry.raw_content.contains("line 15 expanded"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn multi_match_without_replace_all_errors() {
         let tmp = TempDir::new().unwrap();
         write_file(tmp.path(), "a.md", "x x");
         let ctx = ctx_with_cache(&tmp);
         let full = ctx.resolve_path("a.md");
-        ctx.store_read_cache(
+        seed_committed_read_cache(
+            &ctx,
             &full,
             ReadCacheEntry {
                 mtime_secs: 1,
@@ -214,6 +338,9 @@ mod tests {
                 limit: None,
                 total_lines: 1,
                 source: ReadCacheSource::Read,
+                transcript_committed: false,
+                committed_offset: None,
+                committed_limit: None,
             },
         );
         let err = EditTool

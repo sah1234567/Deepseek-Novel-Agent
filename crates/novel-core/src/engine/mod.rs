@@ -1,3 +1,4 @@
+mod interruptible_status;
 mod lifecycle;
 mod prompt_permission;
 mod run_loop;

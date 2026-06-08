@@ -1,22 +1,7 @@
 use super::common::{count_chinese_chars, list_chapter_files};
 use crate::{Tool, ToolContext, ToolError, ToolOutput, ValidationError};
 use async_trait::async_trait;
-use serde::Serialize;
 use serde_json::{json, Value};
-
-#[derive(Debug, Serialize)]
-struct ChapterStats {
-    chapter: String,
-    word_count: u32,
-    file_path: String,
-}
-
-#[derive(Debug, Serialize)]
-struct AllStats {
-    total_words: u64,
-    chapters_completed: u32,
-    avg_words_per_chapter: f32,
-}
 
 fn parse_chapter_param(input: &Value) -> Result<&str, ValidationError> {
     input
@@ -89,14 +74,9 @@ impl Tool for StatsTool {
                 .await
                 .map_err(|e| ToolError::Execution(format!("read chapter {num}: {e}")))?;
 
-            let result = ChapterStats {
-                chapter: format!("Ch{num}"),
-                word_count: count_chinese_chars(&content),
-                file_path: format!("chapters/chapter-{num:03}.md"),
-            };
+            let wc = count_chinese_chars(&content);
             return Ok(ToolOutput {
-                content: serde_json::to_string_pretty(&result)
-                    .map_err(|e| ToolError::Execution(format!("json serialize: {e}")))?,
+                content: format!("Ch{num}: {wc} 字"),
                 is_error: false,
             });
         }
@@ -120,14 +100,10 @@ impl Tool for StatsTool {
 
         let avg = total_words as f32 / chapters_completed as f32;
 
-        let result = AllStats {
-            total_words,
-            chapters_completed,
-            avg_words_per_chapter: avg,
-        };
         Ok(ToolOutput {
-            content: serde_json::to_string_pretty(&result)
-                .map_err(|e| ToolError::Execution(format!("json serialize: {e}")))?,
+            content: format!(
+                "总计 {total_words} 字, {chapters_completed} 章已完成, 平均 {avg:.0} 字/章"
+            ),
             is_error: false,
         })
     }
@@ -157,8 +133,11 @@ mod tests {
             ..ToolContext::new(tmp.path().to_path_buf())
         };
         let out = tool.call(json!({"chapter": "1"}), &ctx).await.unwrap();
-        assert!(out.content.contains("\"chapter\": \"Ch1\""));
-        assert!(out.content.contains("\"word_count\""));
+        assert!(out.content.contains("Ch1"));
+        assert!(
+            out.content.contains("字"),
+            "should return plain text, not JSON"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -177,8 +156,8 @@ mod tests {
             ..ToolContext::new(tmp.path().to_path_buf())
         };
         let out = tool.call(json!({"chapter": "all"}), &ctx).await.unwrap();
-        assert!(out.content.contains("\"chapters_completed\": 1"));
-        assert!(out.content.contains("\"total_words\""));
+        assert!(out.content.contains("章已完成"));
+        assert!(out.content.contains("总计"), "should return plain text");
     }
 
     #[tokio::test(flavor = "current_thread")]

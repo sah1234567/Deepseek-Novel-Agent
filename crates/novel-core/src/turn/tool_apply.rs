@@ -67,8 +67,13 @@ impl AgentEngine {
             });
         }
         self.messages.push(tool_msg);
+        self.record_tool_success();
 
         if let Some(s) = spec {
+            if success {
+                self.tool_context()
+                    .promote_read_cache_for_tool_result(&s.name, &s.input);
+            }
             self.track_invoke_skill_after_tool(s);
             if s.name == "Read" && success {
                 self.track_read_skill_reference(s);
@@ -163,6 +168,7 @@ impl AgentEngine {
             self.persist_message_alloc(&tool_msg)?;
         }
         self.messages.push(tool_msg);
+        self.record_tool_success();
         Ok(())
     }
 
@@ -187,6 +193,7 @@ impl AgentEngine {
                 success: false,
             });
         }
+        let failure_detail = err.to_string();
         let msg = format_tool(spec, Err(err)).content;
         if let Some(tx) = event_tx {
             let _ = tx.send(Event::ToolCallResult {
@@ -199,6 +206,9 @@ impl AgentEngine {
             self.persist_message_alloc(&tool_msg)?;
         }
         self.messages.push(tool_msg);
+        if let Some(s) = spec {
+            self.record_tool_failure(&s.name, &failure_detail);
+        }
         Ok(())
     }
 }
@@ -208,6 +218,38 @@ mod tests {
     use super::*;
     use crate::EngineConfig;
     use tempfile::TempDir;
+
+    #[test]
+    fn repeated_tool_failures_trip_circuit() {
+        use crate::turn::TOOL_FAILURE_CIRCUIT_THRESHOLD;
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("skills")).unwrap();
+        let mut engine = AgentEngine::new(EngineConfig {
+            project_root: tmp.path().to_path_buf(),
+            settings_path: tmp.path().join("settings.json"),
+            db_path: tmp.path().join("state.db"),
+            skills_dir: tmp.path().join("skills"),
+            global_config_path: tmp.path().join(".novel-agent/api_config.json"),
+        })
+        .unwrap();
+        let spec = novel_tools::ToolCallSpec {
+            id: "t1".into(),
+            name: "Edit".into(),
+            input: serde_json::json!({}),
+        };
+        for _ in 0..TOOL_FAILURE_CIRCUIT_THRESHOLD {
+            engine
+                .apply_err_stream_result(
+                    "t1",
+                    Some(&spec),
+                    novel_tools::ToolError::Execution("slice".into()),
+                    None,
+                    false,
+                )
+                .unwrap();
+        }
+        assert!(engine.take_repeated_tool_failure_trip().is_some());
+    }
 
     #[test]
     fn apply_err_stream_result_pushes_tool_message() {

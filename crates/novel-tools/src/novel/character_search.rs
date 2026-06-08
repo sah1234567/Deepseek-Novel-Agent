@@ -111,7 +111,7 @@ impl Tool for CharacterSearchTool {
     }
 
     fn usage_hint(&self) -> &str {
-        "定位人物卡路径；详情用 Grep + Read(offset/limit)。返回正文 >80 行会被拒绝。"
+        "Character search across all character cards. For current-state lookup, pair with Grep `## 当前状态快照` or `^\\| Ch` on the matched files."
     }
 
     async fn call(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
@@ -160,6 +160,13 @@ impl Tool for CharacterSearchTool {
                 .unwrap_or_default();
             let search_in =
                 searchable_text(&content, if field == "all" { None } else { Some(field) });
+            // Compute absolute line offset: count lines in content up to search_in.
+            let content_offset = content.find(&search_in).unwrap_or(0);
+            let lines_before: u32 = content[..content_offset]
+                .lines()
+                .count()
+                .try_into()
+                .unwrap_or(0);
             let lines: Vec<&str> = search_in.lines().collect();
             let mut file_matches = Vec::new();
             for (i, line) in lines.iter().enumerate() {
@@ -169,7 +176,7 @@ impl Tool for CharacterSearchTool {
                     let snippet = lines[start..end].join("\n");
                     let hit = MatchHit {
                         file: file_name.clone(),
-                        line: (i + 1) as u32,
+                        line: lines_before + (i as u32) + 1,
                         snippet,
                     };
                     all_matches.push(hit.clone());
@@ -228,5 +235,31 @@ mod tests {
             .unwrap();
         assert!(out.content.contains("\"profiles\""));
         assert!(out.content.contains("林若烟"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn line_number_is_absolute_after_frontmatter() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("knowledge/characters")).unwrap();
+        // 10 lines of frontmatter + blank, then content starting at line 12
+        let body = "---\nname: 林若烟\ncategory: human\nfirstAppearance: Ch1\nlastUpdate: Ch1\nstatus: alive\npovCharacter: true\n---\n\n## 性格演变日志\n| 章节 | 性格 | 触发事件 |\n|------|------|---------|\n| Ch1 | 天真 | 入门 |";
+        let _body_lines: Vec<&str> = body.lines().collect();
+        std::fs::write(tmp.path().join("knowledge/characters/林若烟.md"), body).unwrap();
+        let tool = CharacterSearchTool;
+        let ctx = ToolContext {
+            permission_mode: PermissionMode::Auto,
+            project_root: tmp.path().to_path_buf(),
+            ..ToolContext::new(tmp.path().to_path_buf())
+        };
+        let out = tool.call(json!({"query": "天真"}), &ctx).await.unwrap();
+        assert!(out.content.contains("林若烟"));
+        // "天真" is on the last line; line number should be absolute, not 1-based
+        // from the section. With 10 frontmatter lines + 1 blank + 1 heading + 1 table header
+        // + 1 separator = 14 lines before data, so line should be ~14-15
+        let parsed: serde_json::Value = serde_json::from_str(&out.content).unwrap();
+        let line = parsed["profiles"][0]["matches"][0]["line"]
+            .as_u64()
+            .unwrap();
+        assert!(line >= 10, "line should be absolute (>=10), got {line}");
     }
 }

@@ -34,7 +34,19 @@ fn hint_for_execution(
         if msg.contains("modified since last read") {
             return Some("Read or Tail the file again, then retry Edit.");
         }
-        if msg.contains("only read a portion") || msg.contains("not in the read slice") {
+        if msg.contains("was not applied") && msg.contains("not yet in the conversation") {
+            return Some(
+                "The Read/Tail in this turn will appear in tool_result before your next reply — retry Edit then (no re-Read if unchanged).",
+            );
+        }
+        if msg.contains("not found on disk") || msg.contains("not a read-cache staleness") {
+            return Some(
+                "Grep a distinctive phrase (not the audit summary), Read ±3 lines around the match, copy exact bytes into old_string (strip line-number tabs). Do not retry identical Read params.",
+            );
+        }
+        if msg.contains("only read a portion")
+            || msg.contains("editable lines (seen in conversation)")
+        {
             return Some(
                 "Re-Read with offset/limit covering old_string (Grep first for line numbers).",
             );
@@ -49,7 +61,9 @@ fn hint_for_execution(
             return Some("Set replace_all:true OR expand old_string with 2–4 surrounding lines for uniqueness.");
         }
         if msg.contains("identical") {
-            return Some("Change new_string so it differs from old_string.");
+            return Some(
+                "Target may already match (audit said keep/skip) — verify with Grep; if change needed, ensure new_string differs.",
+            );
         }
     }
     if tool_name == "Tail" && msg.contains("exceeds max") {
@@ -78,11 +92,24 @@ mod tests {
     #[case("Write", "Read bar.md before overwriting", Some("Read or Tail"))]
     #[case("Edit", "modified since last read", Some("Read or Tail"))]
     #[case("Edit", "only read a portion of this file", Some("offset/limit"))]
-    #[case("Edit", "not in the read slice", Some("offset/limit"))]
+    #[case(
+        "Edit",
+        "old_string not found on disk (exact byte match required)",
+        Some("Grep")
+    )]
+    #[case(
+        "Edit",
+        "was not applied: this line is only covered by a Read/Tail result not yet in the conversation",
+        Some("retry Edit")
+    )]
     #[case("Edit", "line number prefix in old_string", Some("prefixes"))]
     #[case("Edit", "not found in file", Some("Grep"))]
     #[case("Edit", "3 matches of old_string", Some("replace_all"))]
-    #[case("Edit", "old_string and new_string are identical", Some("differs"))]
+    #[case(
+        "Edit",
+        "old_string and new_string are identical",
+        Some("audit said keep")
+    )]
     #[case("Tail", "requested lines exceeds max", Some("Reduce lines"))]
     #[case("Grep", "pattern not found", None)]
     #[case("Read", "file not found", None)]

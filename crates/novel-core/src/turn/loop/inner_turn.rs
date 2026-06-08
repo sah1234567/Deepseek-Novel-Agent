@@ -7,8 +7,6 @@ use crate::{AgentEngine, AgentError, Event, TerminalReason};
 use novel_deepseek::LlmCompletion;
 use tokio::sync::mpsc;
 
-pub(crate) const MAIN_MAX_INNER_TURNS: u32 = 80;
-
 impl AgentEngine {
     /// Prefix for sub-agent reports injected mid-turn (role stays `user` for the LLM).
     pub(crate) const SUB_AGENT_REPORT_PREFIX: &'static str = crate::turn::SUB_AGENT_REPORT_PREFIX;
@@ -76,6 +74,14 @@ impl AgentEngine {
         loop {
             if self.interrupt_requested() {
                 return Ok(TerminalReason::AbortedStreaming);
+            }
+            if let Some((tool, detail)) = self.take_repeated_tool_failure_trip() {
+                tracing::warn!(
+                    tool = %tool,
+                    detail = %detail,
+                    "inner_turn_circuit_breaker"
+                );
+                return Ok(TerminalReason::RepeatedToolFailures { tool, detail });
             }
             if !self.pending_tools.is_empty() {
                 return Ok(TerminalReason::Completed);

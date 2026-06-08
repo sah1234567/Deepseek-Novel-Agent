@@ -82,7 +82,7 @@ allowed-tools: Read, Write, Edit, Glob, Grep, Bash, CharacterSearch, PlotGraph, 
 ForkSubAgent(agent_type="PlanAuditor", task="审计细纲 chapter-NNN-细纲.md 的计划质量：大纲对齐、伏笔密度、因果闭合、人物轮换、字数分配、登记完整性")
 ```
 
-按报告 Edit 细纲 → 更新 `knowledge/meta/audit-status.md`（细纲PA=已通过 + 修复记录）。PlanAuditor 通过后，才可进入正文阶段。
+按报告 Edit 细纲 → 更新 `knowledge/meta/audit-status.md`（细纲PA=已通过）。PlanAuditor 通过后，才可进入正文阶段。
 
 ---
 
@@ -112,6 +112,7 @@ ForkSubAgent(agent_type="PlanAuditor", task="审计细纲 chapter-NNN-细纲.md 
    - 若上章 Tail/Read 的 tool_result 仍在对话中且此后无 Edit/Write → 直接使用
    - 否则：`Tail(file_path="chapters/chapter-{N-1:03d}.md", lines=100)`
    - 关注：衔接点（钩子/场景/悬念）、叙事视角连贯性、文风
+   - 局部 Edit 优先；改稿读盘策略见 InvokeSkill(`revision`) 第二步「同文件连续改稿」（新区域须先 Read/Tail 进对话，**下一轮**再 Edit）
 
 5. **追溯因果**：PlotGraph 查询细纲中伏笔关键词的 backward 因果链路
 
@@ -204,7 +205,9 @@ Write 正文完成后逐项确认（**反AI味专项由 ChapterCraftAnalyzer 负
 3. **★ 同一次 assistant 消息**内并行 Fork 2 项 Subagent：
    - **KnowledgeAuditor**：`审计 chapters/chapter-NNN.md 是否忠实执行细纲，收尾是否完整`
    - **ChapterCraftAnalyzer**：`分析 chapters/chapter-NNN.md：对话质量、叙事节奏、情感轨迹、设定一致性（称呼/POV边界/战力/场景道具）、反AI味指标。POV=XXX`
-4. 按全部 Subagent 报告 Edit 修复后，更新审计台账（正文KA/文笔CCA=已通过 + 修复记录），向作者汇报：本章摘要、钩子、出场人物、待确认项、审计结论
+4. 按全部 Subagent 报告 Edit 修复后，更新审计台账（正文KA/文笔CCA=已通过），向作者汇报：本章摘要、钩子、出场人物、待确认项、审计结论
+
+**按审计报告 Edit**：`old_string` 须从 Read/Tail tool_result 逐字复制（非报告引文）；报告给行号则 Grep→Read；写「保留」则跳过；`not found on disk` 时 Grep 锚点重定位，勿同参重读。
 
 **禁止** 跳过步骤 3 或只跑部分 Subagent 即向作者说「本章完成」。
 **禁止** 在正文后重复全量更新追踪文件——追溯文件应在细纲阶段一次性完成。

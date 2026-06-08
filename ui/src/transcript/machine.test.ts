@@ -191,6 +191,7 @@ describe("dispatchTranscriptEvent", () => {
     expect(m.context.turns[0].segments).toHaveLength(1);
   });
 
+  // Defensive invariant only — production path has ordered ToolCallResult before TurnComplete.
   it("T12: idle + late TOOL result is no-op", () => {
     let m = createInitialMachine();
     m = dispatchTranscriptEvent(m, { type: "BEGIN_TURN", user: userMsg("u1") });
