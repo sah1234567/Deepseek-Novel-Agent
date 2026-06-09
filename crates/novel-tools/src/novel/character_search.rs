@@ -114,6 +114,14 @@ impl Tool for CharacterSearchTool {
         "Character search across all character cards. For current-state lookup, pair with Grep `## 当前状态快照` or `^\\| Ch` on the matched files."
     }
 
+    fn max_output_lines(&self, _input: &Value) -> Option<usize> {
+        Some(crate::read_economy::KNOWLEDGE_MAX_LINES)
+    }
+
+    fn output_limit_exceeded_hint(&self) -> &'static str {
+        "Narrow the search scope or use a more specific query."
+    }
+
     async fn call(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
         let query = require_str(&input, "query")?;
         let field = input.get("field").and_then(|v| v.as_str()).unwrap_or("all");

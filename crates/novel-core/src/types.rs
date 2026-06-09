@@ -23,6 +23,9 @@ pub struct ChatMessage {
     /// but stripped before sending back to the API.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,
+    /// UI-only author text when `content` carries a permission-mode notice prefix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_content: Option<String>,
 }
 
 #[derive(Debug, Clone)]

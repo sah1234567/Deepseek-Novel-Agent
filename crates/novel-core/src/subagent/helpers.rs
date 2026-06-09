@@ -159,6 +159,7 @@ pub(crate) async fn execute_subagent_tool_batch(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn subagent_push_tool_results(
+    registry: &novel_tools::ToolRegistry,
     db: &novel_state::Database,
     fork_run_id: &str,
     child_messages: &mut Vec<ChatMessage>,
@@ -210,7 +211,7 @@ pub(crate) fn subagent_push_tool_results(
         .collect();
     for (id, result) in results {
         let spec = spec_by_id.get(&id);
-        let content = format_tool(spec, result).content;
+        let content = format_tool(registry, spec, result).content;
         if let Some(tx) = event_tx {
             try_send_fork_overlay_event(
                 subs,
@@ -349,6 +350,7 @@ mod tests {
         };
         let turn_ctx = TurnContext::new(8);
         subagent_push_tool_results(
+            &engine.shared.registry,
             &engine.shared.session.db,
             &fork_run_id,
             &mut child_messages,

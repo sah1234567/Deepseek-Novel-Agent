@@ -42,7 +42,7 @@ CharacterSearch, PlotGraph, PlotGrid, ForeshadowTracker, Stats, Corkboard, Chara
 
 | 模式 | 行为 |
 |------|------|
-| Normal | 写操作 Ask 用户确认；TodoWrite / InvokeSkill 直接 Allow |
+| Normal | 写操作 Ask 用户确认；TodoWrite（`is_always_allowed`）直接 Allow；InvokeSkill 为只读（`is_read_only`） |
 | Plan | 只读任意路径；Write/Edit 仅 `plan/`（UI 切换，无 EnterPlanMode 工具） |
 | Auto | 写操作 Allow；AskUserQuestion 仍弹窗 |
 | Unattended | 写操作 Allow；AskUserQuestion 不弹窗，模型自行决策 |
@@ -89,7 +89,7 @@ SSE 流开始前创建，Allow 权限的工具在 arguments JSON 完整时即可
 | Glob | 通配符搜路径（`*`/`**`/`?`；带 `/` 的前缀 pattern；无 `/` 则任意深度；`dir/*` 等价 `dir/**`）；`search_root` 可选；输出统一 `/` |
 | Bash | Shell 命令 |
 | TodoWrite | SQLite `session_todos`，merge 模式；Normal 模式直接 Allow |
-| CharacterSearch | 人物档案 + 演变日志末行 |
+| CharacterSearch | 人物档案 + 演变日志末行；tool_result 输出 ≤80 行（`KNOWLEDGE_MAX_LINES`） |
 | PlotGraph | 因果图 BFS |
 | WebSearch | 通用网页搜索（DeepSeek `web_search_20250305`），API Key 与主对话相同：`DEEPSEEK_API_KEY` env 优先，否则 `{agent_root}/.novel-agent/api_config.json`（经 `ToolContext.global_api_config_path` → `novel_config::resolve_agent_api_key`）；失败返回 `ToolError` 而非空成功。原始结果缓存 `{project}/.websearch/`（非 `knowledge/` 正典）。支持 research/similar-works/reader-feedback/trope-reference/fact-check/writing-tips/trending/short-drama 等搜索角度 |
 | PlotGrid / ForeshadowTracker | 剧情网格 / 伏笔追踪（含可视化） |
@@ -111,11 +111,11 @@ SSE 流开始前创建，Allow 权限的工具在 arguments JSON 完整时即可
 
 | 字段 | 必填 | 说明 |
 |------|------|------|
-| `agentType` | 是 | 见 `FORKABLE_AGENT_TYPE_NAMES`（PlanAuditor、KnowledgeAuditor、ChapterCraftAnalyzer、GeneralPurpose） |
+| `agent_type` | 是 | 见 `FORKABLE_AGENT_TYPE_NAMES`（PlanAuditor、KnowledgeAuditor、ChapterCraftAnalyzer、GeneralPurpose） |
 | `task` | 是 | 预定义类型：简短任务；**GeneralPurpose：完整自定义 prompt** |
 | `description` | 否 | 日志/UI 短标签（默认 `custom subagent`） |
 
-**agentType 枚举（与 `novel_core::FORKABLE_AGENT_TYPE_NAMES` 同步）：**
+**`agent_type` 枚举（与 `novel_core::FORKABLE_AGENT_TYPE_NAMES` 同步）：**
 
 `PlanAuditor`, `KnowledgeAuditor`, `ChapterCraftAnalyzer`, **`GeneralPurpose`**
 
@@ -125,4 +125,16 @@ SSE 流开始前创建，Allow 权限的工具在 arguments JSON 完整时即可
 
 ### 1.9 Tool Result Pipeline
 
-所有 tool result 路径（流式执行、UI poll、approve_tool、fork 子 Agent）经统一入口 `format_tool_result_for_llm` 处理。Pipeline 顺序：error/soft error 增强 → 读盘行数限制 gate → middleware 追加（如 Write/Edit 成功后 `[fact]` 标签、Read 去重后 `[read-dedup]` 提示）。输出包含 `content`（写 SQLite / 送 LLM / 推 UI）和 `hook_preview`（PostToolUse 预览用，在 middleware 追加前截取）。阻塞 I/O 经 `spawn_blocking` 执行。
+所有 tool result 路径（流式执行、UI poll、approve_tool、fork 子 Agent）经统一入口 `format_tool_result_for_llm(registry, …)` 处理。Pipeline 顺序：error/soft error 增强 → 读盘行数限制 gate（`Tool::max_output_lines` / `output_limit_exceeded_hint`，经 registry 分发）→ middleware 追加（如 Write/Edit 成功后 `[fact]` 标签、Read 去重后 `[read-dedup]` 提示，`Tool::read_dedup_range_label` / `supports_read_dedup_hint`）。输出包含 `content`（写 SQLite / 送 LLM / 推 UI）和 `hook_preview`（PostToolUse 预览用，在 middleware 追加前截取）。阻塞 I/O 经 `spawn_blocking` 执行。
+
+### 1.10 Tool 扩展点（`Tool` trait predicates）
+
+| 方法 | 用途 |
+|------|------|
+| `extract_read_span` | Read/Tail committed span 跟踪 |
+| `read_dedup_range_label` | `[read-dedup]` hint 的 `range=` 段 |
+| `supports_read_dedup_hint` | 是否参与 dedup middleware |
+| `max_output_lines` | tool_result 行数上限（`None` = 不限） |
+| `output_limit_exceeded_hint` | 超限时的 LLM 指引文案 |
+| `is_skill_invocation` / `tracks_skill_references` | InvokeSkill / Read 技能引用状态 |
+| `errors_abort_siblings` | 流式执行 sibling abort 策略 |

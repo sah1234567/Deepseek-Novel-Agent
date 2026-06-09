@@ -32,6 +32,7 @@ mod tests {
             tool_call_id: None,
             tool_calls: None,
             reasoning_content: Some("chain-of-thought".into()),
+            ..Default::default()
         }];
         let llm = to_llm_messages(&msgs);
         assert_eq!(
@@ -51,6 +52,7 @@ mod tests {
                 tool_call_id: None,
                 tool_calls: None,
                 reasoning_content: None,
+                ..Default::default()
             },
             Some("作者正文"),
         );
@@ -69,6 +71,7 @@ mod tests {
         };
         let chat = stored_to_chat(&[stored]).unwrap();
         assert_eq!(chat[0].content, merged);
+        assert_eq!(chat[0].display_content.as_deref(), Some("作者正文"));
     }
 
     #[test]
@@ -117,6 +120,7 @@ mod tests {
                 arguments: serde_json::json!({"skill_id": "rebirth"}),
             }]),
             reasoning_content: None,
+            ..Default::default()
         });
         let stored = novel_state::StoredMessage {
             id: "m1".into(),
@@ -146,6 +150,7 @@ mod tests {
                 tool_call_id: None,
                 tool_calls: None,
                 reasoning_content: None,
+                ..Default::default()
             },
             ChatMessage {
                 role: "assistant".into(),
@@ -153,6 +158,7 @@ mod tests {
                 tool_call_id: None,
                 tool_calls: None,
                 reasoning_content: None,
+                ..Default::default()
             },
             tool_result_message("orphan", "body"),
         ];
@@ -180,6 +186,7 @@ mod tests {
                     },
                 ]),
                 reasoning_content: None,
+                ..Default::default()
             },
             tool_result_message("a", "ok"),
         ];

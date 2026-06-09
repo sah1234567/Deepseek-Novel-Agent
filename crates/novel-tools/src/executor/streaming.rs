@@ -203,7 +203,11 @@ impl StreamingToolExecutor {
                     let executor = ToolExecutor::new(registry.clone());
                     let id = spec.id.clone();
                     let r = executor.execute_one(&spec, &ctx).await;
-                    if spec.name == "Bash" && r.is_err() {
+                    let abort_siblings = registry
+                        .get(&spec.name)
+                        .map(|tool| tool.errors_abort_siblings())
+                        .unwrap_or(false);
+                    if abort_siblings && r.is_err() {
                         has_errored.store(true, Ordering::SeqCst);
                         if let Ok(mut d) = errored_description.lock() {
                             *d = format!(

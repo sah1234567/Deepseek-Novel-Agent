@@ -1,6 +1,6 @@
 //! Read-economy limits: reject oversized tool output before it enters LLM context.
 
-use crate::{normalize_rel_path, optional_file_path, ToolError, ToolOutput};
+use crate::{normalize_rel_path, ToolError, ToolOutput};
 use serde_json::Value;
 
 pub const KNOWLEDGE_MAX_LINES: usize = 80;
@@ -66,6 +66,7 @@ pub fn read_pre_check(
 }
 
 pub fn enforce_tool_output_limits(
+    registry: &crate::ToolRegistry,
     tool_name: &str,
     tool_input: &Value,
     output: &ToolOutput,
@@ -73,24 +74,15 @@ pub fn enforce_tool_output_limits(
     if output.is_error {
         return Ok(output.clone());
     }
-    let lines = count_lines(&output.content);
-    let max = match tool_name {
-        "Read" | "Tail" => {
-            let fp = optional_file_path(tool_input).unwrap_or_default();
-            max_lines_for_path(&fp).unwrap_or(CHAPTER_MAX_LINES)
-        }
-        "Grep" => GREP_MAX_LINES,
-        "CharacterSearch" => KNOWLEDGE_MAX_LINES,
-        _ => return Ok(output.clone()),
+    let Some(tool) = registry.get(tool_name) else {
+        return Ok(output.clone());
     };
+    let Some(max) = tool.max_output_lines(tool_input) else {
+        return Ok(output.clone());
+    };
+    let lines = count_lines(&output.content);
     if lines > max {
-        let hint = match tool_name {
-            "Grep" => {
-                "Narrow the pattern, add a glob filter, or use head_limit/offset for pagination."
-            }
-            "CharacterSearch" => "Narrow the search scope or use a more specific query.",
-            _ => "Use Grep to locate, then Read offset/limit or Tail for file-end segments.",
-        };
+        let hint = tool.output_limit_exceeded_hint();
         return Err(ToolError::Execution(format!(
             "Read economy: {tool_name} output has {lines} lines (max {max}). {hint}"
         )));

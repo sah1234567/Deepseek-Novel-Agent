@@ -27,7 +27,7 @@ pub use builtin::{AskQuestion, AskUserQuestionPayload};
 pub use context::{
     PendingSubagentWork, PermissionMode, PermissionResult, SubagentWorkQueue, ToolContext,
 };
-pub(crate) use error::{optional_str_any, require_str, require_str_any};
+pub(crate) use error::require_str;
 pub use error::{ToolError, ValidationError};
 pub use executor::{StreamingToolExecutor, ToolCallSpec, ToolExecutor};
 pub use paths::{

@@ -58,13 +58,6 @@ pub(crate) enum LlmCallOutcome {
 impl AgentEngine {
     // ── LLM call + streaming tool execution (unified path) ────
 
-    fn append_interrupt_message(&mut self, _tool_use: bool) -> Result<(), AgentError> {
-        // Suppressed —"[Request interrupted by user]" bubble is pointless noise.
-        // Drain request (max_tokens=1, stream=false) runs in background to
-        // keep session token counts accurate (see drain_usage_background).
-        Ok(())
-    }
-
     pub(crate) async fn call_llm_and_execute(
         &mut self,
         messages: &[LlmChatMessage],
@@ -96,7 +89,7 @@ impl AgentEngine {
         event_tx: Option<&mpsc::UnboundedSender<Event>>,
         persist_tool_messages: bool,
     ) -> Result<LlmCallOutcome, AgentError> {
-        let (executed_specs, _skip_result_events, denied_specs, mut executor) = {
+        let (executed_specs, skip_result_events, denied_specs, mut executor) = {
             let mut dispatch = dispatch_arc.lock().map_err(|_| {
                 AgentError::Validation("streaming tool dispatch lock poisoned".into())
             })?;
@@ -124,7 +117,7 @@ impl AgentEngine {
                     .is_some_and(|e| e.has_interruptible_tool_in_progress()),
                 event_tx,
             );
-            dispatch.poll_ui_results(event_tx);
+            dispatch.poll_ui_results(&self.shared.registry, event_tx);
             let executor = dispatch.take_executor().ok_or_else(|| {
                 AgentError::Validation("streaming tool executor already taken".into())
             })?;
@@ -161,9 +154,9 @@ impl AgentEngine {
                     &tool_call_order,
                     event_tx,
                     persist_tool_messages,
+                    &skip_result_events,
                 )
                 .await?;
-            self.append_interrupt_message(true)?;
             return Ok(LlmCallOutcome::Aborted(TerminalReason::AbortedTools));
         }
 
@@ -174,6 +167,7 @@ impl AgentEngine {
                 &tool_call_order,
                 event_tx,
                 persist_tool_messages,
+                &skip_result_events,
             )
             .await?;
 
@@ -249,12 +243,13 @@ impl AgentEngine {
         let stream_done = Arc::new(AtomicBool::new(false));
         let stream_done_poll = Arc::clone(&stream_done);
         let dispatch_poll = Arc::clone(&dispatch_arc);
+        let registry_poll = Arc::clone(&self.shared.registry);
         let event_tx_poll = event_tx.cloned();
         let poll_handle = tokio::spawn(async move {
             while !stream_done_poll.load(Ordering::SeqCst) {
                 tokio::time::sleep(Duration::from_millis(40)).await;
                 if let Ok(mut d) = dispatch_poll.lock() {
-                    d.poll_ui_results(event_tx_poll.as_ref());
+                    d.poll_ui_results(&registry_poll, event_tx_poll.as_ref());
                 }
             }
         });
@@ -336,7 +331,6 @@ impl AgentEngine {
                     "token_usage_recorded_stream_abort"
                 );
             }
-            self.append_interrupt_message(true)?;
             return Ok(LlmCallOutcome::Aborted(TerminalReason::AbortedStreaming));
         }
 

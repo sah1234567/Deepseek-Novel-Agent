@@ -93,9 +93,58 @@ impl Tool for KnowledgeDeriveTool {
 
     async fn call(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
         let operation = require_str(&input, "operation")?;
+        self.validate_write_targets(&operation, &input, ctx)?;
         let store = KnowledgeStore::new(&ctx.project_root);
         run_knowledge_derive_op(&store, &operation, &input)
     }
+}
+
+impl KnowledgeDeriveTool {
+    fn validate_write_targets(
+        &self,
+        operation: &str,
+        input: &Value,
+        ctx: &ToolContext,
+    ) -> Result<(), ToolError> {
+        match operation {
+            "character_snapshot" => {
+                let rel = require_str(input, "character_path")?;
+                let full = ctx.resolve_path(&rel);
+                validate_derive_write_path(ctx, self.name(), &rel, true, full.exists())?;
+            }
+            "relation_index" => validate_derive_write_path(
+                ctx,
+                self.name(),
+                "knowledge/characters/_关系与称呼索引.md",
+                false,
+                false,
+            )?,
+            "rebuild_index" => {
+                validate_derive_write_path(ctx, self.name(), "knowledge/INDEX.md", false, false)?
+            }
+            "foreshadow_categories" => {}
+            other => {
+                return Err(ToolError::Execution(format!("unknown operation: {other}")));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn validate_derive_write_path(
+    ctx: &ToolContext,
+    tool_name: &str,
+    rel: &str,
+    require_read: bool,
+    file_exists: bool,
+) -> Result<(), ToolError> {
+    let full = ctx.resolve_path(rel);
+    ctx.validate_write_root(&full)?;
+    ctx.validate_plan_mode_write_path(tool_name, rel)?;
+    if require_read {
+        ctx.require_read_before_write(tool_name, &full, rel, "deriving snapshot", file_exists)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -119,6 +168,41 @@ mod tests {
             .unwrap();
         assert!(out.content.contains("知识库索引"));
         assert!(!out.is_error);
+    }
+
+    #[test]
+    fn validate_derive_write_path_plan_mode_allows_plan_dir() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("plan")).unwrap();
+        let ctx = ToolContext {
+            permission_mode: PermissionMode::Plan,
+            project_root: tmp.path().to_path_buf(),
+            ..ToolContext::new(tmp.path().to_path_buf())
+        };
+        assert!(validate_derive_write_path(
+            &ctx,
+            "KnowledgeDerive",
+            "plan/outline.md",
+            false,
+            false
+        )
+        .is_ok());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn relation_index_call_runs_write_validation() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("knowledge/characters")).unwrap();
+        let ctx = ToolContext {
+            permission_mode: PermissionMode::Auto,
+            project_root: tmp.path().to_path_buf(),
+            ..ToolContext::new(tmp.path().to_path_buf())
+        };
+        let out = KnowledgeDeriveTool
+            .call(json!({"operation": "relation_index"}), &ctx)
+            .await
+            .unwrap();
+        assert!(out.content.contains("_关系与称呼索引"));
     }
 
     #[test]

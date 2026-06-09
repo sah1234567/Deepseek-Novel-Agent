@@ -21,7 +21,7 @@ use crate::{AgentError, ChatMessage, ContextManager, DynamicContext, SessionHand
 
 use novel_config::{load_project_settings, ProjectSettings};
 use novel_knowledge::KnowledgeStore;
-use novel_tools::{default_registry, PermissionMode};
+use novel_tools::{default_registry, PermissionMode, ToolRegistry};
 
 use std::collections::HashMap;
 use std::sync::atomic::AtomicU32;
@@ -67,6 +67,7 @@ impl AgentEngine {
             tool_call_id: None,
             tool_calls: None,
             reasoning_content: None,
+            ..Default::default()
         }];
 
         session
@@ -89,30 +90,18 @@ impl AgentEngine {
             .set_session_permission_mode(&session.id, initial_permission_mode.label())
             .map_err(AgentError::from)?;
 
-        let audit = open_audit_logger(&config.project_root, &session.id, &settings.model.model);
-
-        let session_llm = new_session_llm(&settings);
-        let shared = EngineShared {
+        let shared = build_engine_shared(EngineSharedBootstrap {
+            config: &config,
             session,
             settings: Arc::new(settings),
             registry,
             context_manager,
             abort_controller,
-            permission_mode_override: Arc::new(Mutex::new(initial_permission_mode)),
-            read_file_cache: Arc::new(DashMap::new()),
-            file_op_locks: Arc::new(DashMap::new()),
-            subagent_queue: Arc::new(Mutex::new(Vec::new())),
-            session_llm,
-            drain_in_progress: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            permission_mode: initial_permission_mode,
             agents_md,
-            agent_skills_dir: config.skills_dir.clone(),
-            global_config_path: config.global_config_path.clone(),
             system_prompt,
-            sub_agent_count: Arc::new(AtomicU32::new(0)),
             fork_stream_subs,
-            compaction_lock: Arc::new(tokio::sync::Mutex::new(())),
-            audit,
-        };
+        });
 
         Ok(Self {
             shared,
@@ -178,6 +167,7 @@ impl AgentEngine {
                 tool_call_id: None,
                 tool_calls: None,
                 reasoning_content: None,
+                ..Default::default()
             }];
             session
                 .db
@@ -185,12 +175,14 @@ impl AgentEngine {
                 .map_err(AgentError::from)?;
             persist_frozen_system_metadata(&session.db, &session.id, &dynamic)
                 .map_err(AgentError::from)?;
-            let initial = PermissionMode::from_settings_str(&settings.permissions.mode);
-            session
-                .db
-                .set_session_permission_mode(&session.id, initial.label())
-                .map_err(AgentError::from)?;
-            (msgs, system_prompt, agents_md)
+            let initial_permission_mode = crate::permission::resolve_session_permission_mode(
+                &session.db,
+                &session.id,
+                &[],
+                &settings.permissions.mode,
+            )
+            .map_err(AgentError::from)?;
+            (msgs, system_prompt, agents_md, initial_permission_mode)
         } else {
             session
                 .db
@@ -211,10 +203,17 @@ impl AgentEngine {
             let agents_md = load_frozen_static_from_metadata(&session.db, session_id)
                 .map_err(AgentError::from)?
                 .agents_md;
-            (sp, sys, agents_md)
+            let initial_permission_mode = crate::permission::resolve_session_permission_mode(
+                &session.db,
+                session_id,
+                &stored,
+                &settings.permissions.mode,
+            )
+            .map_err(AgentError::from)?;
+            (sp, sys, agents_md, initial_permission_mode)
         };
 
-        let (messages, system_prompt, agents_md) = messages;
+        let (messages, system_prompt, agents_md, initial_permission_mode) = messages;
 
         let turn_number = stored.iter().map(|m| m.turn_number).max().unwrap_or(0) as u32;
         let user_turn_count = stored
@@ -249,43 +248,24 @@ impl AgentEngine {
             .get_read_skill_reference_paths(session_id)
             .unwrap_or_default();
 
-        let initial_permission_mode = crate::permission::resolve_session_permission_mode(
-            &session.db,
-            session_id,
-            &stored,
-            &settings.permissions.mode,
-        )
-        .map_err(AgentError::from)?;
         tracing::debug!(
             mode = %initial_permission_mode.label(),
             session_id = %session_id,
             "resume_permission_mode"
         );
 
-        let audit = open_audit_logger(&config.project_root, &session.id, &settings.model.model);
-
-        let session_llm = new_session_llm(&settings);
-        let shared = EngineShared {
+        let shared = build_engine_shared(EngineSharedBootstrap {
+            config: &config,
             session,
             settings: Arc::new(settings),
             registry,
             context_manager,
             abort_controller,
-            permission_mode_override: Arc::new(Mutex::new(initial_permission_mode)),
-            read_file_cache: Arc::new(DashMap::new()),
-            file_op_locks: Arc::new(DashMap::new()),
-            subagent_queue: Arc::new(Mutex::new(Vec::new())),
-            session_llm,
-            drain_in_progress: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            permission_mode: initial_permission_mode,
             agents_md,
-            agent_skills_dir: config.skills_dir.clone(),
-            global_config_path: config.global_config_path.clone(),
             system_prompt,
-            sub_agent_count: Arc::new(AtomicU32::new(0)),
             fork_stream_subs,
-            compaction_lock: Arc::new(tokio::sync::Mutex::new(())),
-            audit,
-        };
+        });
 
         Ok(Self {
             shared,
@@ -321,5 +301,57 @@ impl AgentEngine {
         let (prompt, dynamic) =
             Self::assemble_system_prompt(config, session, &agents, &settings.permissions.mode)?;
         Ok((prompt, agents, dynamic))
+    }
+}
+
+/// Inputs shared by `new_with_abort` and `resume_with_abort` when constructing `EngineShared`.
+struct EngineSharedBootstrap<'a> {
+    config: &'a EngineConfig,
+    session: SessionHandle,
+    settings: Arc<ProjectSettings>,
+    registry: Arc<ToolRegistry>,
+    context_manager: ContextManager,
+    abort_controller: Arc<AbortController>,
+    permission_mode: PermissionMode,
+    agents_md: String,
+    system_prompt: String,
+    fork_stream_subs: ForkStreamSubscriptions,
+}
+
+fn build_engine_shared(bootstrap: EngineSharedBootstrap<'_>) -> EngineShared {
+    let EngineSharedBootstrap {
+        config,
+        session,
+        settings,
+        registry,
+        context_manager,
+        abort_controller,
+        permission_mode,
+        agents_md,
+        system_prompt,
+        fork_stream_subs,
+    } = bootstrap;
+    let audit = open_audit_logger(&config.project_root, &session.id, &settings.model.model);
+    let session_llm = new_session_llm(&settings);
+    EngineShared {
+        session,
+        settings,
+        registry,
+        context_manager,
+        abort_controller,
+        permission_mode_override: Arc::new(Mutex::new(permission_mode)),
+        read_file_cache: Arc::new(DashMap::new()),
+        file_op_locks: Arc::new(DashMap::new()),
+        subagent_queue: Arc::new(Mutex::new(Vec::new())),
+        session_llm,
+        drain_in_progress: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        agents_md,
+        agent_skills_dir: config.skills_dir.clone(),
+        global_config_path: config.global_config_path.clone(),
+        system_prompt,
+        sub_agent_count: Arc::new(AtomicU32::new(0)),
+        fork_stream_subs,
+        compaction_lock: Arc::new(tokio::sync::Mutex::new(())),
+        audit,
     }
 }

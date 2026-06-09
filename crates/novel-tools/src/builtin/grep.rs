@@ -1,5 +1,5 @@
 use super::super::{
-    blocking, optional_search_root, require_str_any, Tool, ToolContext, ToolError, ToolOutput,
+    blocking, optional_search_root, require_str, Tool, ToolContext, ToolError, ToolOutput,
 };
 use async_trait::async_trait;
 use grep_regex::RegexMatcher;
@@ -170,8 +170,16 @@ impl Tool for GrepTool {
         true
     }
 
+    fn max_output_lines(&self, _input: &Value) -> Option<usize> {
+        Some(crate::read_economy::GREP_MAX_LINES)
+    }
+
+    fn output_limit_exceeded_hint(&self) -> &'static str {
+        "Narrow the pattern, add a glob filter, or use head_limit/offset for pagination."
+    }
+
     async fn call(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
-        let pattern = require_str_any(&input, &["pattern", "query", "regex"])?.to_string();
+        let pattern = require_str(&input, "pattern")?.to_string();
         let search_root = optional_search_root(&input)
             .map(|p| ctx.resolve_path(&p))
             .unwrap_or_else(|| ctx.project_root.clone());

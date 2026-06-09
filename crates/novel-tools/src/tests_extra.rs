@@ -253,7 +253,7 @@ mod permission_tests {
             ..ToolContext::new(tmp.path().to_path_buf())
         };
         let out = crate::builtin::GlobTool
-            .call(json!({"glob_pattern": "*hello*", "search_root": "."}), &ctx)
+            .call(json!({"pattern": "*hello*", "search_root": "."}), &ctx)
             .await
             .unwrap();
         assert!(out.content.contains("hello.txt"));

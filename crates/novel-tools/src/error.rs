@@ -36,25 +36,3 @@ pub(crate) fn require_str(input: &Value, key: &str) -> Result<String, Validation
         .map(|s| s.to_string())
         .ok_or_else(|| ValidationError::MissingField(key.into()))
 }
-
-/// Like `require_str`, but accepts the first matching key (e.g. `pattern` / `query` for Grep).
-pub(crate) fn require_str_any(input: &Value, keys: &[&str]) -> Result<String, ValidationError> {
-    for key in keys {
-        if let Ok(v) = require_str(input, key) {
-            return Ok(v);
-        }
-    }
-    Err(ValidationError::MissingField(keys.join(" or ")))
-}
-
-/// First non-empty string among `keys`, or `None` if all absent.
-pub(crate) fn optional_str_any(input: &Value, keys: &[&str]) -> Option<String> {
-    for key in keys {
-        if let Ok(v) = require_str(input, key) {
-            if !v.is_empty() {
-                return Some(v);
-            }
-        }
-    }
-    None
-}

@@ -2,6 +2,7 @@
 //! messages into a compressed prefix, clears the read-file cache, and re-emits
 //! fresh skill/agent summaries that survive the compaction boundary.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::context::dynamic_context::{
@@ -97,6 +98,17 @@ impl AgentEngine {
             tracing::warn!(
                 fail_count = self.compaction_fail_count,
                 "compaction_skipped_circuit_breaker"
+            );
+            if let Some(tx) = event_tx {
+                let reason = "连续压缩失败已达上限，已暂停自动压缩；请缩短对话或新建会话".into();
+                let _ = tx.send(Event::CompactionProgress {
+                    attempt: self.compaction_fail_count,
+                    action: CompactionAction::Failed { reason },
+                });
+            }
+            self.audit_error(
+                "compaction circuit breaker open: context may exceed token budget",
+                true,
             );
             return Ok(());
         }
@@ -232,26 +244,25 @@ impl AgentEngine {
             }
         };
         if let Some((min, max)) = retained_bounds {
-            let _ = self.shared.session.db.record_compaction_retained_turns(
-                &self.shared.session.id,
-                epoch,
-                min,
-                max,
-            );
+            self.shared
+                .session
+                .db
+                .record_compaction_retained_turns(&self.shared.session.id, epoch, min, max)
+                .map_err(AgentError::from)?;
         }
 
         self.invoked_skill_ids = skill_ids.clone();
-        let _ = self
-            .shared
+        self.shared
             .session
             .db
-            .set_invoked_skill_ids(&self.shared.session.id, &skill_ids);
+            .set_invoked_skill_ids(&self.shared.session.id, &skill_ids)
+            .map_err(AgentError::from)?;
         self.read_skill_reference_paths = ref_paths.clone();
-        let _ = self
-            .shared
+        self.shared
             .session
             .db
-            .set_read_skill_reference_paths(&self.shared.session.id, &ref_paths);
+            .set_read_skill_reference_paths(&self.shared.session.id, &ref_paths)
+            .map_err(AgentError::from)?;
 
         let tokens_before = self.last_context_tokens;
         self.audit_log(LogEvent::CompactionTriggered {
@@ -259,8 +270,32 @@ impl AgentEngine {
             level: "session".into(),
             tokens_before,
         });
-        self.messages = compaction_slice_to_chat(&final_msgs);
-        self.sync_messages_to_db()?;
+        let display_snapshot: HashMap<usize, String> = self
+            .messages
+            .iter()
+            .enumerate()
+            .filter_map(|(i, m)| {
+                m.display_content
+                    .as_ref()
+                    .map(|display| (i, display.clone()))
+            })
+            .collect();
+        let retained_in_final = final_msgs.len().saturating_sub(2);
+        let mut new_messages = compaction_slice_to_chat(&final_msgs);
+        let prefix_len = new_messages.len().saturating_sub(retained_in_final);
+        for offset in 0..retained_in_final {
+            let new_idx = prefix_len + offset;
+            let Some(msg) = new_messages.get_mut(new_idx) else {
+                break;
+            };
+            if msg.display_content.is_none() {
+                let orig_idx = partition.retain_from + offset;
+                if let Some(display) = display_snapshot.get(&orig_idx) {
+                    msg.display_content = Some(display.clone());
+                }
+            }
+        }
+        self.commit_message_slice(new_messages)?;
         self.shared.clear_read_file_cache();
         tracing::debug!(
             session_id = %self.shared.session.id,

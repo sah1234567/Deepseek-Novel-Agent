@@ -2,9 +2,11 @@
 
 use crate::paths::{normalize_rel_path, optional_file_path};
 use crate::read_cache::{format_read_dedup_hint_from_input, is_read_dedup_stub};
+use crate::ToolRegistry;
 use serde_json::Value;
 
 pub(crate) struct MiddlewareCtx<'a> {
+    pub registry: &'a ToolRegistry,
     pub tool_name: &'a str,
     pub tool_input: Option<&'a Value>,
     pub content: &'a str,
@@ -40,15 +42,22 @@ struct ReadDedupHintMiddleware;
 
 impl ToolResultMiddleware for ReadDedupHintMiddleware {
     fn append_lines(&self, ctx: &MiddlewareCtx<'_>) -> Vec<String> {
-        if ctx.tool_name != "Read" && ctx.tool_name != "Tail" {
+        let Some(tool) = ctx.registry.get(ctx.tool_name) else {
+            return Vec::new();
+        };
+        if !tool.supports_read_dedup_hint() {
             return Vec::new();
         }
         if !is_read_dedup_stub(ctx.content) {
             return Vec::new();
         }
-        format_read_dedup_hint_from_input(ctx.tool_name, ctx.tool_input.unwrap_or(&Value::Null))
-            .into_iter()
-            .collect()
+        format_read_dedup_hint_from_input(
+            ctx.registry,
+            ctx.tool_name,
+            ctx.tool_input.unwrap_or(&Value::Null),
+        )
+        .into_iter()
+        .collect()
     }
 }
 
@@ -74,13 +83,16 @@ pub(crate) fn append_middleware_lines(ctx: &MiddlewareCtx<'_>) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::default_registry;
     use crate::FILE_UNCHANGED_STUB;
     use serde_json::json;
 
     #[test]
     fn write_edit_fact_middleware() {
+        let registry = default_registry();
         let input = json!({"file_path": "chapters/ch01.md"});
         let ctx = MiddlewareCtx {
+            registry: &registry,
             tool_name: "Write",
             tool_input: Some(&input),
             content: "Wrote file",
@@ -94,8 +106,10 @@ mod tests {
 
     #[test]
     fn read_dedup_hint_middleware() {
+        let registry = default_registry();
         let input = json!({"file_path": "chapters/ch01.md", "offset": 5, "limit": 8});
         let ctx = MiddlewareCtx {
+            registry: &registry,
             tool_name: "Read",
             tool_input: Some(&input),
             content: FILE_UNCHANGED_STUB,
@@ -107,8 +121,10 @@ mod tests {
 
     #[test]
     fn edit_fact_mentions_updated_cache() {
+        let registry = default_registry();
         let input = json!({"file_path": "chapters/ch01.md"});
         let ctx = MiddlewareCtx {
+            registry: &registry,
             tool_name: "Edit",
             tool_input: Some(&input),
             content: "Edited file",
@@ -119,8 +135,10 @@ mod tests {
 
     #[test]
     fn read_without_dedup_stub_gets_no_hint() {
+        let registry = default_registry();
         let input = json!({"file_path": "a.md"});
         let ctx = MiddlewareCtx {
+            registry: &registry,
             tool_name: "Read",
             tool_input: Some(&input),
             content: "1\thello",

@@ -278,6 +278,7 @@ mod tests {
             tool_call_id: None,
             tool_calls: None,
             reasoning_content: None,
+            ..Default::default()
         }];
         let fetch = fetch_subagent_llm_completion(
             &mut llm,

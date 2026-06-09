@@ -8,7 +8,6 @@ use crate::engine::session_llm::{
     build_chat_client, read_session_llm, write_session_llm, SessionLlmSnapshot,
 };
 use crate::message::tool_result_message;
-use crate::turn::format_tool;
 use crate::turn::TurnContext;
 use crate::turn::MSG_SEQ_USER;
 use crate::{AgentEngine, AgentError, AgentType, ChatMessage, Event, TerminalReason};
@@ -51,22 +50,37 @@ impl AgentEngine {
         self.clear_interrupt();
         self.turn_number += 1;
 
-        let _ = self
+        if let Err(e) = self
             .shared
             .session
             .db
-            .sync_user_turn_count(&self.shared.session.id, self.turn_number as i32);
+            .sync_user_turn_count(&self.shared.session.id, self.turn_number as i32)
+        {
+            tracing::warn!(
+                session_id = %self.shared.session.id,
+                turn_number = self.turn_number,
+                error = %e,
+                "sync_user_turn_count failed"
+            );
+        }
 
         let author_content = content.trim().to_string();
 
         // Set session title from first user message (author text only, not injected prefix).
         if self.turn_number == 1 {
             let title: String = author_content.chars().take(50).collect();
-            let _ = self
+            if let Err(e) = self
                 .shared
                 .session
                 .db
-                .set_session_title(&self.shared.session.id, &title);
+                .set_session_title(&self.shared.session.id, &title)
+            {
+                tracing::warn!(
+                    session_id = %self.shared.session.id,
+                    error = %e,
+                    "set_session_title failed"
+                );
+            }
         }
         // Per-turn model snapshot (StatusBar override; does not write settings.json).
         let turn_snap = match model_override {
@@ -109,6 +123,7 @@ impl AgentEngine {
             tool_call_id: None,
             tool_calls: None,
             reasoning_content: None,
+            display_content: display_content.map(str::to_string),
         };
         self.messages.push(user_msg.clone());
         self.turn_message_seq = 0;
@@ -142,50 +157,14 @@ impl AgentEngine {
         let mut turn_ctx = TurnContext::new(max_react);
         let reason = self.run_inner_turn_loop(&mut turn_ctx, event_tx).await?;
 
-        let (hit, miss, comp, _ctx) = self.session_token_summary();
-        let (th, tm, tc) = self
-            .last_turn_usage
-            .as_ref()
-            .map(|u| (u.cache_hit_tokens, u.cache_miss_tokens, u.completion_tokens))
-            .unwrap_or((0, 0, 0));
         tracing::info!(turn = self.turn_number, ?reason, "turn_complete");
         tracing::debug!(
             session_id = %session_id,
-            cache_hit = hit,
-            cache_miss = miss,
-            completion = comp,
-            turn_hit = th,
-            turn_miss = tm,
-            turn_comp = tc,
+            turn_number = self.turn_number,
+            ?reason,
             "turn_complete_detail"
         );
-        self.audit_log(LogEvent::TurnCompleted {
-            session_id: session_id.clone(),
-            turn_number: self.turn_number,
-            cache_hit_tokens: hit,
-            cache_miss_tokens: miss,
-            completion_tokens: comp,
-        });
-
-        let turn_paused = self.pending_user_question.is_some() || !self.pending_tools.is_empty();
-        if let Some(tx) = event_tx {
-            if reason.is_aborted() {
-                self.audit_error("用户已中断", true);
-            }
-            // Paused for AskUserQuestion or tool approval — not a finished turn.
-            if !turn_paused {
-                let _ = tx.send(Event::TurnComplete {
-                    turn_number: self.turn_number,
-                    cache_hit_tokens: hit,
-                    cache_miss_tokens: miss,
-                    completion_tokens: comp,
-                    turn_hit_tokens: th,
-                    turn_miss_tokens: tm,
-                    turn_comp_tokens: tc,
-                    was_interrupted: reason.is_aborted(),
-                });
-            }
-        }
+        self.emit_turn_finished(&reason, event_tx);
         self.clear_interrupt();
         Ok(reason)
     }
@@ -207,6 +186,7 @@ impl AgentEngine {
             tool_call_id: None,
             tool_calls: None,
             reasoning_content: None,
+            ..Default::default()
         };
         tracing::debug!(
             ?agent_type,
@@ -239,6 +219,7 @@ impl AgentEngine {
         tool_call_order: &[String],
         event_tx: Option<&mpsc::UnboundedSender<Event>>,
         persist_tool_messages: bool,
+        skip_ui_result_events: &std::collections::HashSet<String>,
     ) -> Result<bool, AgentError> {
         let spec_by_id: std::collections::HashMap<&str, &ToolCallSpec> =
             executed_specs.iter().map(|s| (s.id.as_str(), s)).collect();
@@ -253,9 +234,17 @@ impl AgentEngine {
                 None => continue,
             };
             let spec = spec_by_id.get(id.as_str()).copied();
+            let skip_ui_emit = skip_ui_result_events.contains(&id);
             match result {
                 Ok(out) => {
-                    self.apply_ok_stream_result(&id, spec, out, event_tx, persist_tool_messages)?;
+                    self.apply_ok_stream_result(
+                        &id,
+                        spec,
+                        out,
+                        event_tx,
+                        persist_tool_messages,
+                        skip_ui_emit,
+                    )?;
                 }
                 Err(novel_tools::ToolError::NeedsUserInput { payload }) => {
                     self.apply_needs_input_stream_result(
@@ -268,7 +257,14 @@ impl AgentEngine {
                     pause_for_question = true;
                 }
                 Err(e) => {
-                    self.apply_err_stream_result(&id, spec, e, event_tx, persist_tool_messages)?;
+                    self.apply_err_stream_result(
+                        &id,
+                        spec,
+                        e,
+                        event_tx,
+                        persist_tool_messages,
+                        skip_ui_emit,
+                    )?;
                 }
             }
         }
@@ -294,24 +290,20 @@ impl AgentEngine {
         let ctx = self.tool_context();
         let executor = ToolExecutor::new(Arc::clone(&self.shared.registry));
         let result = executor.execute_one_user_approved(&spec, &ctx).await;
-        let success = matches!(&result, Ok(out) if !out.is_error);
-        let content = format_tool(Some(&spec), result).content;
-        self.audit_log(LogEvent::ToolExecuted {
-            session_id: self.shared.session.id.clone(),
-            tool_name: spec.name.clone(),
-            success,
-        });
-        if let Some(tx) = event_tx {
-            let _ = tx.send(Event::ToolCallResult {
-                tool_call_id: tool_call_id.to_string(),
-                content: content.clone(),
-            });
-        }
-        let tool_msg = tool_result_message(tool_call_id, &content);
-        self.messages.push(tool_msg.clone());
-        self.persist_message_alloc(&tool_msg)?;
-        if success {
-            ctx.promote_read_cache_for_tool_result(&spec.name, &spec.input);
+        match result {
+            Ok(out) => {
+                self.apply_ok_stream_result(tool_call_id, Some(&spec), out, event_tx, true, false)?;
+            }
+            Err(err) => {
+                self.apply_err_stream_result(
+                    tool_call_id,
+                    Some(&spec),
+                    err,
+                    event_tx,
+                    true,
+                    false,
+                )?;
+            }
         }
         if event_tx.is_some()
             && self.pending_tools.is_empty()
@@ -342,21 +334,15 @@ impl AgentEngine {
             tool_name = %spec.name,
             "deny_tool"
         );
-        self.audit_log(LogEvent::ToolExecuted {
-            session_id: self.shared.session.id.clone(),
-            tool_name: spec.name,
-            success: false,
-        });
-        let content = reason.unwrap_or_else(|| "denied by user".into());
-        if let Some(tx) = event_tx {
-            let _ = tx.send(Event::ToolCallResult {
-                tool_call_id: tool_call_id.to_string(),
-                content: content.clone(),
-            });
-        }
-        let msg = tool_result_message(tool_call_id, &content);
-        self.persist_message_alloc(&msg)?;
-        self.messages.push(msg);
+        let reason_str = reason.unwrap_or_else(|| "denied by user".into());
+        self.apply_err_stream_result(
+            tool_call_id,
+            Some(&spec),
+            novel_tools::ToolError::PermissionDenied(reason_str),
+            event_tx,
+            true,
+            false,
+        )?;
         if event_tx.is_some()
             && self.pending_tools.is_empty()
             && self.pending_user_question.is_none()
@@ -443,12 +429,6 @@ impl AgentEngine {
             "turn_continue_resume_inner_turn"
         );
         let reason = self.run_inner_turn_loop(&mut turn_ctx, event_tx).await?;
-        let (hit, miss, comp, _ctx) = self.session_token_summary();
-        let (th, tm, tc) = self
-            .last_turn_usage
-            .as_ref()
-            .map(|u| (u.cache_hit_tokens, u.cache_miss_tokens, u.completion_tokens))
-            .unwrap_or((0, 0, 0));
         tracing::debug!(
             session_id = %self.shared.session.id,
             turn_number = self.turn_number,
@@ -456,6 +436,29 @@ impl AgentEngine {
             resume_inner_turn = resume_inner,
             "turn_continue_complete"
         );
+        if self.pending_user_question.is_some() || !self.pending_tools.is_empty() {
+            tracing::debug!(
+                pending_question = self.pending_user_question.is_some(),
+                pending_tool_count = self.pending_tools.len(),
+                "turn_continue_paused"
+            );
+        }
+        self.emit_turn_finished(&reason, event_tx);
+        Ok(reason)
+    }
+
+    /// Audit + `TurnComplete` IPC when the turn is not paused for approval or AskUserQuestion.
+    pub(in crate::turn::r#loop) fn emit_turn_finished(
+        &mut self,
+        reason: &TerminalReason,
+        event_tx: Option<&mpsc::UnboundedSender<Event>>,
+    ) {
+        let (hit, miss, comp, _ctx) = self.session_token_summary();
+        let (th, tm, tc) = self
+            .last_turn_usage
+            .as_ref()
+            .map(|u| (u.cache_hit_tokens, u.cache_miss_tokens, u.completion_tokens))
+            .unwrap_or((0, 0, 0));
         self.audit_log(LogEvent::TurnCompleted {
             session_id: self.shared.session.id.clone(),
             turn_number: self.turn_number,
@@ -468,13 +471,7 @@ impl AgentEngine {
             if reason.is_aborted() {
                 self.audit_error("用户已中断", true);
             }
-            if turn_paused {
-                tracing::debug!(
-                    pending_question = self.pending_user_question.is_some(),
-                    pending_tool_count = self.pending_tools.len(),
-                    "turn_continue_paused"
-                );
-            } else {
+            if !turn_paused {
                 let _ = tx.send(Event::TurnComplete {
                     turn_number: self.turn_number,
                     cache_hit_tokens: hit,
@@ -487,6 +484,5 @@ impl AgentEngine {
                 });
             }
         }
-        Ok(reason)
     }
 }

@@ -16,6 +16,7 @@ pub fn yield_missing_tool_result_blocks(
             tool_call_id: Some(tc.id.clone()),
             tool_calls: None,
             reasoning_content: None,
+            ..Default::default()
         })
         .collect()
 }
@@ -38,6 +39,7 @@ mod tests {
                 name: "Read".into(),
                 arguments: json!({}),
             }]),
+            ..Default::default()
         };
         let blocks = yield_missing_tool_result_blocks(&assistant, "Interrupted by user");
         assert_eq!(blocks.len(), 1);

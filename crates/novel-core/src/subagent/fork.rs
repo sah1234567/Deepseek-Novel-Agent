@@ -77,6 +77,7 @@ impl ForkedAgentContext {
                 tool_call_id: None,
                 tool_calls: None,
                 reasoning_content: None,
+                ..Default::default()
             },
             max_react_loops,
         };
@@ -115,6 +116,7 @@ mod tests {
             tool_call_id: None,
             tool_calls: None,
             reasoning_content: None,
+            ..Default::default()
         }
     }
 

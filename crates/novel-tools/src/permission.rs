@@ -12,6 +12,7 @@ pub fn evaluate_tool_permissions(
     is_always_allowed: bool,
     can_write_outside_plan_dir: bool,
     allowed_in_plan_mode: bool,
+    skips_normal_permission_ask: bool,
     summary: &str,
     input: &serde_json::Value,
     ctx: &ToolContext,
@@ -24,36 +25,59 @@ pub fn evaluate_tool_permissions(
             reason: "子 Agent 禁止嵌套 fork（sub_agent_running）".into(),
         };
     }
-    if ctx.is_tool_always_allowed(tool_name) {
-        return PermissionResult::Allow;
-    }
-    if is_always_allowed {
+    if ctx.is_tool_always_allowed(tool_name) || is_always_allowed {
         return PermissionResult::Allow;
     }
     let mode = ctx.effective_permission_mode();
+    if skips_normal_permission_ask && matches!(mode, PermissionMode::Normal) {
+        return PermissionResult::Allow;
+    }
     if matches!(mode, PermissionMode::Plan) {
-        if is_read_only {
-            return PermissionResult::Allow;
-        }
-        if can_write_outside_plan_dir {
-            if let Some(p) = optional_file_path(input) {
-                if ToolContext::is_under_plan_dir(&p) {
-                    return PermissionResult::Allow;
-                }
-            }
-            return PermissionResult::Deny {
+        return evaluate_plan_mode(
+            tool_name,
+            is_read_only,
+            can_write_outside_plan_dir,
+            allowed_in_plan_mode,
+            input,
+        );
+    }
+    evaluate_standard_mode(mode, is_read_only, tool_name, summary)
+}
+
+fn evaluate_plan_mode(
+    tool_name: &str,
+    is_read_only: bool,
+    can_write_outside_plan_dir: bool,
+    allowed_in_plan_mode: bool,
+    input: &serde_json::Value,
+) -> PermissionResult {
+    if is_read_only {
+        return PermissionResult::Allow;
+    }
+    if can_write_outside_plan_dir {
+        return match optional_file_path(input) {
+            Some(p) if ToolContext::is_under_plan_dir(&p) => PermissionResult::Allow,
+            _ => PermissionResult::Deny {
                 reason: "plan mode: Write/Edit only allowed under plan/".into(),
-            };
-        }
-        if allowed_in_plan_mode {
-            return PermissionResult::Allow;
-        }
-        return PermissionResult::Deny {
-            reason: format!(
-                "plan mode: {tool_name} not available — use plan/ for drafts or switch permission mode"
-            ),
+            },
         };
     }
+    if allowed_in_plan_mode {
+        return PermissionResult::Allow;
+    }
+    PermissionResult::Deny {
+        reason: format!(
+            "plan mode: {tool_name} not available — use plan/ for drafts or switch permission mode"
+        ),
+    }
+}
+
+fn evaluate_standard_mode(
+    mode: PermissionMode,
+    is_read_only: bool,
+    tool_name: &str,
+    summary: &str,
+) -> PermissionResult {
     match mode {
         PermissionMode::Auto | PermissionMode::Unattended => PermissionResult::Allow,
         _ if is_read_only => PermissionResult::Allow,
@@ -61,5 +85,144 @@ pub fn evaluate_tool_permissions(
             tool_name: tool_name.into(),
             summary: summary.into(),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use tempfile::TempDir;
+
+    fn ctx(mode: PermissionMode) -> ToolContext {
+        let tmp = TempDir::new().unwrap();
+        ToolContext {
+            permission_mode: mode,
+            project_root: tmp.path().to_path_buf(),
+            ..ToolContext::new(tmp.path().to_path_buf())
+        }
+    }
+
+    #[test]
+    fn deny_rule_blocks_before_mode_check() {
+        let mut c = ctx(PermissionMode::Auto);
+        c.deny_rules = vec!["Write".into()];
+        let r = evaluate_tool_permissions(
+            "Write",
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            "write",
+            &json!({"file_path": "a.md"}),
+            &c,
+        );
+        assert!(matches!(r, PermissionResult::Deny { .. }));
+    }
+
+    #[test]
+    fn nested_fork_blocked_when_not_allowed() {
+        let mut c = ctx(PermissionMode::Auto);
+        c.allow_fork = false;
+        let r = evaluate_tool_permissions(
+            "ForkSubAgent",
+            true,
+            true,
+            false,
+            false,
+            false,
+            false,
+            "fork",
+            &json!({}),
+            &c,
+        );
+        assert!(matches!(r, PermissionResult::Deny { .. }));
+    }
+
+    #[test]
+    fn plan_mode_write_only_under_plan() {
+        let c = ctx(PermissionMode::Plan);
+        let ok = evaluate_tool_permissions(
+            "Write",
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            "write",
+            &json!({"file_path": "plan/draft.md"}),
+            &c,
+        );
+        assert!(matches!(ok, PermissionResult::Allow));
+        let bad = evaluate_tool_permissions(
+            "Write",
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            "write",
+            &json!({"file_path": "chapters/ch01.md"}),
+            &c,
+        );
+        assert!(matches!(bad, PermissionResult::Deny { .. }));
+    }
+
+    #[test]
+    fn normal_mode_asks_for_write() {
+        let c = ctx(PermissionMode::Normal);
+        let r = evaluate_tool_permissions(
+            "Write",
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            "write file",
+            &json!({"file_path": "a.md"}),
+            &c,
+        );
+        assert!(matches!(r, PermissionResult::Ask { .. }));
+    }
+
+    #[test]
+    fn read_only_allowed_in_normal_mode() {
+        let c = ctx(PermissionMode::Normal);
+        let r = evaluate_tool_permissions(
+            "Read",
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            "read",
+            &json!({"file_path": "a.md"}),
+            &c,
+        );
+        assert!(matches!(r, PermissionResult::Allow));
+    }
+
+    #[test]
+    fn skips_normal_ask_when_predicate_set() {
+        let c = ctx(PermissionMode::Normal);
+        let r = evaluate_tool_permissions(
+            "AskUserQuestion",
+            false,
+            false,
+            false,
+            false,
+            false,
+            true,
+            "question",
+            &json!({}),
+            &c,
+        );
+        assert!(matches!(r, PermissionResult::Allow));
     }
 }

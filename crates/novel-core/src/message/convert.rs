@@ -43,6 +43,7 @@ pub fn compaction_to_chat(msg: &CompactionMessage) -> ChatMessage {
         content: msg.content.clone(),
         tool_call_id: msg.tool_call_id.clone(),
         reasoning_content: msg.reasoning_content.clone(),
+        display_content: None,
         tool_calls: msg.tool_calls.as_ref().map(|tcs| {
             tcs.iter()
                 .map(|tc| ToolCallRecord {

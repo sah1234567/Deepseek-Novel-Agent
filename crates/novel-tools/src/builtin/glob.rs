@@ -1,6 +1,5 @@
 use super::super::{
-    blocking, normalize_rel_path, optional_search_root, optional_str_any, Tool, ToolContext,
-    ToolError, ToolOutput,
+    blocking, normalize_rel_path, optional_search_root, Tool, ToolContext, ToolError, ToolOutput,
 };
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -188,8 +187,11 @@ impl Tool for GlobTool {
     }
 
     async fn call(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
-        let pattern = optional_str_any(&input, &["pattern", "glob_pattern", "glob"])
-            .unwrap_or_else(|| "*".into());
+        let pattern = input
+            .get("pattern")
+            .and_then(|v| v.as_str())
+            .unwrap_or("*")
+            .to_string();
         let walk_root = optional_search_root(&input)
             .map(|p| ctx.resolve_path(&p))
             .unwrap_or_else(|| ctx.project_root.clone());

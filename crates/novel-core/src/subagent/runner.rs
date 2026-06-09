@@ -260,6 +260,7 @@ async fn subagent_apply_completion_tools(
     )
     .await?;
     subagent_push_tool_results(
+        &shared.registry,
         &shared.session.db,
         fork_run_id,
         &mut child.messages,

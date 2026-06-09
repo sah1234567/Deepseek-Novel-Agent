@@ -97,12 +97,19 @@ pub fn stored_to_chat(stored: &[StoredMessage]) -> Result<Vec<ChatMessage>, crat
         } else {
             None
         };
+        let display_content = s
+            .content_json
+            .get("display_content")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(String::from);
         out.push(ChatMessage {
             role: s.role.clone(),
             content,
             tool_call_id,
             tool_calls,
             reasoning_content,
+            display_content,
         });
     }
     Ok(out)
@@ -140,6 +147,7 @@ pub fn assistant_with_tools(
                     .collect(),
             )
         },
+        ..Default::default()
     }
 }
 
@@ -150,5 +158,6 @@ pub fn tool_result_message(tool_call_id: &str, content: &str) -> ChatMessage {
         tool_call_id: Some(tool_call_id.to_string()),
         tool_calls: None,
         reasoning_content: None,
+        ..Default::default()
     }
 }

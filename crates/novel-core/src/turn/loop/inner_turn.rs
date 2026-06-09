@@ -66,28 +66,35 @@ impl AgentEngine {
         );
         Ok(Some(TerminalReason::Completed))
     }
+    fn inner_turn_loop_exit_reason(&mut self, turn_ctx: &TurnContext) -> Option<TerminalReason> {
+        if self.interrupt_requested() {
+            return Some(TerminalReason::AbortedStreaming);
+        }
+        if let Some((tool, detail)) = self.take_repeated_tool_failure_trip() {
+            tracing::warn!(
+                tool = %tool,
+                detail = %detail,
+                "inner_turn_circuit_breaker"
+            );
+            return Some(TerminalReason::RepeatedToolFailures { tool, detail });
+        }
+        if !self.pending_tools.is_empty() {
+            return Some(TerminalReason::Completed);
+        }
+        if !turn_ctx.needs_continuation() {
+            return Some(TerminalReason::MaxReactLoops(turn_ctx.max_inner_turns));
+        }
+        None
+    }
+
     pub(in crate::turn::r#loop) async fn run_inner_turn_loop(
         &mut self,
         turn_ctx: &mut TurnContext,
         event_tx: Option<&mpsc::UnboundedSender<Event>>,
     ) -> Result<TerminalReason, AgentError> {
         loop {
-            if self.interrupt_requested() {
-                return Ok(TerminalReason::AbortedStreaming);
-            }
-            if let Some((tool, detail)) = self.take_repeated_tool_failure_trip() {
-                tracing::warn!(
-                    tool = %tool,
-                    detail = %detail,
-                    "inner_turn_circuit_breaker"
-                );
-                return Ok(TerminalReason::RepeatedToolFailures { tool, detail });
-            }
-            if !self.pending_tools.is_empty() {
-                return Ok(TerminalReason::Completed);
-            }
-            if !turn_ctx.needs_continuation() {
-                return Ok(TerminalReason::MaxReactLoops(turn_ctx.max_inner_turns));
+            if let Some(reason) = self.inner_turn_loop_exit_reason(turn_ctx) {
+                return Ok(reason);
             }
 
             let schemas = tool_schemas_for_agent(&self.shared.registry, &self.main_tool_names());

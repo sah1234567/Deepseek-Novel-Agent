@@ -136,6 +136,38 @@ impl Tool for ReadTool {
         Some((offset, end.min(total_lines.max(offset))))
     }
 
+    fn supports_read_dedup_hint(&self) -> bool {
+        true
+    }
+
+    fn read_dedup_range_label(&self, input: &Value) -> Option<String> {
+        let _ = extract_file_path(input).ok()?;
+        let offset = input
+            .get("offset")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize);
+        let limit = input
+            .get("limit")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize);
+        let read_offset = Some(offset.unwrap_or(1));
+        let (off, lim) = crate::read_cache::read_range_key(read_offset, limit);
+        Some(match (off, lim) {
+            (None, None) => "full_file".into(),
+            (Some(o), Some(l)) => format!("offset:{o} limit:{l}"),
+            (Some(o), None) => format!("offset:{o}"),
+            _ => "partial".into(),
+        })
+    }
+
+    fn max_output_lines(&self, input: &Value) -> Option<usize> {
+        let fp = extract_file_path(input).ok()?;
+        Some(
+            crate::read_economy::max_lines_for_path(&fp)
+                .unwrap_or(crate::read_economy::CHAPTER_MAX_LINES),
+        )
+    }
+
     fn validate_input(&self, input: &Value) -> Result<(), ValidationError> {
         extract_file_path(input)?;
         Ok(())

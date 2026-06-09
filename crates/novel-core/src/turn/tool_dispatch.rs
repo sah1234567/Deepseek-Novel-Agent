@@ -220,7 +220,11 @@ fn tool_validation_failure(
 }
 
 impl StreamingToolDispatch {
-    pub(crate) fn poll_ui_results(&mut self, event_tx: Option<&mpsc::UnboundedSender<Event>>) {
+    pub(crate) fn poll_ui_results(
+        &mut self,
+        registry: &ToolRegistry,
+        event_tx: Option<&mpsc::UnboundedSender<Event>>,
+    ) {
         // Must not drain `completed` —results are collected once in get_remaining_results
         // for persistence and the next LLM call. Draining here caused UI success + missing
         // tool_result messages (model reports "timeout" / retries InvokeSkill).
@@ -237,7 +241,7 @@ impl StreamingToolDispatch {
                 continue;
             }
             let spec = self.executed_specs.iter().find(|s| s.id == id);
-            let content = format_tool(spec, result).content;
+            let content = format_tool(registry, spec, result).content;
             if let Some(tx) = event_tx {
                 let _ = tx.send(Event::ToolCallResult {
                     tool_call_id: id,
@@ -255,6 +259,7 @@ impl StreamingToolDispatch {
 }
 
 pub(crate) fn format_tool(
+    registry: &novel_tools::ToolRegistry,
     spec: Option<&ToolCallSpec>,
     result: Result<ToolOutput, ToolError>,
 ) -> FormattedToolResult {
@@ -267,7 +272,7 @@ pub(crate) fn format_tool(
             tool_name: "",
             tool_input: None,
         });
-    format_tool_result_for_llm(spec_ref, result)
+    format_tool_result_for_llm(registry, spec_ref, result)
 }
 
 #[cfg(test)]
@@ -312,8 +317,8 @@ mod tests {
         }
 
         let (ev_tx, mut ev_rx) = mpsc::unbounded_channel();
-        dispatch.poll_ui_results(Some(&ev_tx));
-        dispatch.poll_ui_results(Some(&ev_tx));
+        dispatch.poll_ui_results(&reg, Some(&ev_tx));
+        dispatch.poll_ui_results(&reg, Some(&ev_tx));
         let first = ev_rx.try_recv().expect("ToolCallResult event");
         assert!(matches!(first, Event::ToolCallResult { .. }));
         assert!(ev_rx.try_recv().is_err());

@@ -51,6 +51,14 @@ impl Tool for ForkSubAgentTool {
     }
 
     fn is_read_only(&self) -> bool {
+        false
+    }
+
+    fn allowed_in_plan_mode(&self) -> bool {
+        true
+    }
+
+    fn skips_normal_permission_ask(&self) -> bool {
         true
     }
 

@@ -3,7 +3,9 @@ use crate::subagent::drain_subagent_jobs;
 use crate::turn::llm_stream::should_continue_inner_after_completion;
 use crate::turn::StreamingToolDispatch;
 use crate::turn::MSG_SEQ_USER;
-use crate::{AgentEngine, AgentError, AgentType, ChatMessage, EngineConfig, Event};
+use crate::{
+    AgentEngine, AgentError, AgentType, ChatMessage, CompactionAction, EngineConfig, Event,
+};
 use novel_deepseek::{LlmCompletion, LlmToolCall};
 use novel_tools::{PendingSubagentWork, ToolCallSpec};
 use std::sync::Arc;
@@ -112,6 +114,7 @@ async fn execute_stream_results_persists_tool_message() {
             &["t1".into()],
             None,
             true,
+            &std::collections::HashSet::new(),
         )
         .await
         .unwrap();
@@ -144,6 +147,7 @@ async fn execute_stream_results_pauses_on_needs_user_input() {
             &["q1".into()],
             None,
             false,
+            &std::collections::HashSet::new(),
         )
         .await
         .unwrap();
@@ -237,6 +241,7 @@ fn inject_sub_agent_report_allocates_sequence_after_user_message() {
         tool_call_id: None,
         tool_calls: None,
         reasoning_content: None,
+        ..Default::default()
     };
     engine
         .persist_message_at_seq(&user_msg, MSG_SEQ_USER, None)
@@ -249,6 +254,7 @@ fn inject_sub_agent_report_allocates_sequence_after_user_message() {
         tool_call_id: None,
         tool_calls: None,
         reasoning_content: None,
+        ..Default::default()
     };
     engine.persist_message_alloc(&assistant).unwrap();
     engine.messages.push(assistant);
@@ -287,6 +293,7 @@ fn build_message_rows_keeps_sub_agent_report_in_same_turn() {
         tool_call_id: None,
         tool_calls: None,
         reasoning_content: None,
+        ..Default::default()
     });
     engine.messages.push(ChatMessage {
         role: "user".into(),
@@ -294,6 +301,7 @@ fn build_message_rows_keeps_sub_agent_report_in_same_turn() {
         tool_call_id: None,
         tool_calls: None,
         reasoning_content: None,
+        ..Default::default()
     });
     engine.messages.push(ChatMessage {
         role: "assistant".into(),
@@ -301,6 +309,7 @@ fn build_message_rows_keeps_sub_agent_report_in_same_turn() {
         tool_call_id: None,
         tool_calls: None,
         reasoning_content: None,
+        ..Default::default()
     });
     engine.messages.push(ChatMessage {
         role: "user".into(),
@@ -311,6 +320,7 @@ fn build_message_rows_keeps_sub_agent_report_in_same_turn() {
         tool_call_id: None,
         tool_calls: None,
         reasoning_content: None,
+        ..Default::default()
     });
 
     let rows = engine.build_message_rows();
@@ -340,6 +350,7 @@ async fn drain_subagent_jobs_injects_report_with_unique_sequences() {
         tool_call_id: None,
         tool_calls: None,
         reasoning_content: None,
+        ..Default::default()
     };
     engine
         .persist_message_at_seq(&user_msg, MSG_SEQ_USER, None)
@@ -430,6 +441,7 @@ async fn parent_llm_context_excludes_fork_transcript() {
         tool_call_id: None,
         tool_calls: None,
         reasoning_content: None,
+        ..Default::default()
     };
     engine
         .persist_message_at_seq(&user_msg, MSG_SEQ_USER, None)
@@ -510,6 +522,7 @@ async fn drain_subagent_jobs_injects_multiple_reports_in_order() {
         tool_call_id: None,
         tool_calls: None,
         reasoning_content: None,
+        ..Default::default()
     };
     engine
         .persist_message_at_seq(&user_msg, MSG_SEQ_USER, None)
@@ -579,6 +592,7 @@ fn resume_inner_turn_counts_existing_assistants() {
             arguments: serde_json::json!({}),
         }]),
         reasoning_content: None,
+        ..Default::default()
     });
     assert_eq!(engine.resume_inner_turn_from_messages(), 1);
 }
@@ -626,6 +640,7 @@ async fn compact_and_sync_clears_read_file_cache() {
         tool_call_id: None,
         tool_calls: None,
         reasoning_content: None,
+        ..Default::default()
     });
     engine.messages.push(ChatMessage {
         role: "assistant".into(),
@@ -633,6 +648,7 @@ async fn compact_and_sync_clears_read_file_cache() {
         tool_call_id: None,
         tool_calls: None,
         reasoning_content: None,
+        ..Default::default()
     });
     engine.last_context_tokens = 850_000;
 
@@ -713,6 +729,7 @@ mod compaction_tokens {
                 tool_call_id: None,
                 tool_calls: None,
                 reasoning_content: None,
+                ..Default::default()
             });
             engine.messages.push(ChatMessage {
                 role: "assistant".into(),
@@ -720,6 +737,7 @@ mod compaction_tokens {
                 tool_call_id: None,
                 tool_calls: None,
                 reasoning_content: None,
+                ..Default::default()
             });
         }
     }
@@ -1041,5 +1059,22 @@ mod llm_stream {
             .iter()
             .any(|m| m.role == "tool" && m.content.contains("tool body")));
         std::env::remove_var("DEEPSEEK_API_BASE");
+    }
+}
+
+#[tokio::test]
+async fn compaction_circuit_breaker_emits_failed_event() {
+    let tmp = TempDir::new().unwrap();
+    std::fs::create_dir_all(tmp.path().join("skills")).unwrap();
+    let mut engine = AgentEngine::new(test_config(&tmp)).unwrap();
+    engine.compaction_fail_count = 3;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    engine.compact_and_sync(Some(&tx)).await.unwrap();
+    let event = rx.try_recv().expect("CompactionProgress event");
+    match event {
+        Event::CompactionProgress { action, .. } => {
+            assert!(matches!(action, CompactionAction::Failed { .. }));
+        }
+        other => panic!("expected CompactionProgress, got {other:?}"),
     }
 }

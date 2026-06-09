@@ -17,6 +17,7 @@ pub fn react_limit_reminder_message(spent: u32, max: u32) -> ChatMessage {
         tool_call_id: None,
         tool_calls: None,
         reasoning_content: None,
+        ..Default::default()
     }
 }
 
@@ -28,6 +29,7 @@ pub fn report_only_tool_rejection(tool_call_id: &str) -> ChatMessage {
         tool_call_id: Some(tool_call_id.to_string()),
         tool_calls: None,
         reasoning_content: None,
+        ..Default::default()
     }
 }
 

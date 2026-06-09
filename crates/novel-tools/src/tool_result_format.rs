@@ -3,7 +3,7 @@
 use crate::read_economy::enforce_tool_output_limits;
 use crate::tool_error_hints::enhance_tool_error_for_llm;
 use crate::tool_result_middleware::{append_middleware_lines, MiddlewareCtx};
-use crate::{ToolError, ToolOutput};
+use crate::{ToolError, ToolOutput, ToolRegistry};
 use serde_json::Value;
 
 pub struct ToolResultSpec<'a> {
@@ -21,13 +21,14 @@ pub struct FormattedToolResult {
 pub const NEEDS_USER_INPUT_STUB: &str = "等待用户回答问题后再继续。";
 
 pub fn format_tool_result_for_llm(
+    registry: &ToolRegistry,
     spec: ToolResultSpec<'_>,
     result: Result<ToolOutput, ToolError>,
 ) -> FormattedToolResult {
     match result {
         Err(e) => format_error(spec, &e),
         Ok(out) if out.is_error => format_error(spec, &ToolError::Execution(out.content)),
-        Ok(out) => format_success(spec, out),
+        Ok(out) => format_success(registry, spec, out),
     }
 }
 
@@ -39,13 +40,18 @@ fn format_error(spec: ToolResultSpec<'_>, err: &ToolError) -> FormattedToolResul
     }
 }
 
-fn format_success(spec: ToolResultSpec<'_>, out: ToolOutput) -> FormattedToolResult {
+fn format_success(
+    registry: &ToolRegistry,
+    spec: ToolResultSpec<'_>,
+    out: ToolOutput,
+) -> FormattedToolResult {
     let tool_input = spec.tool_input.unwrap_or(&Value::Null);
-    match enforce_tool_output_limits(spec.tool_name, tool_input, &out) {
+    match enforce_tool_output_limits(registry, spec.tool_name, tool_input, &out) {
         Err(e) => format_error(spec, &e),
         Ok(checked) => {
             let hook_preview = checked.content.clone();
             let ctx = MiddlewareCtx {
+                registry,
                 tool_name: spec.tool_name,
                 tool_input: spec.tool_input,
                 content: &hook_preview,
@@ -69,6 +75,7 @@ fn format_success(spec: ToolResultSpec<'_>, out: ToolOutput) -> FormattedToolRes
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::default_registry;
     use crate::FILE_UNCHANGED_STUB;
 
     fn write_spec() -> ToolResultSpec<'static> {
@@ -84,7 +91,9 @@ mod tests {
             tool_name: "Write",
             tool_input: Some(&serde_json::json!({"file_path": "chapters/ch01.md"})),
         };
+        let registry = default_registry();
         let out = format_tool_result_for_llm(
+            &registry,
             spec,
             Ok(ToolOutput {
                 content: "written".into(),
@@ -105,7 +114,9 @@ mod tests {
                 &serde_json::json!({"file_path": "chapters/ch01.md", "offset": 5, "limit": 8}),
             ),
         };
+        let registry = default_registry();
         let out = format_tool_result_for_llm(
+            &registry,
             spec,
             Ok(ToolOutput {
                 content: FILE_UNCHANGED_STUB.into(),
@@ -118,7 +129,9 @@ mod tests {
 
     #[test]
     fn permission_denied_has_error_prefix() {
+        let registry = default_registry();
         let out = format_tool_result_for_llm(
+            &registry,
             write_spec(),
             Err(ToolError::PermissionDenied("denied".into())),
         );
@@ -133,7 +146,8 @@ mod tests {
         };
         let err =
             ToolError::Execution("Read foo.md before editing (read-before-write policy)".into());
-        let out = format_tool_result_for_llm(spec, Err(err));
+        let registry = default_registry();
+        let out = format_tool_result_for_llm(&registry, spec, Err(err));
         assert!(out.content.contains("Next steps:"));
         assert!(out.content.contains("Read or Tail"));
     }
@@ -144,7 +158,9 @@ mod tests {
             tool_name: "Edit",
             tool_input: None,
         };
+        let registry = default_registry();
         let out = format_tool_result_for_llm(
+            &registry,
             spec,
             Ok(ToolOutput {
                 content: "Read foo.md before editing (read-before-write policy)".into(),
@@ -164,7 +180,9 @@ mod tests {
             tool_name: "Grep",
             tool_input: Some(&serde_json::json!({"pattern": "x"})),
         };
+        let registry = default_registry();
         let out = format_tool_result_for_llm(
+            &registry,
             spec,
             Ok(ToolOutput {
                 content,

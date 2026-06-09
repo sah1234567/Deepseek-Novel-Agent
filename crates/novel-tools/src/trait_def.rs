@@ -45,6 +45,7 @@ pub trait Tool: Send + Sync {
             self.is_always_allowed(),
             self.can_write_outside_plan_dir(),
             self.allowed_in_plan_mode(),
+            self.skips_normal_permission_ask(),
             &self.get_summary(input),
             input,
             ctx,
@@ -94,8 +95,33 @@ pub trait Tool: Send + Sync {
         false
     }
 
+    /// Foreground orchestration tools (e.g. ForkSubAgent) that queue work without file I/O.
+    fn skips_normal_permission_ask(&self) -> bool {
+        false
+    }
+
     /// Read/Tail — extract the line span this tool input covers, for committed-span tracking.
     fn extract_read_span(&self, _input: &Value, _total_lines: usize) -> Option<(usize, usize)> {
         None
+    }
+
+    /// Read/Tail — `range=` segment for `[read-dedup]` hint text when output is a dedup stub.
+    fn read_dedup_range_label(&self, _input: &Value) -> Option<String> {
+        None
+    }
+
+    /// Tools that may emit read-dedup middleware hints (Read/Tail).
+    fn supports_read_dedup_hint(&self) -> bool {
+        false
+    }
+
+    /// Max output lines before read-economy rejects tool_result; `None` = no limit.
+    fn max_output_lines(&self, _input: &Value) -> Option<usize> {
+        None
+    }
+
+    /// Hint appended when `max_output_lines` is exceeded.
+    fn output_limit_exceeded_hint(&self) -> &'static str {
+        "Use Grep to locate, then Read offset/limit or Tail for file-end segments."
     }
 }

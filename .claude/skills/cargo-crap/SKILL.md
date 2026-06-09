@@ -3,149 +3,176 @@ name: cargo-crap
 description: >-
   用 cargo-crap 计算 Rust 函数的 CRAP（Change Risk Anti-Patterns）分数：圈复杂度 × 覆盖率。
   项目脚本分两步：`ci-lcov` 生成 lcov.info（慢，改代码后跑一次），`ci-crap` 仅跑 cargo crap（快，可反复）。
-  覆盖 `.cargo-crap.toml`、baseline 回归、超标函数修复。用户提到 CRAP、cargo crap、lcov、ci-crap、ci-lcov 时使用。
+  覆盖 `.cargo-crap.toml`、过期 lcov 假阳性、Windows PowerShell 陷阱、baseline 回归、超标函数修复。
+  用户提到 CRAP、cargo crap、lcov、ci-crap、ci-lcov 时使用。
 ---
 
 # cargo-crap：CRAP 复杂度 × 覆盖率分析
 
-## 是什么
-
-`cargo crap`（v0.2.2）合成**圈复杂度（CC）**与**行覆盖率**为 CRAP 分数：
-
-```text
-CRAP(m) = comp(m)² × (1 − cov(m)/100)³ + comp(m)
-```
-
-- CC=1 且 100% 覆盖 → CRAP = 1.0
-- 100% 覆盖时 CRAP = CC（正常现象）
-- CC ≳ 30 → 很难低于默认阈值 30
-
-源码：[minikin/cargo-crap](https://github.com/minikin/cargo-crap) · [docs.rs](https://docs.rs/cargo-crap/latest/cargo_crap/)
-
-## 项目脚本（两步分离）
-
-| 脚本 | 做什么 | 耗时 | 何时跑 |
-|------|--------|------|--------|
-| **`ci-lcov`**（`.sh` / `.ps1`） | `cargo llvm-cov nextest` → 覆盖写入 `lcov.info` | 慢（全 workspace 编译 + nextest） | **改 Rust 源码/测试后**，或尚无 `lcov.info` |
-| **`ci-crap`**（`.sh` / `.ps1`） | **仅** `cargo crap --fail-above`（读已有 `lcov.info`） | 快（秒级） | 同一版代码下可**反复**跑 |
-
-`lcov.info` 在 `.gitignore`，不进 git，是本机覆盖率快照。
-
-### 命令
+## 快速开始
 
 ```bash
-# Linux / macOS / Git Bash
-bash scripts/ci-lcov.sh          # 拍快照（每个代码版本一次）
-bash scripts/ci-crap.sh          # CRAP 门禁（可多次）
-bash scripts/ci-crap.sh --summary
-bash scripts/ci-lcov.sh && bash scripts/ci-crap.sh   # 全流程
+# 全流程（改代码后首次）
+bash scripts/ci-lcov.sh && bash scripts/ci-crap.sh
+
+# 仅重跑门禁（lcov.info 新鲜时）
+bash scripts/ci-crap.sh
 ```
 
 ```powershell
-# Windows PowerShell（当前终端输出，不经 bash）
-.\scripts\ci-lcov.ps1
-.\scripts\ci-crap.ps1
+# Windows PowerShell
 .\scripts\ci-lcov.ps1; .\scripts\ci-crap.ps1
 ```
 
 > **Windows 勿用** `./scripts/ci-crap.sh`：`.sh` 关联 `git-bash.exe` 会弹新窗，当前终端无输出。用 `.\scripts\ci-crap.ps1`。
 
-### 环境变量
+## 两步脚本
+
+| 脚本 | 做什么 | 耗时 | 何时跑 |
+|------|--------|------|--------|
+| **`ci-lcov`** | `cargo llvm-cov nextest` → `lcov.info` | 慢（全量编译 + 测试） | 改代码/测试后、首次 clone、增删文件 |
+| **`ci-crap`** | **仅** `cargo crap --fail-above`（读已有 `lcov.info`） | 快（秒级） | 同一代码反复调参/排查 |
+
+`lcov.info` 在 `.gitignore`，是本机覆盖率快照，不进 git。
+
+## 环境变量
 
 | 变量 | 默认 | 作用 |
 |------|------|------|
-| `NEXTEST_PROFILE` | `ci` | 仅 **ci-lcov** 使用 |
-| `LCOV_PATH` | `lcov.info` | 两个脚本共用路径 |
-| `CRAP_THRESHOLD` | `30` | 仅 **ci-crap** 使用 |
+| `LCOV_PATH` | `lcov.info` | 两步共用 |
+| `CRAP_THRESHOLD` | `30` | 仅 `ci-crap` |
+| `NEXTEST_PROFILE` | `ci` | 仅 `ci-lcov` |
 
-### lcov 何时必须重生
+## 踩坑速查
 
-**不是一辈子只跑一次**，而是**每个代码版本对应一次 ci-lcov**：
+### 坑 1：只跑裸 `cargo crap`，exit 0 不代表通过
 
-| 需要重跑 `ci-lcov` | 不必重跑，只跑 `ci-crap` |
-|--------------------|---------------------------|
-| 改了 `crates/` 源码、增删/移动文件 | 同一段代码，反复查 CRAP / 调参 |
-| 改了测试 | 已有新鲜 `lcov.info` |
-| 删了 `lcov.info` 或 clone 后首次 | |
-| CRAP 大量 0% 覆盖（路径对不上旧 lcov） | |
+| 命令 | exit | 行为 |
+|------|------|------|
+| `cargo crap --lcov lcov.info` | 常为 0 | 仅浏览全表；`✗ N exceed` 不会失败 |
+| `cargo crap --lcov lcov.info --workspace --min 30` | 0 | 排查用 |
+| `cargo crap --lcov lcov.info --workspace --fail-above --threshold 30` | 超标 → 1 | **门禁**（`ci-crap` 等价） |
 
-重构后旧 `lcov.info` 路径错位会导致覆盖率按 0% 计、CRAP 虚高（本项目曾出现 68 个假阳性，重生 lcov 后归零）。
+**规则：** 门禁用 `ci-crap` 脚本或显式带 `--fail-above --workspace`。
 
-## 手动命令（不用脚本时）
+### 坑 2：过期 `lcov.info` → 假阳性 CRAP 爆表
 
-```bash
-# 1. 覆盖率（禁止 cargo test，只用 nextest）
-export NEXTEST_PROFILE=ci   # Windows PowerShell: $env:NEXTEST_PROFILE = "ci"
-cargo llvm-cov nextest --workspace --all-features --lcov --output-path lcov.info
-
-# 2. 分析
-cargo crap --lcov lcov.info --workspace --min 30              # 浏览
-cargo crap --lcov lcov.info --workspace --fail-above --threshold 30  # 门禁
+**信号（stderr 警告）：**
+```
+warning: N source files had no matching entry in the LCOV report
+  crates\novel-tools\src\permission.rs
+  crates\novel-knowledge\src\text_util.rs
 ```
 
-单 crate：`cargo llvm-cov --lcov -o lcov.info` + `cargo crap --lcov lcov.info --path crates/<name>`。
+**原因：** 新文件/移动文件在旧 lcov 中覆盖率为 0%，CC 15–20 → CRAP 200–300+。
 
-## CLI 标志（常用）
+| 必须重跑 `ci-lcov` | 只需跑 `ci-crap` |
+|---------------------|-------------------|
+| 改了 `crates/` 源码或测试 | 同代码反复调参 |
+| 增删/移动文件 | `lcov.info` 匹配当前 commit |
+| 首次 clone 或删了 `lcov.info` | |
+| 出现 **no matching entry** 警告 | |
+| 单函数 0% 覆盖 + CRAP>100 | |
 
-| 标志 | 作用 |
-|------|------|
-| `--threshold <N>` | 超标线，默认 30 |
-| `--min <N>` | 只显示 CRAP ≥ N |
-| `--fail-above` | 超标 exit 1（ci-crap 脚本已带） |
-| `--baseline <json>` | 与上次 JSON 报告对比 |
-| `--fail-regression` | 分数上升则 exit 1 |
-| `--format <fmt>` | `human` / `json` / `github` / `markdown` / `pr-comment` / `sarif` |
+**快速自检：** `git diff` 触达 `crates/` 且未跑过 `ci-lcov` → 先 lcov 再 crap。
 
-其余见 `cargo crap --help`。
+### 坑 3：Windows `ci-lcov.ps1` 误报
 
-## 超标函数怎么修
+`cargo llvm-cov` stderr 的 `info: cargo-llvm-cov currently setting cfg(coverage)` 可能被 PowerShell `Stop` 策略截断。脚本已用 `Continue` 包裹。若仍失败：
 
-| 信号 | 做法 |
-|------|------|
-| CRAP 高、CC 低 | 补测试 |
-| CRAP 中、CC 高 | 拆函数降复杂度 |
-| CRAP 高、CC 也高 | 先拆再补 |
+```powershell
+$env:NEXTEST_PROFILE = "ci"
+cargo llvm-cov nextest --workspace --all-features --lcov --output-path lcov.info
+```
 
-优先补：公共 API、错误路径、边界条件；内部 helper 可靠上层间接覆盖。
+成功标志：`Finished report saved to lcov.info`。
 
-常见手法：提取 match 分支为独立函数、拆 parse/validate/execute、长 if-else 改查表（详见历史版本或 cargo-crap 文档）。
+### 坑 4：`.sh` 脚本报 `pipefail: invalid option`
 
-## Baseline 回归
+CRLF 行尾导致。修复：`git checkout -- scripts/ci-*.sh`
+
+### 坑 5：工具未安装
 
 ```bash
+cargo install cargo-crap cargo-llvm-cov cargo-nextest
+rustup component add llvm-tools-preview
+```
+
+## 超标函数修复指南
+
+看报告 **CRAP / CC / Coverage** 三列对症：
+
+| 信号 | 修复方向 | 示例 |
+|------|---------|------|
+| CRAP 高 + **Coverage 0%** + 刚加文件 | **先 `ci-lcov`**；仍超标再补测 | `permission.rs` 新文件伪报 306 |
+| CRAP 高 + CC 低 | 补测试覆盖 | 加 `#[cfg(test)]` 单测 |
+| CRAP 中 + CC 高（≳14） | **拆函数**降 CC | `evaluate_tool_permissions` → 拆出 `evaluate_plan_mode` + `evaluate_standard_mode` |
+| CRAP 高 + CC 也高 | 先拆再补 | 长函数 → 提取 helper + 单测 |
+| 长 loop 多路 early return | 提取判定函数 | `run_inner_turn_loop` → 提取 `inner_turn_loop_exit_reason` |
+
+**策略：** 公共 API、错误路径、边界条件优先补测。纯逻辑提取为无 IO 的 `fn` 便于单测。
+
+**禁止：** 调高 `threshold`、`--allow` 绕过、或把生产文件塞进 `exclude`。
+
+## Baseline 回归（存量项目推荐）
+
+```bash
+# 建立基线
 cargo crap --lcov lcov.info --workspace --format json --output baseline.json
+
+# 后续门禁：只拦截 CRAP 上升
 cargo crap --lcov lcov.info --workspace --baseline baseline.json --fail-regression
 ```
 
-v0.2.x 能识别函数移动（报告 Moved，非 New+Removed）。
+v0.2.x 能识别函数移动（报告 Moved，非 New+Removed）。适合存量代码难以一次性清零的场景。
 
-## `.cargo-crap.toml`
+## `.cargo-crap.toml`（项目已配置）
 
-项目已配置 `threshold = 30`、`missing = "pessimistic"` 及 `exclude`（`src-tauri`、测试模块等）。CLI 可覆盖文件。
+```toml
+threshold = 30
+missing = "pessimistic"   # 0% 覆盖 → CRAP 极敏感
+exclude = ["src-tauri", "**/tests/integration/**", ...]
+```
 
 | 场景 | 做法 |
 |------|------|
-| 存量难一次性清零 | baseline + `--fail-regression` |
-| 收紧门禁 | 降 `threshold` 或改脚本 `CRAP_THRESHOLD` |
-| **禁止** | 为过关随意调高 threshold 或 `--allow` 绕过 |
+| 存量难清零 | baseline + `--fail-regression` |
+| 收紧门禁 | 降 `threshold` 或改 `CRAP_THRESHOLD` 环境变量 |
+| integration 测试 | `**/tests/integration/**` 排除（**须带** `**/` 前缀） |
 
-## 排错
+## 手动命令
 
-| 现象 | 处理 |
-|------|------|
-| 全部 0% 覆盖 | 重跑 `ci-lcov`；勿在路径错位时用旧 lcov |
-| `ci-crap` 报找不到 lcov | 先 `ci-lcov` |
-| Windows 弹新窗无输出 | 用 `.\scripts\ci-crap.ps1`，勿 `./scripts/ci-crap.sh` |
-| `.sh` 报 `pipefail: invalid option` | CRLF 行尾；`git checkout -- scripts/ci-*.sh` |
-| 工具未安装 | `cargo install cargo-crap cargo-llvm-cov cargo-nextest`；`rustup component add llvm-tools-preview` |
+```bash
+# 1. 覆盖率快照
+export NEXTEST_PROFILE=ci
+cargo llvm-cov nextest --workspace --all-features --lcov --output-path lcov.info
+
+# 2. 排查超标（查看哪些函数超 threshold）
+cargo crap --lcov lcov.info --workspace --min 30
+
+# 3. 门禁
+cargo crap --lcov lcov.info --workspace --fail-above --threshold 30
+```
+
+单 crate：`cargo llvm-cov nextest -p <crate> --lcov --output-path lcov.info` + `cargo crap --lcov lcov.info --path crates/<name>`。
+
+## CRAP 公式
+
+```
+CRAP(m) = comp(m)² × (1 − cov(m)/100)³ + comp(m)
+```
+
+- CC=1 且 100% 覆盖 → CRAP=1.0
+- 100% 覆盖时 CRAP=CC（正常）
+- CC≳30 → 极难低于默认阈值 30
+- 0% 覆盖 + CC=17 → CRAP≈306
 
 ## Agent 执行清单
 
-1. **判断是否已有与当前 diff 匹配的 `lcov.info`** — 仅改 crap 参数/浏览报告 → 只跑 `ci-crap`；改了 `crates/` 或测试 → 先 `ci-lcov` 再 `ci-crap`。
-2. Windows 一律 `.\scripts\ci-lcov.ps1` / `.\scripts\ci-crap.ps1`；Unix 用 `bash scripts/ci-*.sh`。
-3. 门禁：`ci-crap`（等价 `--fail-above --threshold 30`）；排查：`ci-crap.sh --min 30` 或 `--summary`。
-4. 超标项看 CC 与 Coverage 列，按上表决定补测或重构；修完后 **必须** 重跑 `ci-lcov` 再 `ci-crap`。
-5. **不要**调高 threshold / 乱加 `--allow` 绕过。
-6. 本 skill 为**可选**本地质量分析，**不替代** `post-change-checklist` 的 fmt / clippy / nextest。
+1. **判新鲜度：** `git diff` 触达 `crates/` → 先 `ci-lcov`；仅调参 → 直跑 `ci-crap`
+2. **选平台：** Windows → `.\scripts\ci-*.ps1`；Unix → `bash scripts/ci-*.sh`
+3. **门禁：** `ci-crap`；**排查：** `cargo crap --workspace --min 30`，注意 stderr LCOV 警告
+4. **修复：** 按 CC/Coverage 表对症；修后必须 `ci-lcov` → `ci-crap`
+5. **不绕过：** 不调高 threshold、不加 `--allow`、不把生产文件加 exclude
 
-**通过标准：** `ci-crap` exit 0，无 `exceed CRAP threshold` 行。
+**通过标准：** `ci-crap` exit 0，输出含 `none exceed CRAP threshold`。

@@ -60,6 +60,24 @@ impl Tool for TailTool {
         Some((start, total.max(start)))
     }
 
+    fn supports_read_dedup_hint(&self) -> bool {
+        true
+    }
+
+    fn read_dedup_range_label(&self, input: &Value) -> Option<String> {
+        let _ = extract_file_path(input).ok()?;
+        let tail_lines = input.get("lines").and_then(|v| v.as_u64()).unwrap_or(80) as usize;
+        Some(format!("tail:last_{tail_lines}_lines"))
+    }
+
+    fn max_output_lines(&self, input: &Value) -> Option<usize> {
+        let fp = extract_file_path(input).ok()?;
+        Some(
+            crate::read_economy::max_lines_for_path(&fp)
+                .unwrap_or(crate::read_economy::CHAPTER_MAX_LINES),
+        )
+    }
+
     fn validate_input(&self, input: &Value) -> Result<(), ValidationError> {
         extract_file_path(input)?;
         Ok(())

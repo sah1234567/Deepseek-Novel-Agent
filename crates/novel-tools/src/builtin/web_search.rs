@@ -100,34 +100,14 @@ impl Tool for WebSearchTool {
         let search_query = compose_search_query(&query, aspect, genre);
 
         let sources = perform_search(ctx, &search_query).await?;
-        let summary = if sources.is_empty() {
-            format!("未找到联网结果（搜索返回空），已记录搜索请求: {query} ({aspect})")
-        } else {
-            format!(
-                "找到 {} 条来源，主题: {query} / {aspect}{}",
-                sources.len(),
-                if genre.is_empty() {
-                    String::new()
-                } else {
-                    format!(" / 流派: {genre}")
-                }
-            )
-        };
+        let summary = web_search_summary_line(&query, aspect, genre, sources.len());
+        let body =
+            format_search_cache_body(&query, aspect, genre, &search_query, &summary, &sources);
 
         let dir = ctx.project_root.join(CACHE_DIR);
         crate::blocking::create_dir_all(dir.clone()).await?;
         let filename = format!("search-{}-{}.md", aspect, chrono_like_slug());
         let path = dir.join(&filename);
-        let mut body = format!(
-            "# 网页搜索\n\n- query: {query}\n- aspect: {aspect}\n- genre: {genre}\n- search: {search_query}\n\n## 摘要\n\n{summary}\n\n## 来源\n\n"
-        );
-        for src in &sources {
-            body.push_str(&format!("### {}\n- URL: {}\n", src.title, src.url));
-            for kp in &src.key_points {
-                body.push_str(&format!("- {kp}\n"));
-            }
-            body.push('\n');
-        }
         crate::blocking::write(path.clone(), body).await?;
         let rel = path
             .strip_prefix(&ctx.project_root)
@@ -146,6 +126,39 @@ impl Tool for WebSearchTool {
             is_error: false,
         })
     }
+}
+
+fn web_search_summary_line(query: &str, aspect: &str, genre: &str, source_count: usize) -> String {
+    if source_count == 0 {
+        return format!("未找到联网结果（搜索返回空），已记录搜索请求: {query} ({aspect})");
+    }
+    let genre_suffix = if genre.is_empty() {
+        String::new()
+    } else {
+        format!(" / 流派: {genre}")
+    };
+    format!("找到 {source_count} 条来源，主题: {query} / {aspect}{genre_suffix}")
+}
+
+fn format_search_cache_body(
+    query: &str,
+    aspect: &str,
+    genre: &str,
+    search_query: &str,
+    summary: &str,
+    sources: &[SearchSource],
+) -> String {
+    let mut body = format!(
+        "# 网页搜索\n\n- query: {query}\n- aspect: {aspect}\n- genre: {genre}\n- search: {search_query}\n\n## 摘要\n\n{summary}\n\n## 来源\n\n"
+    );
+    for src in sources {
+        body.push_str(&format!("### {}\n- URL: {}\n", src.title, src.url));
+        for kp in &src.key_points {
+            body.push_str(&format!("- {kp}\n"));
+        }
+        body.push('\n');
+    }
+    body
 }
 
 fn chrono_like_slug() -> String {
@@ -170,6 +183,33 @@ mod tests {
         let q = compose_search_query("趋势", "research", "xianxia");
         assert!(q.contains("xianxia"));
         assert!(q.contains("趋势"));
+    }
+
+    #[test]
+    fn web_search_summary_empty_and_nonempty() {
+        let empty = web_search_summary_line("q", "research", "", 0);
+        assert!(empty.contains("未找到联网结果"));
+        let ok = web_search_summary_line("q", "trending", "xianxia", 2);
+        assert!(ok.contains("2 条来源"));
+        assert!(ok.contains("流派"));
+    }
+
+    #[test]
+    fn format_search_cache_body_includes_sources() {
+        let body = format_search_cache_body(
+            "q",
+            "research",
+            "",
+            "q research",
+            "summary line",
+            &[SearchSource {
+                title: "T".into(),
+                url: "https://x".into(),
+                key_points: vec!["kp".into()],
+            }],
+        );
+        assert!(body.contains("### T"));
+        assert!(body.contains("- kp"));
     }
 
     #[tokio::test(flavor = "current_thread")]

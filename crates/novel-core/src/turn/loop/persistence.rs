@@ -1,5 +1,5 @@
 use crate::engine::session_llm::{apply_session_usage, read_session_llm};
-use crate::message::chat_to_json;
+use crate::message::{chat_to_json, chat_to_json_for_persist};
 use crate::turn::TOOL_FAILURE_CIRCUIT_THRESHOLD;
 use crate::Event;
 use crate::{AgentEngine, AgentError, ChatMessage};
@@ -7,8 +7,17 @@ use novel_deepseek::LlmCompletion;
 use tokio::sync::mpsc;
 
 impl AgentEngine {
-    pub(in crate::turn::r#loop) fn sync_messages_to_db(&self) -> Result<(), AgentError> {
-        let rows = self.build_message_rows();
+    pub(in crate::turn::r#loop) fn commit_message_slice(
+        &mut self,
+        messages: Vec<ChatMessage>,
+    ) -> Result<(), AgentError> {
+        self.sync_message_slice_to_db(&messages)?;
+        self.messages = messages;
+        Ok(())
+    }
+
+    fn sync_message_slice_to_db(&self, messages: &[ChatMessage]) -> Result<(), AgentError> {
+        let rows = self.build_message_rows_from(messages);
         let refs: Vec<(i32, i32, &str, &serde_json::Value)> = rows
             .iter()
             .map(|(t, s, r, v)| (*t, *s, r.as_str(), v))
@@ -34,19 +43,28 @@ impl AgentEngine {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(in crate::turn::r#loop) fn build_message_rows(
         &self,
     ) -> Vec<(i32, i32, String, serde_json::Value)> {
-        let mut rows = Vec::with_capacity(self.messages.len());
+        self.build_message_rows_from(&self.messages)
+    }
+
+    fn build_message_rows_from(
+        &self,
+        messages: &[ChatMessage],
+    ) -> Vec<(i32, i32, String, serde_json::Value)> {
+        let mut rows = Vec::with_capacity(messages.len());
         let mut turn = 0i32;
         let mut seq_in_turn = 0i32;
-        for msg in self.messages.iter() {
+        for msg in messages.iter() {
             let (t, seq) = crate::message::turn_rows::assign_message_turn_seq(
                 msg,
                 &mut turn,
                 &mut seq_in_turn,
             );
-            rows.push((t, seq, msg.role.clone(), chat_to_json(msg)));
+            let json = chat_to_json_for_persist(msg, msg.display_content.as_deref());
+            rows.push((t, seq, msg.role.clone(), json));
         }
         rows
     }
@@ -209,11 +227,18 @@ impl AgentEngine {
             );
         } else {
             self.last_turn_usage = None;
-            let _ = self
+            if let Err(e) = self
                 .shared
                 .session
                 .db
-                .touch_last_active_at(&self.shared.session.id);
+                .touch_last_active_at(&self.shared.session.id)
+            {
+                tracing::debug!(
+                    session_id = %self.shared.session.id,
+                    error = %e,
+                    "touch_last_active_at failed"
+                );
+            }
         }
     }
 

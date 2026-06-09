@@ -248,6 +248,7 @@ impl ToolContext {
     /// After Read/Tail tool_result is in the transcript, record that tool's line span.
     pub fn promote_read_cache_committed(
         &self,
+        registry: &crate::ToolRegistry,
         path: &Path,
         tool_name: &str,
         input: &serde_json::Value,
@@ -258,21 +259,25 @@ impl ToolContext {
         if let Some(mut entry) = cache.get_mut(path) {
             if entry.is_full_read() {
                 entry.commit_to_transcript();
-            } else if let Some(span) = span_from_tool_input(tool_name, input, entry.total_lines) {
+            } else if let Some(span) =
+                span_from_tool_input(registry, tool_name, input, entry.total_lines)
+            {
                 entry.commit_span(span);
             }
         }
     }
 
     /// Call when persisting a successful Read/Tail tool_result to messages.
-    pub fn promote_read_cache_for_tool_result(&self, tool_name: &str, input: &serde_json::Value) {
-        if tool_name != "Read" && tool_name != "Tail" {
-            return;
-        }
+    pub fn promote_read_cache_for_tool_result(
+        &self,
+        registry: &crate::ToolRegistry,
+        tool_name: &str,
+        input: &serde_json::Value,
+    ) {
         let Some(path) = optional_file_path(input) else {
             return;
         };
-        self.promote_read_cache_committed(&self.resolve_path(&path), tool_name, input);
+        self.promote_read_cache_committed(registry, &self.resolve_path(&path), tool_name, input);
     }
 
     pub fn was_read(&self, path: &PathBuf) -> bool {

@@ -17,84 +17,129 @@ impl AgentEngine {
         out: ToolOutput,
         event_tx: Option<&mpsc::UnboundedSender<Event>>,
         persist_tool_messages: bool,
+        skip_ui_result_emit: bool,
     ) -> Result<(), AgentError> {
         let success = !out.is_error;
-        let formatted = format_tool(spec, Ok(out));
+        let formatted = format_tool(&self.shared.registry, spec, Ok(out));
+        let hook_task = self.post_tool_hook_task(spec, &formatted.hook_preview);
         let content = formatted.content;
-        let hook_task = if self.shared.settings.hooks.post_tool_use.is_empty() {
-            None
-        } else {
-            spec.and_then(|s| {
-                knowledge_auditor_hook_task(
-                    &self.shared.settings.hooks,
-                    &s.name,
-                    Some(&s.input),
-                    &formatted.hook_preview,
-                )
-            })
-        };
-
-        if let Some(s) = spec {
-            if let Some(path) = novel_tools::optional_file_path(&s.input) {
-                if novel_tools::normalize_rel_path(&path).contains("chapters/") {
-                    self.last_chapter_written =
-                        Some(novel_tools::normalize_chapter_progress_path(&path));
-                }
-            }
-        }
-
-        if let Some(tx) = event_tx {
-            let _ = tx.send(Event::ToolCallResult {
-                tool_call_id: id.to_string(),
-                content: content.clone(),
-            });
-        }
+        self.maybe_track_chapter_written(spec);
+        self.emit_tool_result_ui(id, &content, event_tx, skip_ui_result_emit);
         let tool_msg = tool_result_message(id, &content);
         if persist_tool_messages {
             self.persist_message_alloc(&tool_msg)?;
         }
-        if let Some(s) = spec {
-            tracing::debug!(
-                tool_call_id = %id,
-                tool_name = %s.name,
-                success,
-                "tool_executed"
-            );
-            self.audit_log(LogEvent::ToolExecuted {
-                session_id: self.shared.session.id.clone(),
-                tool_name: s.name.clone(),
-                success,
-            });
-        }
+        self.audit_tool_success(id, spec, success);
         self.messages.push(tool_msg);
         self.record_tool_success();
-
         if let Some(s) = spec {
-            if success {
-                self.tool_context()
-                    .promote_read_cache_for_tool_result(&s.name, &s.input);
-            }
-            self.track_invoke_skill_after_tool(s);
-            if s.name == "Read" && success {
-                self.track_read_skill_reference(s);
-            }
-            if let Some(task) = hook_task {
-                if let Ok(mut guard) = self.shared.subagent_queue.lock() {
-                    guard.push(PendingSubagentWork {
-                        agent_type: "KnowledgeAuditor".into(),
-                        task,
-                        parent_tool_call_id: None,
-                    });
-                }
-            }
+            self.apply_post_success_tool_effects(s, success, hook_task);
         }
         Ok(())
     }
 
-    fn track_invoke_skill_after_tool(&mut self, spec: &ToolCallSpec) {
-        if spec.name != "InvokeSkill" {
+    fn post_tool_hook_task(
+        &self,
+        spec: Option<&ToolCallSpec>,
+        hook_preview: &str,
+    ) -> Option<String> {
+        if self.shared.settings.hooks.post_tool_use.is_empty() {
+            return None;
+        }
+        spec.and_then(|s| {
+            knowledge_auditor_hook_task(
+                &self.shared.settings.hooks,
+                &s.name,
+                Some(&s.input),
+                hook_preview,
+            )
+        })
+    }
+
+    fn maybe_track_chapter_written(&mut self, spec: Option<&ToolCallSpec>) {
+        let Some(s) = spec else {
+            return;
+        };
+        let Some(path) = novel_tools::optional_file_path(&s.input) else {
+            return;
+        };
+        if novel_tools::normalize_rel_path(&path).contains("chapters/") {
+            self.last_chapter_written = Some(novel_tools::normalize_chapter_progress_path(&path));
+        }
+    }
+
+    fn emit_tool_result_ui(
+        &self,
+        id: &str,
+        content: &str,
+        event_tx: Option<&mpsc::UnboundedSender<Event>>,
+        skip_ui_result_emit: bool,
+    ) {
+        if skip_ui_result_emit {
             return;
         }
+        if let Some(tx) = event_tx {
+            let _ = tx.send(Event::ToolCallResult {
+                tool_call_id: id.to_string(),
+                content: content.to_string(),
+            });
+        }
+    }
+
+    fn audit_tool_success(&self, id: &str, spec: Option<&ToolCallSpec>, success: bool) {
+        let Some(s) = spec else {
+            return;
+        };
+        tracing::debug!(
+            tool_call_id = %id,
+            tool_name = %s.name,
+            success,
+            "tool_executed"
+        );
+        self.audit_log(LogEvent::ToolExecuted {
+            session_id: self.shared.session.id.clone(),
+            tool_name: s.name.clone(),
+            success,
+        });
+    }
+
+    fn apply_post_success_tool_effects(
+        &mut self,
+        spec: &ToolCallSpec,
+        success: bool,
+        hook_task: Option<String>,
+    ) {
+        if success {
+            self.tool_context().promote_read_cache_for_tool_result(
+                &self.shared.registry,
+                &spec.name,
+                &spec.input,
+            );
+        }
+        let (track_skill, track_read_ref) = self
+            .shared
+            .registry
+            .get(&spec.name)
+            .map(|tool| (tool.is_skill_invocation(), tool.tracks_skill_references()))
+            .unwrap_or((false, false));
+        if track_skill {
+            self.track_invoke_skill_after_tool(spec);
+        }
+        if success && track_read_ref {
+            self.track_read_skill_reference(spec);
+        }
+        if let Some(task) = hook_task {
+            if let Ok(mut guard) = self.shared.subagent_queue.lock() {
+                guard.push(PendingSubagentWork {
+                    agent_type: "KnowledgeAuditor".into(),
+                    task,
+                    parent_tool_call_id: None,
+                });
+            }
+        }
+    }
+
+    fn track_invoke_skill_after_tool(&mut self, spec: &ToolCallSpec) {
         let Some(skill_id) = spec.input.get("skill_id").and_then(|v| v.as_str()) else {
             return;
         };
@@ -102,11 +147,19 @@ impl AgentEngine {
             return;
         }
         self.invoked_skill_ids.push(skill_id.to_string());
-        let _ = self
+        if let Err(e) = self
             .shared
             .session
             .db
-            .set_invoked_skill_ids(&self.shared.session.id, &self.invoked_skill_ids);
+            .set_invoked_skill_ids(&self.shared.session.id, &self.invoked_skill_ids)
+        {
+            tracing::warn!(
+                session_id = %self.shared.session.id,
+                error = %e,
+                skill_id,
+                "set_invoked_skill_ids failed"
+            );
+        }
     }
 
     fn track_read_skill_reference(&mut self, spec: &ToolCallSpec) {
@@ -179,6 +232,7 @@ impl AgentEngine {
         err: ToolError,
         event_tx: Option<&mpsc::UnboundedSender<Event>>,
         persist_tool_messages: bool,
+        skip_ui_result_emit: bool,
     ) -> Result<(), AgentError> {
         if let Some(s) = spec {
             tracing::warn!(
@@ -194,12 +248,14 @@ impl AgentEngine {
             });
         }
         let failure_detail = err.to_string();
-        let msg = format_tool(spec, Err(err)).content;
-        if let Some(tx) = event_tx {
-            let _ = tx.send(Event::ToolCallResult {
-                tool_call_id: id.to_string(),
-                content: msg.clone(),
-            });
+        let msg = format_tool(&self.shared.registry, spec, Err(err)).content;
+        if !skip_ui_result_emit {
+            if let Some(tx) = event_tx {
+                let _ = tx.send(Event::ToolCallResult {
+                    tool_call_id: id.to_string(),
+                    content: msg.clone(),
+                });
+            }
         }
         let tool_msg = tool_result_message(id, &msg);
         if persist_tool_messages {
@@ -245,10 +301,48 @@ mod tests {
                     novel_tools::ToolError::Execution("slice".into()),
                     None,
                     false,
+                    false,
                 )
                 .unwrap();
         }
         assert!(engine.take_repeated_tool_failure_trip().is_some());
+    }
+
+    #[test]
+    fn apply_ok_stream_result_pushes_tool_message() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("skills")).unwrap();
+        std::fs::write(tmp.path().join("note.txt"), "hello").unwrap();
+        let mut engine = AgentEngine::new(EngineConfig {
+            project_root: tmp.path().to_path_buf(),
+            settings_path: tmp.path().join("settings.json"),
+            db_path: tmp.path().join("state.db"),
+            skills_dir: tmp.path().join("skills"),
+            global_config_path: tmp.path().join(".novel-agent/api_config.json"),
+        })
+        .unwrap();
+        let spec = ToolCallSpec {
+            id: "ok1".into(),
+            name: "Read".into(),
+            input: serde_json::json!({"file_path": "note.txt"}),
+        };
+        engine
+            .apply_ok_stream_result(
+                "ok1",
+                Some(&spec),
+                ToolOutput {
+                    content: "1\thello".into(),
+                    is_error: false,
+                },
+                None,
+                false,
+                false,
+            )
+            .unwrap();
+        assert!(engine
+            .messages
+            .iter()
+            .any(|m| m.role == "tool" && m.content.contains("hello")));
     }
 
     #[test]
@@ -274,6 +368,7 @@ mod tests {
                 Some(&spec),
                 ToolError::Execution("not found".into()),
                 None,
+                false,
                 false,
             )
             .unwrap();

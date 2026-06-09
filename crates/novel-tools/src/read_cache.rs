@@ -198,30 +198,14 @@ fn shift_committed_spans_for_edit(
 
 /// Inclusive line span for a persisted Read/Tail tool_result from tool input.
 pub(crate) fn span_from_tool_input(
+    registry: &crate::ToolRegistry,
     tool_name: &str,
     input: &Value,
     total_lines: usize,
 ) -> Option<(usize, usize)> {
-    match tool_name {
-        "Read" => {
-            let offset = input.get("offset").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
-            let limit = input.get("limit").and_then(|v| v.as_u64())? as usize;
-            let end = offset.saturating_add(limit).saturating_sub(1);
-            Some((offset, end.min(total_lines.max(offset))))
-        }
-        "Tail" => {
-            let lines_n = input.get("lines").and_then(|v| v.as_u64()).unwrap_or(80) as usize;
-            let total = total_lines;
-            let take = lines_n.min(total);
-            let start = if take == 0 {
-                1
-            } else {
-                total.saturating_sub(take) + 1
-            };
-            Some((start, total.max(start)))
-        }
-        _ => None,
-    }
+    registry
+        .get(tool_name)?
+        .extract_read_span(input, total_lines)
 }
 
 fn line_number_1_indexed(haystack: &str, needle: &str) -> Option<usize> {
@@ -529,24 +513,7 @@ pub fn is_read_dedup_stub(content: &str) -> bool {
         && content.contains("Refer to the earlier Read")
 }
 
-fn format_read_dedup_hint(
-    tool_name: &str,
-    file_path: &str,
-    offset: Option<usize>,
-    limit: Option<usize>,
-    tail_lines: Option<usize>,
-) -> String {
-    let range = if tool_name == "Tail" {
-        format!("tail:last_{}_lines", tail_lines.unwrap_or(80))
-    } else {
-        let (off, lim) = read_range_key(offset, limit);
-        match (off, lim) {
-            (None, None) => "full_file".into(),
-            (Some(o), Some(l)) => format!("offset:{o} limit:{l}"),
-            (Some(o), None) => format!("offset:{o}"),
-            _ => "partial".into(),
-        }
-    };
+fn format_read_dedup_hint(tool_name: &str, file_path: &str, range: &str) -> String {
     format!(
         "[read-dedup] path={file_path} range={range}\n\
          Disk unchanged; identical {tool_name} already in this conversation — do NOT retry same parameters.\n\
@@ -556,36 +523,15 @@ fn format_read_dedup_hint(
     )
 }
 
-pub fn format_read_dedup_hint_from_input(tool_name: &str, input: &Value) -> Option<String> {
+pub fn format_read_dedup_hint_from_input(
+    registry: &crate::ToolRegistry,
+    tool_name: &str,
+    input: &Value,
+) -> Option<String> {
+    let tool = registry.get(tool_name)?;
+    let range = tool.read_dedup_range_label(input)?;
     let path = normalize_rel_path(&optional_file_path(input)?);
-    let offset = input
-        .get("offset")
-        .and_then(|v| v.as_u64())
-        .map(|n| n as usize);
-    let limit = input
-        .get("limit")
-        .and_then(|v| v.as_u64())
-        .map(|n| n as usize);
-    let tail_lines = input
-        .get("lines")
-        .and_then(|v| v.as_u64())
-        .map(|n| n as usize);
-    let read_offset = if tool_name == "Read" {
-        Some(offset.unwrap_or(1))
-    } else {
-        None
-    };
-    Some(format_read_dedup_hint(
-        tool_name,
-        &path,
-        read_offset,
-        if tool_name == "Read" { limit } else { None },
-        if tool_name == "Tail" {
-            Some(tail_lines.unwrap_or(80))
-        } else {
-            None
-        },
-    ))
+    Some(format_read_dedup_hint(tool_name, &path, &range))
 }
 
 pub fn file_mtime_secs(meta: &std::fs::Metadata) -> u64 {
@@ -1021,15 +967,23 @@ mod tests {
 
     #[test]
     fn format_read_dedup_hint_read_range() {
-        let h = format_read_dedup_hint("Read", "chapters/ch01.md", Some(5), Some(8), None);
+        let h = format_read_dedup_hint("Read", "chapters/ch01.md", "offset:5 limit:8");
         assert!(h.contains("path=chapters/ch01.md"));
         assert!(h.contains("offset:5 limit:8"));
     }
 
     #[test]
     fn format_read_dedup_hint_tail() {
-        let h = format_read_dedup_hint("Tail", "chapters/ch01.md", None, None, Some(100));
+        let h = format_read_dedup_hint("Tail", "chapters/ch01.md", "tail:last_100_lines");
         assert!(h.contains("tail:last_100_lines"));
+    }
+
+    #[test]
+    fn format_read_dedup_hint_from_input_via_registry() {
+        let registry = crate::default_registry();
+        let input = serde_json::json!({"file_path": "chapters/ch01.md", "offset": 3, "limit": 10});
+        let hint = format_read_dedup_hint_from_input(&registry, "Read", &input).unwrap();
+        assert!(hint.contains("offset:3 limit:10"));
     }
 
     #[test]
@@ -1139,10 +1093,17 @@ mod tests {
 
     #[test]
     fn span_from_tool_input_matches_read_tail() {
-        let read = span_from_tool_input("Read", &serde_json::json!({"offset": 10, "limit": 5}), 30)
-            .unwrap();
+        let registry = crate::default_registry();
+        let read = span_from_tool_input(
+            &registry,
+            "Read",
+            &serde_json::json!({"offset": 10, "limit": 5}),
+            30,
+        )
+        .unwrap();
         assert_eq!(read, (10, 14));
-        let tail = span_from_tool_input("Tail", &serde_json::json!({"lines": 10}), 30).unwrap();
+        let tail =
+            span_from_tool_input(&registry, "Tail", &serde_json::json!({"lines": 10}), 30).unwrap();
         assert_eq!(tail, (21, 30));
     }
 

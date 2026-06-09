@@ -66,6 +66,7 @@ pub fn build_fork_child(
         tool_call_id: None,
         tool_calls: None,
         reasoning_content: None,
+        ..Default::default()
     };
     ForkedAgentContext::fork(
         &system_msg,
@@ -119,6 +120,39 @@ fn log_hook_batch_fork(engine: &AgentEngine, jobs: &[SubagentJob]) {
 fn set_permission_override(shared: &crate::EngineShared, mode: PermissionMode) {
     if let Ok(mut g) = shared.permission_mode_override.lock() {
         *g = mode;
+    }
+}
+
+/// Restores hook-batch permission override on drop (including error paths).
+struct PermissionOverrideGuard {
+    shared: crate::EngineShared,
+    prior: PermissionMode,
+    active: bool,
+}
+
+impl PermissionOverrideGuard {
+    fn new(shared: &crate::EngineShared, hook_batch: bool) -> Self {
+        let prior = shared
+            .permission_mode_override
+            .lock()
+            .map(|g| g.clone())
+            .unwrap_or(PermissionMode::Normal);
+        if hook_batch {
+            set_permission_override(shared, PermissionMode::Auto);
+        }
+        Self {
+            shared: shared.clone(),
+            prior,
+            active: hook_batch,
+        }
+    }
+}
+
+impl Drop for PermissionOverrideGuard {
+    fn drop(&mut self) {
+        if self.active {
+            set_permission_override(&self.shared, self.prior.clone());
+        }
     }
 }
 
@@ -235,9 +269,7 @@ pub async fn drain_subagent_jobs(
         log_hook_batch_fork(engine, &jobs);
     }
 
-    if hook_batch {
-        set_permission_override(&engine.shared, PermissionMode::Auto);
-    }
+    let _perm_guard = PermissionOverrideGuard::new(&engine.shared, hook_batch);
 
     engine
         .shared
@@ -273,9 +305,48 @@ pub async fn drain_subagent_jobs(
     }
 
     join_subagent_handles(engine, handles, meta, event_tx).await?;
-
-    if hook_batch {
-        set_permission_override(&engine.shared, PermissionMode::Normal);
-    }
     Ok(())
+}
+
+#[cfg(test)]
+mod permission_guard_tests {
+    use super::*;
+    use crate::EngineConfig;
+    use tempfile::TempDir;
+
+    #[test]
+    fn permission_override_guard_restores_on_drop() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("skills")).unwrap();
+        let engine = crate::AgentEngine::new(EngineConfig {
+            project_root: tmp.path().to_path_buf(),
+            settings_path: tmp.path().join("settings.json"),
+            db_path: tmp.path().join("state.db"),
+            skills_dir: tmp.path().join("skills"),
+            global_config_path: tmp.path().join(".novel-agent/api_config.json"),
+        })
+        .unwrap();
+        set_permission_override(&engine.shared, PermissionMode::Plan);
+        {
+            let _guard = PermissionOverrideGuard::new(&engine.shared, true);
+            assert_eq!(
+                engine
+                    .shared
+                    .permission_mode_override
+                    .lock()
+                    .map(|g| g.clone())
+                    .unwrap(),
+                PermissionMode::Auto
+            );
+        }
+        assert_eq!(
+            engine
+                .shared
+                .permission_mode_override
+                .lock()
+                .map(|g| g.clone())
+                .unwrap(),
+            PermissionMode::Plan
+        );
+    }
 }
