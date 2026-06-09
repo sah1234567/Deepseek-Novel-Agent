@@ -233,7 +233,7 @@ fn line_number_1_indexed(haystack: &str, needle: &str) -> Option<usize> {
 }
 
 /// Suggest a Read window around `line` respecting read-economy `max_lines`.
-pub fn suggest_read_window(line: usize, total_lines: usize, max_lines: usize) -> (usize, usize) {
+fn suggest_read_window(line: usize, total_lines: usize, max_lines: usize) -> (usize, usize) {
     let total = total_lines.max(1);
     let line = line.clamp(1, total);
     let pad = 5usize;
@@ -529,7 +529,7 @@ pub fn is_read_dedup_stub(content: &str) -> bool {
         && content.contains("Refer to the earlier Read")
 }
 
-pub fn format_read_dedup_hint(
+fn format_read_dedup_hint(
     tool_name: &str,
     file_path: &str,
     offset: Option<usize>,
@@ -1144,5 +1144,160 @@ mod tests {
         assert_eq!(read, (10, 14));
         let tail = span_from_tool_input("Tail", &serde_json::json!({"lines": 10}), 30).unwrap();
         assert_eq!(tail, (21, 30));
+    }
+
+    // -- shift_committed_spans_for_edit tests --
+
+    #[test]
+    fn shift_spans_edit_above_all_spans_shifts_them_down() {
+        let mut spans = vec![(50, 69)];
+        shift_committed_spans_for_edit(&mut spans, 10, 5);
+        assert_eq!(spans, vec![(55, 74)]);
+    }
+
+    #[test]
+    fn shift_spans_edit_below_all_spans_leaves_them_unchanged() {
+        let mut spans = vec![(10, 20)];
+        shift_committed_spans_for_edit(&mut spans, 80, 5);
+        assert_eq!(spans, vec![(10, 20)]);
+    }
+
+    #[test]
+    fn shift_spans_edit_before_span_shifts_span_forward() {
+        let mut spans = vec![(10, 20)];
+        shift_committed_spans_for_edit(&mut spans, 5, 3);
+        assert_eq!(spans, vec![(13, 23)]);
+    }
+
+    #[test]
+    fn shift_spans_edit_straddles_span_start_shifts_only_end() {
+        let mut spans = vec![(10, 20)];
+        shift_committed_spans_for_edit(&mut spans, 15, 2);
+        assert_eq!(spans, vec![(10, 22)]);
+    }
+
+    #[test]
+    fn shift_spans_negative_delta_contracts_spans() {
+        let mut spans = vec![(10, 30)];
+        shift_committed_spans_for_edit(&mut spans, 15, -3);
+        assert_eq!(spans, vec![(10, 27)]);
+    }
+
+    #[test]
+    fn shift_spans_multiple_edits_accumulate() {
+        let mut spans = vec![(10, 20)];
+        shift_committed_spans_for_edit(&mut spans, 8, 5);
+        assert_eq!(spans, vec![(15, 25)]);
+        shift_committed_spans_for_edit(&mut spans, 5, 2);
+        assert_eq!(spans, vec![(17, 27)]);
+    }
+
+    #[test]
+    fn shift_spans_zero_delta_is_noop() {
+        let mut spans = vec![(10, 20)];
+        shift_committed_spans_for_edit(&mut spans, 1, 0);
+        assert_eq!(spans, vec![(10, 20)]);
+    }
+
+    #[test]
+    fn shift_spans_empty_list_is_noop() {
+        let mut spans = vec![];
+        shift_committed_spans_for_edit(&mut spans, 1, 10);
+        assert!(spans.is_empty());
+    }
+
+    // -- merge_read_cache_on_store edge tests --
+
+    #[test]
+    fn merge_existing_none_returns_incoming() {
+        let disk = lines_disk(10);
+        let incoming = ReadCacheEntry {
+            mtime_secs: 1,
+            raw_content: "line 5".into(),
+            offset: Some(5),
+            limit: Some(1),
+            total_lines: 10,
+            source: ReadCacheSource::Read,
+            transcript_committed: false,
+            committed_spans: vec![],
+            committed_offset: None,
+            committed_limit: None,
+        };
+        let merged = merge_read_cache_on_store(None, incoming.clone(), Some(&disk), None);
+        assert_eq!(merged.offset, incoming.offset);
+    }
+
+    #[test]
+    fn merge_premerged_raw_path() {
+        let disk = lines_disk(20);
+        let existing = partial_entry(&disk, 5, 5, ReadCacheSource::Read);
+        let incoming = ReadCacheEntry {
+            mtime_secs: 1,
+            raw_content: "pre-merged".into(),
+            offset: Some(10),
+            limit: Some(6),
+            total_lines: 20,
+            source: ReadCacheSource::Read,
+            transcript_committed: false,
+            committed_spans: vec![],
+            committed_offset: None,
+            committed_limit: None,
+        };
+        let merged =
+            merge_read_cache_on_store(Some(&existing), incoming, None, Some("merged raw content"));
+        assert_eq!(merged.raw_content, "merged raw content");
+        assert_eq!(merged.offset, Some(5));
+        assert_eq!(merged.limit, Some(11));
+    }
+
+    // -- verify_edit_against_read_cache edge tests --
+
+    #[test]
+    fn verify_edit_none_entry_returns_ok() {
+        let disk = lines_disk(10);
+        assert!(verify_edit_against_read_cache(None, "line 5", &disk, "test.md", false).is_ok());
+    }
+
+    #[test]
+    fn verify_edit_full_read_not_committed_returns_pending() {
+        let disk = lines_disk(10);
+        let entry = ReadCacheEntry {
+            mtime_secs: 1,
+            raw_content: disk.clone(),
+            offset: None,
+            limit: None,
+            total_lines: 10,
+            source: ReadCacheSource::Read,
+            transcript_committed: false,
+            committed_spans: vec![],
+            committed_offset: None,
+            committed_limit: None,
+        };
+        let err = verify_edit_against_read_cache(Some(&entry), "line 5", &disk, "test.md", false)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("was not applied"));
+        assert!(err.contains("not yet in the conversation"));
+    }
+
+    #[test]
+    fn verify_edit_full_read_committed_returns_ok() {
+        let disk = lines_disk(10);
+        let mut entry = ReadCacheEntry {
+            mtime_secs: 1,
+            raw_content: disk.clone(),
+            offset: None,
+            limit: None,
+            total_lines: 10,
+            source: ReadCacheSource::Read,
+            transcript_committed: false,
+            committed_spans: vec![],
+            committed_offset: None,
+            committed_limit: None,
+        };
+        entry.commit_to_transcript();
+        assert!(
+            verify_edit_against_read_cache(Some(&entry), "line 5", &disk, "test.md", false).is_ok()
+        );
     }
 }

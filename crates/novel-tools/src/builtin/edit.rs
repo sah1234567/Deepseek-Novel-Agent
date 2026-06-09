@@ -1,3 +1,9 @@
+//! Edit tool: string replacement with read-before-write enforcement.
+//!
+//! R1: single replace (`replace_all=false`) must target lines within committed spans.
+//! `replace_all=true` bypasses R1 — only requires the file was Read/Tail'd this session
+//! and the old_string exists on disk (byte-exact match).
+
 use super::super::{
     blocking, extract_file_path, file_mtime_secs, require_str, Tool, ToolContext, ToolError,
     ToolOutput, ValidationError,
@@ -61,6 +67,10 @@ impl Tool for EditTool {
 
     fn is_concurrency_safe(&self) -> bool {
         false
+    }
+
+    fn can_write_outside_plan_dir(&self) -> bool {
+        true
     }
 
     fn validate_input(&self, input: &Value) -> Result<(), ValidationError> {

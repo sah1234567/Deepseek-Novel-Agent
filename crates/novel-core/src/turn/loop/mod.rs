@@ -14,7 +14,6 @@ use crate::turn::MSG_SEQ_USER;
 use crate::{AgentEngine, AgentError, AgentType, ChatMessage, Event, TerminalReason};
 use novel_logging::LogEvent;
 use novel_tools::{ToolCallSpec, ToolExecutor};
-use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -238,7 +237,6 @@ impl AgentEngine {
         )>,
         executed_specs: &[ToolCallSpec],
         tool_call_order: &[String],
-        _skip_result_events: &HashSet<String>,
         event_tx: Option<&mpsc::UnboundedSender<Event>>,
         persist_tool_messages: bool,
     ) -> Result<bool, AgentError> {

@@ -1,3 +1,6 @@
+//! Corkboard tool: parses chapter outline files into structured scene cards
+//! with POV filtering, chapter range constraints, and dimension masking.
+
 use super::common::{count_chinese_chars, in_chapter_range, list_outline_files};
 use crate::{Tool, ToolContext, ToolError, ToolOutput};
 use async_trait::async_trait;

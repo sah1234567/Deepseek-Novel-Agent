@@ -44,7 +44,7 @@ novel_agent/
 novel-server (Tauri IPC)
   └─ novel-core (AgentEngine, Fork, Hook, dynamic_context)
        ├─ novel-deepseek (ChatClient, SSE, cache, tool_args)
-       ├─ novel-tools (23 tools, StreamingToolExecutor)
+       ├─ novel-tools (24 tools, StreamingToolExecutor, permission engine)
        ├─ novel-knowledge (scaffold, index, derive)
        ├─ novel-state (SQLite)
        ├─ novel-compaction (4-level)
@@ -71,7 +71,9 @@ novel-server (Tauri IPC)
 | **Hook opt-in** | `default_hook_config` 默认空；用户 settings 可启用 PostToolUse Hook |
 | **单队列 Engine** | 所有 IPC 经 `engine_loop` 串行 |
 | **流式 Tool 早执行** | arguments JSON 完整即 dispatch；Allow 立即入队执行；Ask 等 approve；Deny 流末注入 error |
-| **读盘经济** | `prompt/system.md` §2.3 + `novel-tools` tool result pipeline（`read_economy` 硬限）：knowledge/** >80 行拒绝注入；Grep ripgrep 后端；usage_hint 软引导 |
+| **读盘经济** | `prompt/system.md` §2.3 + `novel-tools` pipeline（`read_economy` 硬限）：knowledge/memory/plan/** >80 行拒绝注入；Grep 默认 80 匹配、`head_limit`/`offset` 分页、截断自动标注 pagination 信息；Read 256KB 硬限 |
+| **Tool 谓词方法 (OCP)** | 新增 Tool 可覆盖 predicate 方法替代硬编码名称匹配：`blocks_nested_fork`、`is_always_allowed`、`can_write_outside_plan_dir`、`allowed_in_plan_mode`、`tracks_skill_references`、`is_skill_invocation`、`errors_abort_siblings`、`extract_read_span` |
+| **权限引擎独立** | `check_permissions` 策略从 Tool trait 提取到 `permission.rs`，trait 默认为薄委托；避免 53 行策略引擎驻留 trait vtable |
 | **Turn 续跑预算** | 续跑时 inner turn 预算按**当前 turn 内**已消耗量计算，避免长会话因累计 assistant 消息数提前触及上限 |
 | **Segment 分段 UI** | 每次 LLM 响应结束为一个 segment；主聊天与子 Agent overlay 各自 finalize 独立气泡（CoT + 正文），通过 `fork_run_id` 区分归属 |
 | **聊天区布局** | 用户 / Agent / Subagent 为全宽 `message` 气泡；`AskUserQuestion` 为全宽卡片；普通工具为全宽 `message-tool` + 内嵌 `ToolUseCard`（虚线框）；`ForkSubAgent` 与 Agent 同构 `SubAgentForkCard`。长文本边界强制换行；当前 turn 锚点 `min-height` 折叠较早内容；上滚后 **Sticky 本轮用户提问** 可点回起点 |

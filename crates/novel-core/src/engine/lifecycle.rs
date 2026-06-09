@@ -1,3 +1,13 @@
+//! Session lifecycle: creation (`new_with_abort`) and resumption (`resume_with_abort`).
+//!
+//! Two paths diverge at `stored.is_empty()`:
+//! - **New** session builds a fresh system prompt, inserts the initial system message, and
+//!   freezes metadata (skill IDs, agent definitions) into SQLite.
+//! - **Resume** loads stored messages via `stored_to_chat`, repairs broken tool_use→tool_result
+//!   chains, and recovers the frozen system prompt + agent definitions from metadata.
+//!
+//! Both paths create a fresh `EngineShared` with an empty `read_file_cache`.
+
 use super::types::{open_audit_logger, AgentEngine, EngineConfig, EngineShared};
 use crate::context::dynamic_context::{
     load_frozen_static_from_metadata, persist_frozen_system_metadata,
@@ -28,6 +38,8 @@ impl AgentEngine {
         )
     }
 
+    /// Full production constructor: builds system prompt, inserts initial
+    /// system message, freezes metadata into SQLite, and creates `EngineShared`.
     pub fn new_with_abort(
         config: EngineConfig,
         abort_controller: Arc<AbortController>,
@@ -133,6 +145,9 @@ impl AgentEngine {
         )
     }
 
+    /// Resume an existing session: loads stored messages from SQLite, recovers
+    /// the frozen system prompt + agent metadata, repairs tool_use chains, and
+    /// creates fresh `EngineShared` with an empty `read_file_cache`.
     pub fn resume_with_abort(
         config: EngineConfig,
         session_id: &str,

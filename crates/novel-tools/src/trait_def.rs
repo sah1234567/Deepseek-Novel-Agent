@@ -1,5 +1,5 @@
 use crate::abort::InterruptBehavior;
-use crate::{optional_file_path, PermissionMode, PermissionResult, ToolContext, ValidationError};
+use crate::{PermissionResult, ToolContext, ValidationError};
 use async_trait::async_trait;
 use serde_json::Value;
 
@@ -38,63 +38,64 @@ pub trait Tool: Send + Sync {
     }
 
     fn check_permissions(&self, input: &Value, ctx: &ToolContext) -> PermissionResult {
-        if let Some(reason) = ctx.deny_rule_block(self.name(), optional_file_path(input).as_deref())
-        {
-            return PermissionResult::Deny { reason };
-        }
-        if self.name() == "ForkSubAgent" && !ctx.allow_fork {
-            return PermissionResult::Deny {
-                reason: "子 Agent 禁止嵌套 fork（sub_agent_running）".into(),
-            };
-        }
-        if ctx.is_tool_always_allowed(self.name()) {
-            return PermissionResult::Allow;
-        }
-        // Session todo list — not a filesystem write; should not block on Normal-mode approval.
-        if self.name() == "TodoWrite" {
-            return PermissionResult::Allow;
-        }
-        let mode = ctx.effective_permission_mode();
-        if matches!(mode, PermissionMode::Plan) {
-            if self.is_read_only() {
-                return PermissionResult::Allow;
-            }
-            if matches!(self.name(), "Write" | "Edit") {
-                if let Some(p) = optional_file_path(input) {
-                    if ToolContext::is_under_plan_dir(&p) {
-                        return PermissionResult::Allow;
-                    }
-                }
-                return PermissionResult::Deny {
-                    reason: "plan mode: Write/Edit only allowed under plan/".into(),
-                };
-            }
-            if matches!(
-                self.name(),
-                "TodoWrite" | "WebSearch" | "AskUserQuestion" | "InvokeSkill"
-            ) {
-                return PermissionResult::Allow;
-            }
-            return PermissionResult::Deny {
-                reason: format!(
-                    "plan mode: {} not available — use plan/ for drafts or switch permission mode",
-                    self.name()
-                ),
-            };
-        }
-        match mode {
-            PermissionMode::Auto | PermissionMode::Unattended => PermissionResult::Allow,
-            _ if self.is_read_only() => PermissionResult::Allow,
-            _ => PermissionResult::Ask {
-                tool_name: self.name().into(),
-                summary: self.get_summary(input),
-            },
-        }
+        crate::permission::evaluate_tool_permissions(
+            self.name(),
+            self.is_read_only(),
+            self.blocks_nested_fork(),
+            self.is_always_allowed(),
+            self.can_write_outside_plan_dir(),
+            self.allowed_in_plan_mode(),
+            &self.get_summary(input),
+            input,
+            ctx,
+        )
     }
 
     async fn call(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput, super::ToolError>;
 
     fn get_summary(&self, input: &Value) -> String {
         format!("{} {:?}", self.name(), input)
+    }
+
+    // -- Predicate methods (OCP: replace hardcoded tool-name matching) --
+
+    /// ForkSubAgent — reject when subagent is already running.
+    fn blocks_nested_fork(&self) -> bool {
+        false
+    }
+
+    /// TodoWrite — always allowed regardless of permission mode.
+    fn is_always_allowed(&self) -> bool {
+        false
+    }
+
+    /// Write/Edit — Plan mode allows writes only under plan/ directory.
+    fn can_write_outside_plan_dir(&self) -> bool {
+        false
+    }
+
+    /// Tools callable in Plan mode beyond the read-only baseline.
+    fn allowed_in_plan_mode(&self) -> bool {
+        false
+    }
+
+    /// Read — triggers skill-reference tracking after a successful Read result.
+    fn tracks_skill_references(&self) -> bool {
+        false
+    }
+
+    /// InvokeSkill — marks the tool as a skill invocation for turn-level tracking.
+    fn is_skill_invocation(&self) -> bool {
+        false
+    }
+
+    /// Bash — a Bash error should abort concurrent sibling tools.
+    fn errors_abort_siblings(&self) -> bool {
+        false
+    }
+
+    /// Read/Tail — extract the line span this tool input covers, for committed-span tracking.
+    fn extract_read_span(&self, _input: &Value, _total_lines: usize) -> Option<(usize, usize)> {
+        None
     }
 }

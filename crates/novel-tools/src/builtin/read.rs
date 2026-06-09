@@ -125,6 +125,17 @@ impl Tool for ReadTool {
         true
     }
 
+    fn tracks_skill_references(&self) -> bool {
+        true
+    }
+
+    fn extract_read_span(&self, input: &Value, total_lines: usize) -> Option<(usize, usize)> {
+        let offset = input.get("offset").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
+        let limit = input.get("limit").and_then(|v| v.as_u64())? as usize;
+        let end = offset.saturating_add(limit).saturating_sub(1);
+        Some((offset, end.min(total_lines.max(offset))))
+    }
+
     fn validate_input(&self, input: &Value) -> Result<(), ValidationError> {
         extract_file_path(input)?;
         Ok(())

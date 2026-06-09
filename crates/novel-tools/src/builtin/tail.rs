@@ -48,6 +48,18 @@ impl Tool for TailTool {
         true
     }
 
+    fn extract_read_span(&self, input: &Value, total_lines: usize) -> Option<(usize, usize)> {
+        let lines_n = input.get("lines").and_then(|v| v.as_u64()).unwrap_or(80) as usize;
+        let total = total_lines;
+        let take = lines_n.min(total);
+        let start = if take == 0 {
+            1
+        } else {
+            total.saturating_sub(take) + 1
+        };
+        Some((start, total.max(start)))
+    }
+
     fn validate_input(&self, input: &Value) -> Result<(), ValidationError> {
         extract_file_path(input)?;
         Ok(())

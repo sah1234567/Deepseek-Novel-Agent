@@ -42,6 +42,10 @@ impl Tool for WriteTool {
         false
     }
 
+    fn can_write_outside_plan_dir(&self) -> bool {
+        true
+    }
+
     fn validate_input(&self, input: &Value) -> Result<(), ValidationError> {
         extract_file_path(input)?;
         require_str(input, "content")?;

@@ -6,7 +6,6 @@ use crate::turn::MSG_SEQ_USER;
 use crate::{AgentEngine, AgentError, AgentType, ChatMessage, EngineConfig, Event};
 use novel_deepseek::{LlmCompletion, LlmToolCall};
 use novel_tools::{PendingSubagentWork, ToolCallSpec};
-use std::collections::HashSet;
 use std::sync::Arc;
 use tempfile::TempDir;
 
@@ -111,7 +110,6 @@ async fn execute_stream_results_persists_tool_message() {
             )],
             std::slice::from_ref(&spec),
             &["t1".into()],
-            &HashSet::new(),
             None,
             true,
         )
@@ -144,7 +142,6 @@ async fn execute_stream_results_pauses_on_needs_user_input() {
             )],
             std::slice::from_ref(&spec),
             &["q1".into()],
-            &HashSet::new(),
             None,
             false,
         )

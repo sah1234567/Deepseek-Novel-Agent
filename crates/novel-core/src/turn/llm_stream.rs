@@ -96,7 +96,7 @@ impl AgentEngine {
         event_tx: Option<&mpsc::UnboundedSender<Event>>,
         persist_tool_messages: bool,
     ) -> Result<LlmCallOutcome, AgentError> {
-        let (executed_specs, skip_result_events, denied_specs, mut executor) = {
+        let (executed_specs, _skip_result_events, denied_specs, mut executor) = {
             let mut dispatch = dispatch_arc.lock().map_err(|_| {
                 AgentError::Validation("streaming tool dispatch lock poisoned".into())
             })?;
@@ -159,7 +159,6 @@ impl AgentEngine {
                     results,
                     &executed_specs,
                     &tool_call_order,
-                    &skip_result_events,
                     event_tx,
                     persist_tool_messages,
                 )
@@ -173,7 +172,6 @@ impl AgentEngine {
                 results,
                 &executed_specs,
                 &tool_call_order,
-                &skip_result_events,
                 event_tx,
                 persist_tool_messages,
             )

@@ -73,6 +73,14 @@ impl Tool for TodoWriteTool {
         false
     }
 
+    fn is_always_allowed(&self) -> bool {
+        true
+    }
+
+    fn allowed_in_plan_mode(&self) -> bool {
+        true
+    }
+
     async fn call(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
         let todos = parse_todos(&input)?;
         let merge = input.get("merge").and_then(|v| v.as_bool()).unwrap_or(true);

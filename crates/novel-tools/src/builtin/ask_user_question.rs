@@ -1,3 +1,6 @@
+//! AskUserQuestion tool: pauses the turn for user input. In Unattended mode the
+//! model self-answers; in other modes it emits `ToolError::NeedsUserInput`.
+
 use crate::{PermissionMode, Tool, ToolContext, ToolError, ToolOutput};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -127,6 +130,10 @@ impl Tool for AskUserQuestionTool {
         })
     }
     fn is_read_only(&self) -> bool {
+        true
+    }
+
+    fn allowed_in_plan_mode(&self) -> bool {
         true
     }
 

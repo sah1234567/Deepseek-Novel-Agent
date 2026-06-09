@@ -28,6 +28,10 @@ impl Tool for BashTool {
         false
     }
 
+    fn errors_abort_siblings(&self) -> bool {
+        true
+    }
+
     fn validate_input(&self, input: &Value) -> Result<(), ValidationError> {
         require_str(input, "command")?;
         Ok(())

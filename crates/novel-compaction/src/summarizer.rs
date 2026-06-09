@@ -8,17 +8,7 @@ pub fn build_summary_trailing_user_prompt() -> String {
 
 /// Truncate summary text to max_chars (character count).
 pub fn truncate_summary(summary: &str, max_chars: usize) -> String {
-    if summary.chars().count() <= max_chars {
-        summary.to_string()
-    } else {
-        format!(
-            "{}…",
-            summary
-                .chars()
-                .take(max_chars.saturating_sub(1))
-                .collect::<String>()
-        )
-    }
+    novel_knowledge::truncate_with_suffix(summary, max_chars, "\u{2026}")
 }
 
 #[cfg(test)]

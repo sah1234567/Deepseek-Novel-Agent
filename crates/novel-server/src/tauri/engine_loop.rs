@@ -1,3 +1,6 @@
+//! Main event loop: dispatches engine commands (run, resume, approve, deny, answer, set_mode,
+//! enable_unattended, exit) to `novel_core::AgentEngine` and emits UI events via Tauri channels.
+
 use crate::AppConfig;
 use novel_config::ensure_work_under_works;
 use novel_core::{

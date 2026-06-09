@@ -59,6 +59,14 @@ impl Tool for InvokeSkillTool {
         true
     }
 
+    fn allowed_in_plan_mode(&self) -> bool {
+        true
+    }
+
+    fn is_skill_invocation(&self) -> bool {
+        true
+    }
+
     async fn call(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
         let skill_id = require_str(&input, "skill_id")?;
         let path = resolve_skill_path(&ctx.project_root, ctx.skills_dir.as_deref(), &skill_id)

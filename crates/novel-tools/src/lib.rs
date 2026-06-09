@@ -9,6 +9,7 @@ mod error;
 mod executor;
 mod novel;
 mod paths;
+mod permission;
 mod read_cache;
 mod read_economy;
 mod registry;

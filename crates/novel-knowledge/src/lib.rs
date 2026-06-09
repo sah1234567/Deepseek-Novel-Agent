@@ -30,7 +30,7 @@ pub use index::{ensure_index, rebuild_index};
 pub use parser::parse_frontmatter;
 pub use project_tree::{list_project_files, read_project_file, ProjectFileEntry};
 pub use scaffold::init_project_scaffold;
-pub use text_util::{truncate_bytes_utf8, truncate_chars, utf8_byte_prefix};
+pub use text_util::{truncate_bytes_utf8, truncate_chars, truncate_with_suffix, utf8_byte_prefix};
 
 use std::path::{Path, PathBuf};
 

@@ -5,7 +5,7 @@ pub(crate) const TOOL_FAILURE_CIRCUIT_THRESHOLD: u32 = 5;
 
 mod context;
 mod llm_stream;
-pub mod r#loop;
+pub(crate) mod r#loop;
 mod tool_apply;
 mod tool_dispatch;
 mod tool_merge;

@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 novel-config = { path = "../novel-config" }
+novel-knowledge = { path = "../novel-knowledge" }
 serde = { workspace = true }
 thiserror = { workspace = true }
 regex = { workspace = true }

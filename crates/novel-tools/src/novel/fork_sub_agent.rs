@@ -54,6 +54,10 @@ impl Tool for ForkSubAgentTool {
         true
     }
 
+    fn blocks_nested_fork(&self) -> bool {
+        true
+    }
+
     async fn call(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
         enqueue_fork_subagent(&input, ctx)
     }

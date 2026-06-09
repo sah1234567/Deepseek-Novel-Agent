@@ -15,10 +15,6 @@ pub fn count_lines(content: &str) -> usize {
     }
 }
 
-fn file_path_from_input(input: &Value) -> String {
-    optional_file_path(input).unwrap_or_default()
-}
-
 pub enum PathKind {
     Knowledge,
     Chapter,
@@ -80,7 +76,7 @@ pub fn enforce_tool_output_limits(
     let lines = count_lines(&output.content);
     let max = match tool_name {
         "Read" | "Tail" => {
-            let fp = file_path_from_input(tool_input);
+            let fp = optional_file_path(tool_input).unwrap_or_default();
             max_lines_for_path(&fp).unwrap_or(CHAPTER_MAX_LINES)
         }
         "Grep" => GREP_MAX_LINES,

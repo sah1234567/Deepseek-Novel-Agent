@@ -5,7 +5,7 @@ mod display;
 mod llm;
 mod missing_blocks;
 mod repair;
-pub mod turn_rows;
+pub(crate) mod turn_rows;
 
 pub use convert::{
     chat_slice_to_compaction, chat_to_compaction, compaction_slice_to_chat, parse_tool_call_input,

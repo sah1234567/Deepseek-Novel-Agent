@@ -86,6 +86,10 @@ impl Tool for WebSearchTool {
         false
     }
 
+    fn allowed_in_plan_mode(&self) -> bool {
+        true
+    }
+
     async fn call(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
         let query = require_str(&input, "query")?;
         let aspect = input

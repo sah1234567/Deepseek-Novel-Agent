@@ -82,8 +82,8 @@ SSE 流开始前创建，Allow 权限的工具在 arguments JSON 完整时即可
 
 | 工具 | 说明 |
 |------|------|
-| Read | 行号分页；knowledge/** 无 limit 且 >80 行工具内拒绝；全量 ≤256KB；相同 path+range+mtime 重复 → stub |
-| **Tail** | 读文件物理末尾 N 行（默认 80）；续写衔接；写入 partial read cache（source=Tail）；knowledge ≤80 / chapters ≤200 行硬限 |
+| Read | 行号分页；knowledge/memory/plan/** 无 limit 且 >80 行工具内拒绝；全量 ≤256KB；相同 path+range+mtime 重复 → stub |
+| **Tail** | 读文件物理末尾 N 行（默认 80）；续写衔接；写入 partial read cache（source=Tail）；knowledge/memory/plan/** ≤80 / chapters/** ≤200 行硬限 |
 | Write / Edit | Write 整文件入 cache（`WriteRefresh`）；单次 Edit 行域 ⊆ committed span；`replace_all` 跳过 R1 且 Edit 后 cache 整文件；同路径 file lock；stale mtime 守卫 |
 | Grep | ripgrep 生态；`search_root` 可选（默认作品根）；默认 ≤80 匹配，`head_limit`/`offset` 分页（`head_limit=0` 无限）；20K 字符硬限 |
 | Glob | 通配符搜路径（`*`/`**`/`?`；带 `/` 的前缀 pattern；无 `/` 则任意深度；`dir/*` 等价 `dir/**`）；`search_root` 可选；输出统一 `/` |
@@ -111,13 +111,13 @@ SSE 流开始前创建，Allow 权限的工具在 arguments JSON 完整时即可
 
 | 字段 | 必填 | 说明 |
 |------|------|------|
-| `agentType` | 是 | 见 `FORKABLE_AGENT_TYPE_NAMES`（KnowledgeAuditor、ChapterCraftAnalyzer、GeneralPurpose） |
+| `agentType` | 是 | 见 `FORKABLE_AGENT_TYPE_NAMES`（PlanAuditor、KnowledgeAuditor、ChapterCraftAnalyzer、GeneralPurpose） |
 | `task` | 是 | 预定义类型：简短任务；**GeneralPurpose：完整自定义 prompt** |
 | `description` | 否 | 日志/UI 短标签（默认 `custom subagent`） |
 
 **agentType 枚举（与 `novel_core::FORKABLE_AGENT_TYPE_NAMES` 同步）：**
 
-`KnowledgeAuditor`, `ChapterCraftAnalyzer`, **`GeneralPurpose`**
+`PlanAuditor`, `KnowledgeAuditor`, `ChapterCraftAnalyzer`, **`GeneralPurpose`**
 
 **GeneralPurpose 权限：** 精选工具白名单（Read/Write/Edit/Glob/Grep/CharacterSearch/PlotGraph/Tail/Stats/InvokeSkill/ImpactAnalysis/TodoWrite/WebSearch）；无 ForkSubAgent（禁止嵌套 fork），无 Bash。含 Write/Edit 可在 sandbox 内写 chapters；WebSearch 原始缓存 `{project}/.websearch/`。
 

@@ -43,14 +43,11 @@ fn format_one(msg: &CompactionMessage) -> String {
 
 fn truncate(s: &str, max_chars: usize) -> String {
     if s.chars().count() <= max_chars {
-        s.to_string()
-    } else {
-        format!(
-            "{}…[truncated {} chars]",
-            s.chars().take(max_chars).collect::<String>(),
-            s.chars().count()
-        )
+        return s.to_string();
     }
+    let removed = s.chars().count().saturating_sub(max_chars);
+    let suffix = format!("…[truncated {removed} chars]");
+    novel_knowledge::truncate_with_suffix(s, max_chars, &suffix)
 }
 
 #[cfg(test)]

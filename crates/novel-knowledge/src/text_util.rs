@@ -1,15 +1,19 @@
 //! UTF-8 safe truncation (never slice `str` at arbitrary byte indices).
 
-/// Truncate to at most `max_chars` Unicode scalars; append `…` when shortened.
-pub fn truncate_chars(s: &str, max_chars: usize) -> String {
-    if max_chars == 0 {
-        return String::new();
-    }
+/// Truncate to at most `max_chars` Unicode scalars; append `suffix` when shortened.
+/// The suffix char-count is subtracted from `max_chars` so the total output ≤ max_chars.
+pub fn truncate_with_suffix(s: &str, max_chars: usize, suffix: &str) -> String {
     if s.chars().count() <= max_chars {
         return s.to_string();
     }
-    let take = max_chars.saturating_sub(1).max(1);
-    format!("{}…", s.chars().take(take).collect::<String>())
+    let suffix_chars = suffix.chars().count();
+    let take = max_chars.saturating_sub(suffix_chars).max(1);
+    format!("{}{suffix}", s.chars().take(take).collect::<String>())
+}
+
+/// Truncate to at most `max_chars` Unicode scalars; append `…` when shortened.
+pub fn truncate_chars(s: &str, max_chars: usize) -> String {
+    truncate_with_suffix(s, max_chars, "\u{2026}")
 }
 
 /// Return the longest prefix of `s` whose UTF-8 byte length is ≤ `max_bytes`.

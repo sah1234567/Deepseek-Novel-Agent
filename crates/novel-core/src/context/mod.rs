@@ -1,6 +1,6 @@
 //! System prompt assembly, dynamic context, and agent prompt loading.
 
-pub mod dynamic_context;
+pub(crate) mod dynamic_context;
 
 mod manager;
 mod prompt_loader;

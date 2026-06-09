@@ -1,3 +1,7 @@
+//! Automatic context compaction: when the token budget is exceeded, summarizes older
+//! messages into a compressed prefix, clears the read-file cache, and re-emits
+//! fresh skill/agent summaries that survive the compaction boundary.
+
 use std::sync::Arc;
 
 use crate::context::dynamic_context::{
