@@ -31,12 +31,10 @@ allowed-tools: Read, Write, Edit, Glob, Grep, Bash, CharacterSearch, PlotGraph, 
 修订正文时同步清除 AI 味：删改「不是…而是…」、破折号泛滥、「然后/首先/其次」堆砌、句长均匀、情感空标签、说明书式叙述；补入具体细节与闲笔，长短句交替。
 
 **同文件连续改稿**：
-- 只能 Edit **对话里已出现 Read/Tail tool_result 的行域**（旧 cache 未覆盖的新行须等 Read 进上下文）
-- 同轮对新区域 `Read`/`Tail` 后立刻 `Edit` 会被工具拒绝（未改盘）；**下一条消息重试 Edit** 即可，文件未变则无需再 Read
-- 已在上下文覆盖的行内：可连续多次 Edit，无需每次 Edit 后再 Read
-- 下一处超出已读行域：先 Read/Tail 扩大窗口（章末用 Tail `lines`），**等结果进入对话后**再 Edit
-- 多轮分段 Read 会扩大可改行域（例：先读 80–100、再读 50–90 → 可改 50–100）；文件未变时勿用相同 Read 参数重读
-- Edit 成功后同参 Read 会 dedup stub，对话仍是改前正文；下一条 Edit 用 **Grep + 更新后磁盘文本**，或 Read **不同** offset/limit
+- **逐处精确改**（`replace_all:false`）：`old_string` 须在 `committed_spans` 内（即 Read/Tail tool_result 已在对话中）。超出 → Grep 锚点 → Read offset/limit 扩窗 → 等结果进对话后再 Edit。同文件连续改无需每次重读；多段 Read 自动并集为 disjoint spans（如先读 80–100、再读 50–90 → 可改 50–100）。
+- **全文批量改名**（`replace_all:true`）：仅需本会话 Read/Tail 过该文件（有 cache 即可，**不检查 committed span**）。Grep 确认匹配位置与数量 → Edit `replace_all:true`，盘上字节匹配代替全文 Read；Edit 后 cache 升为整文件。
+- **同轮 Read→Edit 被拒**：tool_result 尚未进入 transcript（committed 未 promote）。**下条消息重试 Edit** 即可，文件未变则无需再 Read。
+- **Edit 后勿同参 Read**：会 dedup stub。看新正文用 Grep 定位 → Read 不同 offset/limit，或 Grep 匹配行直接作下一次 Edit 的 `old_string`。
 
 **按 Subagent 报告 Edit（强制）**：
 - `old_string` **只能**来自 Read/Tail `tool_result`（去掉 `行号\t`），**禁止**用 CCA/KA 概括句、示例句、禁用模式描述当 `old_string`

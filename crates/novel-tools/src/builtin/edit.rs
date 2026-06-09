@@ -178,9 +178,13 @@ mod tests {
         ctx
     }
 
-    fn seed_committed_read_cache(ctx: &ToolContext, full: &std::path::Path, entry: ReadCacheEntry) {
+    fn seed_committed_read_cache(
+        ctx: &ToolContext,
+        full: &std::path::Path,
+        mut entry: ReadCacheEntry,
+    ) {
+        entry.commit_to_transcript();
         ctx.store_read_cache_direct(full, entry);
-        ctx.promote_read_cache_committed(full);
     }
 
     fn write_file(dir: &std::path::Path, name: &str, content: &str) {
@@ -204,6 +208,7 @@ mod tests {
                 total_lines: 1,
                 source: ReadCacheSource::Read,
                 transcript_committed: false,
+                committed_spans: Vec::new(),
                 committed_offset: None,
                 committed_limit: None,
             },
@@ -250,6 +255,7 @@ mod tests {
                 total_lines: 50,
                 source: ReadCacheSource::Read,
                 transcript_committed: false,
+                committed_spans: Vec::new(),
                 committed_offset: None,
                 committed_limit: None,
             },
@@ -300,6 +306,7 @@ mod tests {
                 total_lines: 30,
                 source: ReadCacheSource::Read,
                 transcript_committed: false,
+                committed_spans: Vec::new(),
                 committed_offset: None,
                 committed_limit: None,
             },
@@ -323,6 +330,48 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn replace_all_outside_partial_read_span_succeeds() {
+        let tmp = TempDir::new().unwrap();
+        write_file(tmp.path(), "a.md", "foo\nbar\nfoo");
+        let ctx = ctx_with_cache(&tmp);
+        let full = ctx.resolve_path("a.md");
+        let mtime = file_mtime_secs(&std::fs::metadata(&full).unwrap());
+        seed_committed_read_cache(
+            &ctx,
+            &full,
+            ReadCacheEntry {
+                mtime_secs: mtime,
+                raw_content: "bar".into(),
+                offset: Some(2),
+                limit: Some(1),
+                total_lines: 3,
+                source: ReadCacheSource::Read,
+                transcript_committed: false,
+                committed_spans: Vec::new(),
+                committed_offset: None,
+                committed_limit: None,
+            },
+        );
+        EditTool
+            .call(
+                json!({
+                    "file_path": "a.md",
+                    "old_string": "foo",
+                    "new_string": "baz",
+                    "replace_all": true
+                }),
+                &ctx,
+            )
+            .await
+            .unwrap();
+        let s = std::fs::read_to_string(tmp.path().join("a.md")).unwrap();
+        assert_eq!(s, "baz\nbar\nbaz");
+        let entry = ctx.read_cache_entry(&full).unwrap();
+        assert!(entry.is_full_read());
+        assert_eq!(entry.raw_content, s);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn multi_match_without_replace_all_errors() {
         let tmp = TempDir::new().unwrap();
         write_file(tmp.path(), "a.md", "x x");
@@ -339,6 +388,7 @@ mod tests {
                 total_lines: 1,
                 source: ReadCacheSource::Read,
                 transcript_committed: false,
+                committed_spans: Vec::new(),
                 committed_offset: None,
                 committed_limit: None,
             },

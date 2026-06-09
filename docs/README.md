@@ -41,7 +41,7 @@
 
 ## Skill 系统概要
 
-Claude Code 文件夹格式：`skills/<id>/SKILL.md` + 可选 `references/`。
+Skill 文件夹格式：`skills/<id>/SKILL.md` + 可选 `references/`。
 
 - **摘要** → session 创建时注入 system prompt  
 - **正文** → InvokeSkill 按需加载  

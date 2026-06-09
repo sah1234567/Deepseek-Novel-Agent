@@ -1,4 +1,6 @@
 //! Session read cache: dedup, Edit read-before-write, partial/stale checks.
+//! Cached span (merge union) may be wider than transcript visibility; Edit R1 uses `committed_spans` only.
+//! `replace_all` with session cache skips R1; post-edit cache becomes full file.
 
 use crate::paths::{normalize_rel_path, optional_file_path};
 use crate::ToolError;
@@ -12,7 +14,7 @@ pub enum ReadCacheSource {
     Read,
     /// Written by Tail; eligible for Tail dedup.
     Tail,
-    /// Written by Edit/Write refresh; not eligible for Read/Tail dedup (aligns with Claude Code).
+    /// Written by Edit/Write refresh; not eligible for Read/Tail dedup.
     WriteRefresh,
     /// Cache slice patched after Edit; not dedup-eligible until the next Read/Tail.
     EditPatched,
@@ -36,6 +38,9 @@ pub struct ReadCacheEntry {
     pub source: ReadCacheSource,
     /// Span the model has seen via a persisted Read/Tail tool_result (Edit R1 uses this).
     pub transcript_committed: bool,
+    /// Inclusive 1-indexed line spans present in transcript (disjoint ranges allowed).
+    pub committed_spans: Vec<(usize, usize)>,
+    /// Bounding box of `committed_spans` for display; not used for Edit R1 checks.
     pub committed_offset: Option<usize>,
     pub committed_limit: Option<usize>,
 }
@@ -45,25 +50,27 @@ impl ReadCacheEntry {
         self.offset.is_none() && self.limit.is_none()
     }
 
-    /// Mark the current cache window as visible to the model (after tool_result is in transcript).
+    /// Mark the full cache window as committed (tests, Write refresh, full-file Read).
     pub fn commit_to_transcript(&mut self) {
         self.transcript_committed = true;
-        self.committed_offset = self.offset;
-        self.committed_limit = self.limit;
+        if self.is_full_read() {
+            self.committed_spans.clear();
+            self.committed_offset = None;
+            self.committed_limit = None;
+        } else if let Some(span) = self.cached_line_span() {
+            self.commit_span(span);
+        }
+    }
+
+    /// Record one Read/Tail tool_result span (from tool input, not merged cache union).
+    pub fn commit_span(&mut self, span: (usize, usize)) {
+        self.transcript_committed = true;
+        insert_and_coalesce_span(&mut self.committed_spans, span);
+        sync_committed_bounding_fields(self);
     }
 
     pub fn same_range(&self, offset: Option<usize>, limit: Option<usize>) -> bool {
         self.offset == offset && self.limit == limit
-    }
-
-    pub fn covers_edit_target(&self, old_string: &str) -> bool {
-        if old_string.is_empty() {
-            return true;
-        }
-        if self.is_full_read() {
-            return true;
-        }
-        self.raw_content.contains(old_string)
     }
 
     /// 1-indexed inclusive line span for a partial Read/Tail (`None` = full file).
@@ -76,19 +83,18 @@ impl ReadCacheEntry {
         )
     }
 
-    /// Line span the model has seen in transcript; `None` if partial and not yet committed.
-    pub fn committed_line_span(&self) -> Option<(usize, usize)> {
-        if !self.transcript_committed {
-            return None;
+    pub fn format_committed_spans(&self) -> String {
+        if self.is_full_read() && self.transcript_committed {
+            return "full file".into();
         }
-        line_span_from(
-            self.committed_offset,
-            self.committed_limit,
-            self.total_lines,
-            self.committed_offset.is_none()
-                && self.committed_limit.is_none()
-                && self.is_full_read(),
-        )
+        if self.committed_spans.is_empty() {
+            return "?".into();
+        }
+        self.committed_spans
+            .iter()
+            .map(|(s, e)| format!("{s}–{e}"))
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 
     /// Reject Write/Edit when disk mtime advanced and cached slice no longer matches.
@@ -129,9 +135,96 @@ fn line_span_from(
     }
 }
 
-/// 1-indexed line of the first `needle` occurrence in `haystack` (exported for tests/tooling).
-#[allow(dead_code)]
-pub fn line_number_1_indexed(haystack: &str, needle: &str) -> Option<usize> {
+fn committed_spans_bounding_box(spans: &[(usize, usize)]) -> Option<(usize, usize)> {
+    if spans.is_empty() {
+        return None;
+    }
+    let start = spans.iter().map(|(s, _)| *s).min()?;
+    let end = spans.iter().map(|(_, e)| *e).max()?;
+    Some((start, end))
+}
+
+fn sync_committed_bounding_fields(entry: &mut ReadCacheEntry) {
+    if let Some((start, end)) = committed_spans_bounding_box(&entry.committed_spans) {
+        entry.committed_offset = Some(start);
+        entry.committed_limit = Some(end.saturating_sub(start).saturating_add(1));
+    } else {
+        entry.committed_offset = None;
+        entry.committed_limit = None;
+    }
+}
+
+fn coalesce_committed_spans(spans: &mut Vec<(usize, usize)>) {
+    if spans.is_empty() {
+        return;
+    }
+    spans.sort_by_key(|(s, _)| *s);
+    let mut merged = vec![spans[0]];
+    for &(s, e) in spans.iter().skip(1) {
+        let last = merged.last_mut().expect("merged non-empty");
+        if last.1.saturating_add(1) >= s {
+            last.1 = last.1.max(e);
+        } else {
+            merged.push((s, e));
+        }
+    }
+    *spans = merged;
+}
+
+fn insert_and_coalesce_span(spans: &mut Vec<(usize, usize)>, new: (usize, usize)) {
+    spans.push(new);
+    coalesce_committed_spans(spans);
+}
+
+fn shift_committed_spans_for_edit(
+    spans: &mut Vec<(usize, usize)>,
+    first_edit_line: usize,
+    total_delta: i64,
+) {
+    if total_delta == 0 || spans.is_empty() {
+        return;
+    }
+    for (start, end) in spans.iter_mut() {
+        if *end < first_edit_line {
+            continue;
+        }
+        if *start >= first_edit_line {
+            *start = (*start as i64 + total_delta).max(1) as usize;
+        }
+        *end = (*end as i64 + total_delta).max(*start as i64) as usize;
+    }
+    coalesce_committed_spans(spans);
+}
+
+/// Inclusive line span for a persisted Read/Tail tool_result from tool input.
+pub(crate) fn span_from_tool_input(
+    tool_name: &str,
+    input: &Value,
+    total_lines: usize,
+) -> Option<(usize, usize)> {
+    match tool_name {
+        "Read" => {
+            let offset = input.get("offset").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
+            let limit = input.get("limit").and_then(|v| v.as_u64())? as usize;
+            let end = offset.saturating_add(limit).saturating_sub(1);
+            Some((offset, end.min(total_lines.max(offset))))
+        }
+        "Tail" => {
+            let lines_n = input.get("lines").and_then(|v| v.as_u64()).unwrap_or(80) as usize;
+            let total = total_lines;
+            let take = lines_n.min(total);
+            let start = if take == 0 {
+                1
+            } else {
+                total.saturating_sub(take) + 1
+            };
+            Some((start, total.max(start)))
+        }
+        _ => None,
+    }
+}
+
+fn line_number_1_indexed(haystack: &str, needle: &str) -> Option<usize> {
     if needle.is_empty() {
         return Some(1);
     }
@@ -184,39 +277,37 @@ fn should_merge_partial_reads(existing: &ReadCacheEntry, incoming: &ReadCacheEnt
 }
 
 /// Merge partial Read/Tail windows on store (same mtime); re-slice from disk when possible.
+/// Read-economy limits apply per tool_result only, not to the merged cache union.
 pub(crate) fn merge_read_cache_on_store(
     existing: Option<&ReadCacheEntry>,
     incoming: ReadCacheEntry,
-    rel_path: &str,
     disk_full: Option<&str>,
     premerged_raw: Option<&str>,
-) -> Result<ReadCacheEntry, ToolError> {
+) -> ReadCacheEntry {
     let Some(existing) = existing else {
-        return Ok(incoming);
+        return incoming;
     };
     if !should_merge_partial_reads(existing, &incoming) {
-        return Ok(incoming);
+        return incoming;
     }
     let Some(existing_span) = existing.cached_line_span() else {
-        return Ok(incoming);
+        return incoming;
     };
     let Some(incoming_span) = incoming.cached_line_span() else {
-        return Ok(incoming);
+        return incoming;
     };
     let (union_start, union_end) = union_line_span(existing_span, incoming_span);
     let union_limit = union_end.saturating_sub(union_start).saturating_add(1);
-
-    crate::read_economy::read_pre_check(rel_path, Some(union_limit), incoming.total_lines)?;
 
     let raw = if let Some(disk) = disk_full {
         extract_lines_1_indexed(disk, union_start, union_limit)
     } else if let Some(pre) = premerged_raw {
         pre.to_string()
     } else {
-        return Ok(incoming);
+        return incoming;
     };
 
-    Ok(ReadCacheEntry {
+    ReadCacheEntry {
         mtime_secs: incoming.mtime_secs,
         raw_content: raw,
         offset: Some(union_start),
@@ -224,9 +315,10 @@ pub(crate) fn merge_read_cache_on_store(
         total_lines: incoming.total_lines,
         source: incoming.source,
         transcript_committed: existing.transcript_committed,
+        committed_spans: existing.committed_spans.clone(),
         committed_offset: existing.committed_offset,
         committed_limit: existing.committed_limit,
-    })
+    }
 }
 
 /// All 1-indexed inclusive line spans for each `needle` occurrence in `haystack`.
@@ -258,23 +350,39 @@ fn spans_within_committed_span(spans: &[(usize, usize)], entry: &ReadCacheEntry)
     if entry.is_full_read() {
         return entry.transcript_committed;
     }
-    let Some((cache_start, cache_end)) = entry.committed_line_span() else {
+    if !entry.transcript_committed || entry.committed_spans.is_empty() {
         return false;
-    };
-    spans
+    }
+    spans.iter().all(|&(s, e)| {
+        entry
+            .committed_spans
+            .iter()
+            .any(|&(cs, ce)| s >= cs && e <= ce)
+    })
+}
+
+fn match_span_within_committed(entry: &ReadCacheEntry, s: usize, e: usize) -> bool {
+    if entry.is_full_read() {
+        return entry.transcript_committed;
+    }
+    entry
+        .committed_spans
         .iter()
-        .all(|&(s, e)| s >= cache_start && e <= cache_end)
+        .any(|&(cs, ce)| s >= cs && e <= ce)
 }
 
 fn edit_span_violation_error(entry: &ReadCacheEntry, line: usize, rel_path: &str) -> ToolError {
     let max = crate::read_economy::max_lines_for_path(rel_path)
         .unwrap_or(crate::read_economy::CHAPTER_MAX_LINES);
     let (offset, limit) = suggest_read_window(line, entry.total_lines.max(line), max);
-    let read_span = entry
-        .committed_line_span()
-        .or_else(|| entry.cached_line_span())
-        .map(|(s, e)| format!("{s}–{e}"))
-        .unwrap_or_else(|| "?".into());
+    let read_span = if entry.transcript_committed && !entry.committed_spans.is_empty() {
+        entry.format_committed_spans()
+    } else {
+        entry
+            .cached_line_span()
+            .map(|(s, e)| format!("{s}–{e}"))
+            .unwrap_or_else(|| "?".into())
+    };
     ToolError::Execution(format!(
         "Edit target not in the read slice (only read a portion of this file). \
          old_string first matches at line {line}; editable lines (seen in conversation) {read_span}. \
@@ -301,7 +409,8 @@ pub fn edit_old_string_not_on_disk_error(old_string: &str) -> ToolError {
     ))
 }
 
-/// Edit guard: all affected match line spans must lie within cached partial span.
+/// Edit guard: single replace — match line span must lie within committed span (R1).
+/// `replace_all` with session cache skips R1; disk byte match is sufficient.
 pub fn verify_edit_against_read_cache(
     entry: Option<&ReadCacheEntry>,
     old_string: &str,
@@ -317,6 +426,10 @@ pub fn verify_edit_against_read_cache(
         return Err(edit_old_string_not_on_disk_error(old_string));
     }
 
+    if replace_all {
+        return Ok(());
+    }
+
     if entry.is_full_read() {
         return if entry.transcript_committed {
             Ok(())
@@ -328,11 +441,7 @@ pub fn verify_edit_against_read_cache(
     }
 
     let spans = match_line_spans(disk_content, old_string);
-    let check = if replace_all {
-        spans.as_slice()
-    } else {
-        spans.first().map(std::slice::from_ref).unwrap_or(&[])
-    };
+    let check = spans.first().map(std::slice::from_ref).unwrap_or(&[]);
 
     if spans_within_committed_span(check, entry) {
         return Ok(());
@@ -341,11 +450,7 @@ pub fn verify_edit_against_read_cache(
     if spans_within_cached_span(check, entry) {
         let line = check
             .iter()
-            .find(|&&(s, e)| {
-                entry
-                    .committed_line_span()
-                    .is_none_or(|(cs, ce)| s < cs || e > ce)
-            })
+            .find(|&&(s, e)| !match_span_within_committed(entry, s, e))
             .map(|(s, _)| *s)
             .unwrap_or(check[0].0);
         return Err(edit_pending_transcript_error(line));
@@ -364,7 +469,7 @@ pub fn verify_edit_against_read_cache(
     Err(edit_span_violation_error(entry, line, rel_path))
 }
 
-/// After Edit: patch partial slice in place; full Read/Tail uses string replace; WriteRefresh → full file.
+/// After Edit: single replace patches partial slice; `replace_all` promotes to full file.
 pub(crate) fn patch_read_cache_after_edit(
     entry: &mut ReadCacheEntry,
     updated_disk: &str,
@@ -383,21 +488,19 @@ pub(crate) fn patch_read_cache_after_edit(
         return;
     }
 
-    let old_lines = old_string.lines().count().max(1);
-    let new_lines = new_string.lines().count().max(1);
-    let delta = (new_lines as i64 - old_lines as i64) * occurrences_replaced as i64;
-
-    if entry.is_full_read() {
-        entry.raw_content = if replace_all {
-            entry.raw_content.replace(old_string, new_string)
-        } else {
-            entry.raw_content.replacen(old_string, new_string, 1)
-        };
-        entry.total_lines = updated_disk.lines().count();
+    if replace_all || entry.is_full_read() {
         entry.mtime_secs = mtime_secs;
+        entry.raw_content = updated_disk.to_string();
+        entry.offset = None;
+        entry.limit = None;
+        entry.total_lines = updated_disk.lines().count();
         entry.source = ReadCacheSource::EditPatched;
         return;
     }
+
+    let old_lines = old_string.lines().count().max(1);
+    let new_lines = new_string.lines().count().max(1);
+    let delta = (new_lines as i64 - old_lines as i64) * occurrences_replaced as i64;
 
     // Re-slice from disk after edit — avoids drift when edits change line counts above the window.
     entry.total_lines = (entry.total_lines as i64 + delta).max(0) as usize;
@@ -409,7 +512,13 @@ pub(crate) fn patch_read_cache_after_edit(
     entry.raw_content = extract_lines_1_indexed(updated_disk, offset, new_limit);
     entry.limit = Some(new_limit);
     if entry.transcript_committed {
-        entry.committed_limit = Some(new_limit);
+        let first_edit_line = line_number_1_indexed(
+            updated_disk,
+            new_string.lines().next().unwrap_or(new_string),
+        )
+        .unwrap_or(offset);
+        shift_committed_spans_for_edit(&mut entry.committed_spans, first_edit_line, delta);
+        sync_committed_bounding_fields(entry);
     }
     entry.mtime_secs = mtime_secs;
     entry.source = ReadCacheSource::EditPatched;
@@ -441,8 +550,8 @@ pub fn format_read_dedup_hint(
     format!(
         "[read-dedup] path={file_path} range={range}\n\
          Disk unchanged; identical {tool_name} already in this conversation — do NOT retry same parameters.\n\
-         Use earlier tool_result. Partial Read windows merge on repeat Read/Tail (same mtime).\n\
-         After Edit on this slice: cache is patched but conversation may be stale — use next Edit with updated text, or Read with different offset/limit (not same params).\n\
+         Use earlier tool_result. Partial Read windows merge on repeat Read/Tail (same mtime); each Read/Tail output still ≤ read-economy max.\n\
+         After partial Edit: cache is patched but conversation may be stale — use next Edit with updated text, or Read with different offset/limit (not same params). replace_all promotes cache to full file.\n\
          Long chapters: Grep → Read range / Tail; full Read only when ≤200 lines."
     )
 }
@@ -525,6 +634,7 @@ mod tests {
             total_lines: 10,
             source,
             transcript_committed: false,
+            committed_spans: Vec::new(),
             committed_offset: None,
             committed_limit: None,
         }
@@ -551,6 +661,7 @@ mod tests {
             total_lines: disk.lines().count(),
             source,
             transcript_committed: false,
+            committed_spans: Vec::new(),
             committed_offset: None,
             committed_limit: None,
         };
@@ -565,39 +676,6 @@ mod tests {
             entry.limit,
             Some(end.saturating_sub(start).saturating_add(1))
         );
-    }
-
-    #[test]
-    fn partial_covers_edit_in_slice() {
-        let e = ReadCacheEntry {
-            mtime_secs: 1,
-            raw_content: "hello world".into(),
-            offset: Some(10),
-            limit: Some(5),
-            total_lines: 20,
-            source: ReadCacheSource::Read,
-            transcript_committed: false,
-            committed_offset: None,
-            committed_limit: None,
-        };
-        assert!(e.covers_edit_target("hello"));
-        assert!(!e.covers_edit_target("missing"));
-    }
-
-    #[test]
-    fn full_read_covers_any_target() {
-        let e = ReadCacheEntry {
-            mtime_secs: 1,
-            raw_content: "x".into(),
-            offset: None,
-            limit: None,
-            total_lines: 1,
-            source: ReadCacheSource::Read,
-            transcript_committed: false,
-            committed_offset: None,
-            committed_limit: None,
-        };
-        assert!(e.covers_edit_target("anything"));
     }
 
     #[test]
@@ -649,17 +727,11 @@ mod tests {
             total_lines: 100,
             source: ReadCacheSource::Read,
             transcript_committed: false,
+            committed_spans: Vec::new(),
             committed_offset: None,
             committed_limit: None,
         };
-        let merged = merge_read_cache_on_store(
-            Some(&existing),
-            incoming,
-            "chapters/ch01.md",
-            Some(&disk),
-            None,
-        )
-        .unwrap();
+        let merged = merge_read_cache_on_store(Some(&existing), incoming, Some(&disk), None);
         assert_eq!(merged.offset, Some(50));
         assert_eq!(merged.limit, Some(51));
         assert!(merged.raw_content.contains("line 50"));
@@ -677,6 +749,7 @@ mod tests {
             total_lines: 10,
             source: ReadCacheSource::Read,
             transcript_committed: false,
+            committed_spans: Vec::new(),
             committed_offset: None,
             committed_limit: None,
         };
@@ -688,17 +761,12 @@ mod tests {
             total_lines: 10,
             source: ReadCacheSource::Read,
             transcript_committed: false,
+            committed_spans: Vec::new(),
             committed_offset: None,
             committed_limit: None,
         };
-        let merged = merge_read_cache_on_store(
-            Some(&existing),
-            incoming.clone(),
-            "chapters/ch01.md",
-            Some(&disk),
-            None,
-        )
-        .unwrap();
+        let merged =
+            merge_read_cache_on_store(Some(&existing), incoming.clone(), Some(&disk), None);
         assert_eq!(merged.offset, incoming.offset);
     }
 
@@ -734,7 +802,7 @@ mod tests {
     }
 
     #[test]
-    fn replace_all_fails_when_one_match_outside_span() {
+    fn replace_all_ok_when_match_outside_cached_span() {
         let disk = "alpha\nbeta\nalpha\n".to_string();
         let entry = partial_entry(&disk, 2, 1, ReadCacheSource::Read);
         assert!(verify_edit_against_read_cache(
@@ -744,7 +812,7 @@ mod tests {
             "chapters/ch01.md",
             true
         )
-        .is_err());
+        .is_ok());
     }
 
     #[test]
@@ -758,6 +826,7 @@ mod tests {
             total_lines: 50,
             source: ReadCacheSource::Read,
             transcript_committed: false,
+            committed_spans: Vec::new(),
             committed_offset: None,
             committed_limit: None,
         };
@@ -820,24 +889,6 @@ mod tests {
     }
 
     #[test]
-    fn patch_replace_all_zero_delta_preserves_cached_line_span() {
-        let mut lines: Vec<String> = (1..=50).map(|n| format!("line {n}")).collect();
-        lines[34] = "TOK mid".into();
-        lines[39] = "TOK end".into();
-        let disk = lines.join("\n");
-        let mut entry = partial_entry(&disk, 33, 11, ReadCacheSource::Read);
-        let old = "TOK";
-        let new = "TOK2";
-        let updated = disk.replace(old, new);
-        patch_read_cache_after_edit(&mut entry, &updated, 2, old, new, true, 2);
-        assert_eq!(entry.total_lines, 50);
-        assert_cached_line_span(&entry, 33, 43);
-        assert!(entry.raw_content.contains("TOK2 mid"));
-        assert!(entry.raw_content.contains("TOK2 end"));
-        assert_eq!(entry.raw_content.lines().count(), 11);
-    }
-
-    #[test]
     fn patch_partial_increases_total_lines_and_limit() {
         let disk = lines_disk(50);
         let mut entry = partial_entry(&disk, 33, 11, ReadCacheSource::Read);
@@ -866,7 +917,7 @@ mod tests {
     }
 
     #[test]
-    fn patch_replace_all_accumulates_delta_per_occurrence() {
+    fn patch_replace_all_promotes_to_full_file() {
         let mut lines: Vec<String> = (1..=50).map(|n| format!("line {n}")).collect();
         lines[34] = "TAG mid".into();
         lines[39] = "TAG end".into();
@@ -876,8 +927,9 @@ mod tests {
         let new = "TAG\nextra";
         let updated = disk.replace(old, new);
         patch_read_cache_after_edit(&mut entry, &updated, 2, old, new, true, 2);
+        assert!(entry.is_full_read());
+        assert_eq!(entry.raw_content, updated);
         assert_eq!(entry.total_lines, 52);
-        assert_eq!(entry.limit, Some(13));
         assert!(entry.raw_content.matches("extra").count() >= 2);
     }
 
@@ -903,6 +955,7 @@ mod tests {
             total_lines: 3,
             source: ReadCacheSource::WriteRefresh,
             transcript_committed: true,
+            committed_spans: Vec::new(),
             committed_offset: None,
             committed_limit: None,
         };
@@ -925,6 +978,7 @@ mod tests {
             total_lines: 3,
             source: ReadCacheSource::Read,
             transcript_committed: true,
+            committed_spans: Vec::new(),
             committed_offset: None,
             committed_limit: None,
         };
@@ -989,5 +1043,106 @@ mod tests {
         assert!(!entry(ReadCacheSource::EditPatched, None, None)
             .source
             .is_dedup_eligible());
+    }
+
+    #[test]
+    fn merge_allows_disjoint_reads_when_each_within_economy() {
+        let disk = lines_disk(116);
+        let mut existing = partial_entry(&disk, 1, 80, ReadCacheSource::Read);
+        existing.mtime_secs = 5;
+        let incoming = ReadCacheEntry {
+            mtime_secs: 5,
+            raw_content: extract_lines_1_indexed(&disk, 81, 36),
+            offset: Some(81),
+            limit: Some(36),
+            total_lines: 116,
+            source: ReadCacheSource::Read,
+            transcript_committed: false,
+            committed_spans: Vec::new(),
+            committed_offset: None,
+            committed_limit: None,
+        };
+        let merged = merge_read_cache_on_store(Some(&existing), incoming, Some(&disk), None);
+        assert_eq!(merged.offset, Some(1));
+        assert_eq!(merged.limit, Some(116));
+        assert!(merged.raw_content.contains("line 81"));
+    }
+
+    #[test]
+    fn gap_committed_does_not_cover_unread_hole() {
+        let disk = lines_disk(30);
+        let mut entry = ReadCacheEntry {
+            mtime_secs: 1,
+            raw_content: extract_lines_1_indexed(&disk, 10, 15),
+            offset: Some(10),
+            limit: Some(15),
+            total_lines: 30,
+            source: ReadCacheSource::Read,
+            transcript_committed: true,
+            committed_spans: Vec::new(),
+            committed_offset: None,
+            committed_limit: None,
+        };
+        entry.commit_span((10, 14));
+        entry.commit_span((20, 24));
+        assert_eq!(entry.committed_spans, vec![(10, 14), (20, 24)]);
+        assert!(verify_edit_against_read_cache(
+            Some(&entry),
+            "line 22",
+            &disk,
+            "chapters/ch01.md",
+            false,
+        )
+        .is_ok());
+        let err = verify_edit_against_read_cache(
+            Some(&entry),
+            "line 17",
+            &disk,
+            "chapters/ch01.md",
+            false,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("not yet in the conversation") || err.contains("only read a portion"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn adjacent_committed_spans_coalesce() {
+        let disk = lines_disk(116);
+        let mut entry = ReadCacheEntry {
+            mtime_secs: 1,
+            raw_content: extract_lines_1_indexed(&disk, 1, 116),
+            offset: Some(1),
+            limit: Some(116),
+            total_lines: 116,
+            source: ReadCacheSource::Read,
+            transcript_committed: false,
+            committed_spans: Vec::new(),
+            committed_offset: None,
+            committed_limit: None,
+        };
+        entry.commit_span((1, 80));
+        entry.commit_span((81, 116));
+        assert_eq!(entry.committed_spans, vec![(1, 116)]);
+        assert!(verify_edit_against_read_cache(
+            Some(&entry),
+            "line 90",
+            &disk,
+            "knowledge/plot/x.md",
+            false,
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn span_from_tool_input_matches_read_tail() {
+        let read = span_from_tool_input("Read", &serde_json::json!({"offset": 10, "limit": 5}), 30)
+            .unwrap();
+        assert_eq!(read, (10, 14));
+        let tail = span_from_tool_input("Tail", &serde_json::json!({"lines": 10}), 30).unwrap();
+        assert_eq!(tail, (21, 30));
     }
 }

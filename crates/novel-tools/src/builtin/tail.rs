@@ -83,10 +83,10 @@ impl Tool for TailTool {
                         total_lines: 0,
                         source: ReadCacheSource::Tail,
                         transcript_committed: false,
+                        committed_spans: Vec::new(),
                         committed_offset: None,
                         committed_limit: None,
                     },
-                    &path,
                     None,
                     None,
                 )?;
@@ -129,10 +129,10 @@ impl Tool for TailTool {
                     total_lines,
                     source: ReadCacheSource::Tail,
                     transcript_committed: false,
+                    committed_spans: Vec::new(),
                     committed_offset: None,
                     committed_limit: None,
                 },
-                &path,
                 Some(&content),
                 None,
             )?;

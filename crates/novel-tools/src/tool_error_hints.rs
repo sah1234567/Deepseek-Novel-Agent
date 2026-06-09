@@ -25,6 +25,9 @@ fn hint_for_execution(
     _tool_input: Option<&Value>,
 ) -> Option<&'static str> {
     if msg.contains("Read economy:") {
+        if tool_name == "Grep" {
+            return Some("Narrow the pattern, add a glob filter by filename, or use head_limit/offset for pagination (e.g. head_limit=50 then offset=50 for next page).");
+        }
         return Some("Use Grep to locate line numbers, then Read with offset+limit or Tail for file-end segments.");
     }
     if tool_name == "Edit" || tool_name == "Write" {

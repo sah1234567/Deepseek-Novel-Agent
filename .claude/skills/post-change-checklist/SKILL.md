@@ -97,7 +97,7 @@ Agent 根目录无统一 SQLite。API Key **不**写入 per-work DB 或 `setting
 - **Compaction / Prompt**：`novel-compaction/`、`prompt/`
 - **Skill 加载**：`novel-skills/` 及 `engine.rs` 中 system prompt 构建
 - **Agent 级 Skill 文案**：`skills/`（运行时加载）
-- **开发工作流 Skill**：`.claude/skills/`（仅 Cursor/Claude 开发用，不进 system prompt）
+- **开发工作流 Skill**：`.claude/skills/`（仅开发用，不进 system prompt）
 
 按范围核对：
 

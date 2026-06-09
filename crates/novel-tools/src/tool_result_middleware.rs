@@ -26,9 +26,9 @@ impl ToolResultMiddleware for WriteEditFactMiddleware {
         };
         let norm = normalize_rel_path(&path);
         let context_line = if ctx.tool_name == "Edit" {
-            "[fact] context: read cache patched for this path; conversation may still show pre-edit text — \
-             next Edit on this file: build old_string from updated on-disk text (Grep if needed); \
-             do not re-Read same offset/limit (dedup stub); use different offset or rely on cache for same-slice edits.".into()
+            "[fact] context: read cache updated for this path (partial patch or full file after replace_all); \
+             conversation may still show pre-edit text — next Edit: build old_string from on-disk text (Grep if needed); \
+             do not re-Read same offset/limit (dedup stub); use different offset/limit or rely on cache.".into()
         } else {
             "[fact] context: session cache holds full file; conversation may still show pre-write text — Tail/Read to confirm after large overwrites.".into()
         };
@@ -106,7 +106,7 @@ mod tests {
     }
 
     #[test]
-    fn edit_fact_mentions_patched_cache() {
+    fn edit_fact_mentions_updated_cache() {
         let input = json!({"file_path": "chapters/ch01.md"});
         let ctx = MiddlewareCtx {
             tool_name: "Edit",
@@ -114,7 +114,7 @@ mod tests {
             content: "Edited file",
         };
         let lines = append_middleware_lines(&ctx);
-        assert!(lines.iter().any(|l| l.contains("read cache patched")));
+        assert!(lines.iter().any(|l| l.contains("read cache updated")));
     }
 
     #[test]

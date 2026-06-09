@@ -1,4 +1,4 @@
-/// Format a skill's listing line for system prompt injection (Claude Code parity).
+/// Format a skill's listing line for system prompt injection.
 ///
 /// When `when_to_use` is present and not already covered by `description`,
 /// appends it as `" - {when_to_use}"`. Skips redundant append when the fields

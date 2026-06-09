@@ -8,7 +8,7 @@
 
 ### 1.1 Skill 文件格式
 
-采用 Claude Code 文件夹格式——每个 skill 是一个独立目录，包含 `SKILL.md` 主文件和可选的 `references/` 子文件：
+采用文件夹格式——每个 skill 是一个独立目录，包含 `SKILL.md` 主文件和可选的 `references/` 子文件：
 
 ```
 skills/<id>/

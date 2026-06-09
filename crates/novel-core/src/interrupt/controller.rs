@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::watch;
 
-/// Why the current turn was aborted (mirrors Claude Code abort reasons).
+/// Why the current turn was aborted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InterruptReason {
     UserCancel,

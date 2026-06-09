@@ -1,7 +1,7 @@
 use crate::paths::{normalize_rel_path, optional_file_path, resolve_under_project};
 use crate::read_cache::{
-    merge_read_cache_on_store, patch_read_cache_after_edit, read_range_key, ReadCacheEntry,
-    ReadCacheSource,
+    merge_read_cache_on_store, patch_read_cache_after_edit, read_range_key, span_from_tool_input,
+    ReadCacheEntry, ReadCacheSource,
 };
 use crate::ToolError;
 use std::future::Future;
@@ -220,19 +220,13 @@ impl ToolContext {
         &self,
         path: &Path,
         entry: ReadCacheEntry,
-        rel_path: &str,
         disk_full: Option<&str>,
         premerged_raw: Option<&str>,
     ) -> Result<(), ToolError> {
         if let Some(cache) = &self.read_file_cache {
             let existing = cache.get(path).map(|e| e.clone());
-            let final_entry = merge_read_cache_on_store(
-                existing.as_ref(),
-                entry,
-                rel_path,
-                disk_full,
-                premerged_raw,
-            )?;
+            let final_entry =
+                merge_read_cache_on_store(existing.as_ref(), entry, disk_full, premerged_raw);
             cache.insert(path.to_path_buf(), final_entry);
         }
         Ok(())
@@ -251,13 +245,22 @@ impl ToolContext {
             .and_then(|c| c.get(path).map(|e| e.clone()))
     }
 
-    /// After Read/Tail tool_result is in the transcript, widen the Edit-eligible span.
-    pub fn promote_read_cache_committed(&self, path: &Path) {
+    /// After Read/Tail tool_result is in the transcript, record that tool's line span.
+    pub fn promote_read_cache_committed(
+        &self,
+        path: &Path,
+        tool_name: &str,
+        input: &serde_json::Value,
+    ) {
         let Some(cache) = &self.read_file_cache else {
             return;
         };
         if let Some(mut entry) = cache.get_mut(path) {
-            entry.commit_to_transcript();
+            if entry.is_full_read() {
+                entry.commit_to_transcript();
+            } else if let Some(span) = span_from_tool_input(tool_name, input, entry.total_lines) {
+                entry.commit_span(span);
+            }
         }
     }
 
@@ -269,7 +272,7 @@ impl ToolContext {
         let Some(path) = optional_file_path(input) else {
             return;
         };
-        self.promote_read_cache_committed(&self.resolve_path(&path));
+        self.promote_read_cache_committed(&self.resolve_path(&path), tool_name, input);
     }
 
     pub fn was_read(&self, path: &PathBuf) -> bool {
@@ -358,6 +361,7 @@ impl ToolContext {
             total_lines,
             source: ReadCacheSource::WriteRefresh,
             transcript_committed: false,
+            committed_spans: Vec::new(),
             committed_offset: None,
             committed_limit: None,
         };
@@ -393,7 +397,7 @@ impl ToolContext {
     }
 
     // Paths within project root that must never be written or edited.
-    // Protects version control, Claude Code config, and shell config files.
+    // Protects version control, IDE agent config, and shell config files.
     const PROTECTED_PATHS: &[&str] = &[
         ".git",
         ".claude",

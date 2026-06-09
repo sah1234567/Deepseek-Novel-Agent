@@ -427,6 +427,7 @@ fn clear_read_file_cache_removes_all_entries() {
             total_lines: 1,
             source: ReadCacheSource::WriteRefresh,
             transcript_committed: true,
+            committed_spans: Vec::new(),
             committed_offset: None,
             committed_limit: None,
         },

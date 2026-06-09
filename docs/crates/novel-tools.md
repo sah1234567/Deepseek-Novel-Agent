@@ -61,9 +61,9 @@ Normal 模式下 Write/Edit 要求目标 path 已在 `read_file_cache` 中（本
 
 | 规则 | 行为 |
 |------|------|
-| R0 窗口并集 | 同 mtime 的 partial Read/Tail 合并 span（例 80–100 + 50–90 → 50–100），从磁盘重切 `raw_content` |
-| R1 Edit 行域 | `replace_all` 时**全部**匹配行须在 cached span 内；单次替换仅校验首匹配 |
-| R2 Edit patch | partial cache Edit 后增量 patch（保留 offset/limit/source）；Write 仍整文件 `WriteRefresh` |
+| R0 窗口并集 | 同 mtime 的 partial Read/Tail 合并 cached span（例 80–100 + 50–90 → 50–100），从磁盘重切 `raw_content`；读盘经济上限仅约束**单次** tool_result，不限制 merge 后 cache 累计行数 |
+| R1 Edit 行域 | **单次替换**须首匹配行在 **committed** span 内；`replace_all` 有 session cache 时跳过 R1（盘上字节匹配即可） |
+| R2 Edit patch | 单次替换 partial cache 增量 patch；`replace_all` 后 cache **升为整文件**；Write 仍整文件 `WriteRefresh` |
 | R3 Compaction | 压缩后清空 cache |
 
 **Pipeline 分层：** `format_tool_result_for_llm` 仅追加 LLM 文案（`enhance_tool_error_for_llm` / `[fact]` / `[read-dedup]`），不读写 cache。
@@ -84,8 +84,8 @@ SSE 流开始前创建，Allow 权限的工具在 arguments JSON 完整时即可
 |------|------|
 | Read | 行号分页；knowledge/** 无 limit 且 >80 行工具内拒绝；全量 ≤256KB；相同 path+range+mtime 重复 → stub |
 | **Tail** | 读文件物理末尾 N 行（默认 80）；续写衔接；写入 partial read cache（source=Tail）；knowledge ≤80 / chapters ≤200 行硬限 |
-| Write / Edit | Write 整文件入 cache（`WriteRefresh`）；Edit `replace_all` + 行域 ⊆ cached span；Edit 后 partial patch；同路径 file lock；stale mtime 守卫 |
-| Grep | ripgrep 生态；`search_root` 可选（默认作品根）；匹配 ≤80 行 |
+| Write / Edit | Write 整文件入 cache（`WriteRefresh`）；单次 Edit 行域 ⊆ committed span；`replace_all` 跳过 R1 且 Edit 后 cache 整文件；同路径 file lock；stale mtime 守卫 |
+| Grep | ripgrep 生态；`search_root` 可选（默认作品根）；默认 ≤80 匹配，`head_limit`/`offset` 分页（`head_limit=0` 无限）；20K 字符硬限 |
 | Glob | 通配符搜路径（`*`/`**`/`?`；带 `/` 的前缀 pattern；无 `/` 则任意深度；`dir/*` 等价 `dir/**`）；`search_root` 可选；输出统一 `/` |
 | Bash | Shell 命令 |
 | TodoWrite | SQLite `session_todos`，merge 模式；Normal 模式直接 Allow |

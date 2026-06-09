@@ -132,7 +132,7 @@ send_message
 
 **IPC 注意：** Tauri v2 前端 `invoke` 参数用 **camelCase**（如 `{ sessionId }`），对应 Rust `session_id`。
 
-**Read file cache（内存，`EngineShared.read_file_cache`）：** 每 path 一条 `ReadCacheEntry`；resume 不恢复；Compaction 清空。工具 `call` 为真相源；`format_tool_result_for_llm` 仅追加 LLM 文案。规则：partial Read/Tail **窗口并集**（同 mtime）；Edit 行域 ⊆ cached span（`replace_all` 校验全部匹配）；Edit 后 partial **patch**（Write 仍整文件 `WriteRefresh`）；同路径 `file_op_locks` 串行 Read/Tail/Edit/Write。详见 [`docs/crates/novel-tools.md`](docs/crates/novel-tools.md) §1.4。
+**Read file cache（内存，`EngineShared.read_file_cache`）：** 每 path 一条 `ReadCacheEntry`；resume 不恢复；Compaction 清空。工具 `call` 为真相源；`format_tool_result_for_llm` 仅追加 LLM 文案。规则：partial Read/Tail **窗口并集**（同 mtime）；单次 Edit 行域 ⊆ committed span；`replace_all` 有 cache 时跳过 R1 且 Edit 后 cache 升为整文件；Write 仍整文件 `WriteRefresh`；同路径 `file_op_locks` 串行 Read/Tail/Edit/Write。详见 [`docs/crates/novel-tools.md`](docs/crates/novel-tools.md) §1.4。
 
 ### 2.3 Fork 子 Agent
 

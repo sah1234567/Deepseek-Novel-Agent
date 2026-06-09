@@ -67,7 +67,7 @@ impl Tool for InvokeSkillTool {
             })?;
         let skill = load_skill(&path).map_err(|e| ToolError::Execution(e.to_string()))?;
 
-        // Build base directory prefix (like Claude Code's "Base directory for this skill")
+        // Build base directory prefix for skill file resolution.
         let base_dir = path
             .parent()
             .and_then(|p| p.canonicalize().ok())

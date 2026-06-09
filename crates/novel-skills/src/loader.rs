@@ -74,7 +74,7 @@ fn load_folder_skill(dir: &Path) -> Result<SkillDefinition, SkillError> {
 
 /// Discover all skills in a directory.
 ///
-/// Skills must follow the Claude Code folder format: `skills/{name}/SKILL.md`.
+/// Skills must follow the folder format: `skills/{name}/SKILL.md`.
 /// Directories starting with `_` are skipped (e.g. `_template`).
 pub fn load_skills_dir(dir: impl AsRef<Path>) -> Result<Vec<SkillDefinition>, SkillError> {
     let dir = dir.as_ref();

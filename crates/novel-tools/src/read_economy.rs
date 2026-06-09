@@ -88,9 +88,15 @@ pub fn enforce_tool_output_limits(
         _ => return Ok(output.clone()),
     };
     if lines > max {
+        let hint = match tool_name {
+            "Grep" => {
+                "Narrow the pattern, add a glob filter, or use head_limit/offset for pagination."
+            }
+            "CharacterSearch" => "Narrow the search scope or use a more specific query.",
+            _ => "Use Grep to locate, then Read offset/limit or Tail for file-end segments.",
+        };
         return Err(ToolError::Execution(format!(
-            "Read economy: {tool_name} output has {lines} lines (max {max}). \
-             Use Grep to locate, then Read offset/limit or Tail for file-end segments."
+            "Read economy: {tool_name} output has {lines} lines (max {max}). {hint}"
         )));
     }
     Ok(output.clone())

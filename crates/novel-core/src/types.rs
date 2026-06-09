@@ -20,7 +20,7 @@ pub struct ChatMessage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCallRecord>>,
     /// Thinking/CoT content. Persisted to DB for frontend display,
-    /// but stripped before sending back to the API (like Claude Code).
+    /// but stripped before sending back to the API.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,
 }
