@@ -56,34 +56,52 @@ novel_agent/
 
 ## 快速开始
 
-**前置：** [Rust](https://rustup.rs)、**Node.js 24**（`ui/.nvmrc`）、Tauri 系统依赖（Windows 需 WebView2）。Agent 根目录下须有 `templates/` 与 `skills/`。请将 Node 24 置于 User PATH 首位（高于 Cursor 自带 Node 22）。
+**前置**
+
+- [Rust](https://rustup.rs)（含 `cargo`）
+- **Node.js 24**（见 `ui/.nvmrc`；在 `ui/` 下执行 `nvm use` 或 `fnm use`）
+- [Tauri 系统依赖](https://v2.tauri.app/start/prerequisites/)（Windows 需 WebView2）
+
+以下命令均在**仓库根目录**执行（需含 `skills/`、`templates/` 目录，克隆后即存在）。
+
+**首次**安装前端依赖（`cargo tauri dev` 不会自动执行 `npm install`）：
 
 ```bash
-cd novel_agent
-cd ui && npm install && cd ..
+npm --prefix ui install
 ```
 
-**开发模式（推荐）：**
+**开发模式（推荐）：** 依赖装好后，日常只需：
 
 ```bash
 cargo tauri dev
 ```
 
-自动编译 Rust、启动前端并打开桌面窗口。改 Rust 代码需重启命令；只改 `ui/` 则 Vite 热更新。
+自动编译 Rust、启动 Vite 并打开桌面窗口。修改 `crates/` 或 `src-tauri/` 后需重启；仅改 `ui/` 由 Vite 热更新，无需重启。
+
+**仅编译可执行文件（不打安装包）：**
+
+```bash
+npm --prefix ui run build   # 首次或改 ui 后需要
+cargo build --release -p novel-agent
+```
+
+产物：`target/release/novel-agent.exe`（workspace 根目录下的 `target/`，非 `src-tauri/target/`）。请在仓库根目录启动，并保留 `skills/`、`templates/` 布局。
 
 **构建安装包：**
 
 ```bash
-cargo tauri build
+cargo tauri build --bundles nsis
 ```
+
+安装包输出于 `target/release/bundle/`（如 `nsis/*-setup.exe`）。默认 `cargo tauri build`（`targets: all`）在 Windows 还会打 MSI，需从 GitHub 下载 WiX/NSIS；国内网络易出现 `timeout: global`。可只打 NSIS（上式），或配置 `HTTP_PROXY`/`HTTPS_PROXY` 后重试；仅需本地运行时直接用上面的 `novel-agent.exe` 即可。
 
 **API Key（任选其一）：**
 
-- 环境变量 `DEEPSEEK_API_KEY`（优先）
-- 应用内 Settings 写入 `.novel-agent/api_config.json`
-- 未配置时使用离线 mock（无真实 LLM）
+- 环境变量 `DEEPSEEK_API_KEY`（优先级最高）
+- 应用内 Settings → 自动写入 `.novel-agent/api_config.json`
+- 均未配置时使用离线 mock（无真实 LLM 调用）
 
-可选环境变量：`DEEPSEEK_API_BASE`、`NOVEL_MODEL`、`NOVEL_COMPACTION_THRESHOLD` 等（见 [novel-config](docs/crates/novel-config.md)）。
+可选环境变量：`DEEPSEEK_API_BASE`、`NOVEL_MODEL`、`NOVEL_COMPACTION_THRESHOLD` 等，详见 [novel-config](docs/crates/novel-config.md)。
 
 **测试与 CI：**
 
