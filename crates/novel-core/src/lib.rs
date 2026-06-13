@@ -13,12 +13,17 @@ mod hooks;
 mod interrupt;
 mod message;
 mod permission;
+mod read_cache;
+mod session_todos;
 mod subagent;
 mod turn;
 pub(crate) mod types;
 
 // ── Public API (novel-server / integration tests) ─────────────────
-pub use agent::{AgentType, FORKABLE_AGENT_TYPE_NAMES};
+pub use agent::{
+    fallback_prompt, fork_agent_catalog, format_fork_task, load_agent_prompt, system_prompt,
+    AgentType, FORKABLE_AGENT_TYPE_NAMES, FORK_AGENT_CATALOG,
+};
 pub use engine::{AgentEngine, EngineConfig, EngineStatus};
 pub use error::AgentError;
 pub use fork_stream_subs::{

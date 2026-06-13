@@ -1,38 +1,12 @@
-use crate::{AgentError, AgentType};
+//! Fork task_message assembly (catalog prompts + runtime constraints).
 
-fn fallback_prompt(agent_type: AgentType) -> &'static str {
-    match agent_type {
-        AgentType::PlanAuditor => {
-            "你是细纲计划审计 Agent。只读检查大纲对齐、伏笔密度、因果闭合、人物轮换、字数分配、登记完整性，输出自然语言报告与「接下来」指引。"
-        }
-        AgentType::KnowledgeAuditor => {
-            "你是知识库审计 Agent。只读检查正文执行忠实度与收尾完整性，输出自然语言报告与「接下来」指引。"
-        }
-        AgentType::ChapterCraftAnalyzer => {
-            "你是章节文笔分析 Agent。分析对话、节奏、情感、设定一致性，输出自然语言报告。禁止 fork 与 JSON。"
-        }
-        AgentType::GeneralPurpose => {
-            "你是通用子 Agent。严格按下方自定义任务执行，结论写在返回正文中，禁止为说明新建文件。禁止 fork。"
-        }
-    }
-}
-
-fn embedded_prompt(agent_type: AgentType) -> &'static str {
-    match agent_type {
-        AgentType::PlanAuditor => include_str!("../../../../prompt/agents/plan-auditor.md"),
-        AgentType::KnowledgeAuditor => {
-            include_str!("../../../../prompt/agents/knowledge-auditor.md")
-        }
-        AgentType::ChapterCraftAnalyzer => {
-            include_str!("../../../../prompt/agents/chapter-craft-analyzer.md")
-        }
-        AgentType::GeneralPurpose => include_str!("../../../../prompt/agents/general_purpose.md"),
-    }
-}
+use super::catalog::{fallback_prompt, system_prompt};
+use super::AgentType;
+use crate::AgentError;
 
 /// Load agent-specific instructions injected into fork task_message prefix.
 pub fn load_agent_prompt(agent_type: AgentType) -> Result<String, AgentError> {
-    let body = embedded_prompt(agent_type).trim();
+    let body = system_prompt(agent_type).trim();
     if body.is_empty() {
         return Ok(fallback_prompt(agent_type).to_string());
     }
@@ -53,8 +27,9 @@ pub fn format_fork_task(
     let runtime_constraints = format!(
         "## 子 Agent 运行时约束\n\
         - **禁止嵌套 fork：** 无 ForkSubAgent 工具；不得再派出子 Agent\n\
-        - **本轮可用工具（仅此列表）：** {tools_line}\n\
-        - 勿调用不在此列表中的工具"
+        - **写入门控：** 子 Agent 运行时 Write/Edit/TodoWrite 会被拒绝；勿调用。结论写在最终 assistant 正文\n\
+        - **工具定义：** 与主 Agent 相同（缓存对齐）；优先使用下方「建议优先工具」列表中的只读工具\n\
+        - **建议优先工具：** {tools_line}"
     );
 
     if agent_type == AgentType::GeneralPurpose {
@@ -73,6 +48,7 @@ pub fn format_fork_task(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::FORK_AGENT_CATALOG;
 
     #[test]
     fn format_fork_task_includes_separator_and_tools() {
@@ -82,6 +58,7 @@ mod tests {
         assert!(t.contains("审计第1章"));
         assert!(t.contains("禁止嵌套 fork"));
         assert!(t.contains("TrackingQuery"));
+        assert!(t.contains("写入门控"));
     }
 
     #[test]
@@ -103,6 +80,7 @@ mod tests {
         let p = load_agent_prompt(AgentType::GeneralPurpose).expect("prompt");
         assert!(p.contains("严禁"));
         assert!(p.contains("assistant 消息正文中返回"));
+        assert!(p.contains("门控"));
     }
 
     #[test]
@@ -128,23 +106,16 @@ mod tests {
         let t = format_fork_task(AgentType::GeneralPurpose, custom, &tools).expect("task");
         assert!(t.contains("## 自定义任务"));
         assert!(t.contains(custom));
+        assert!(t.contains("写入门控"));
     }
 
     #[test]
-    fn fallback_prompt_covers_all_agent_types() {
-        for agent in [
-            AgentType::PlanAuditor,
-            AgentType::KnowledgeAuditor,
-            AgentType::ChapterCraftAnalyzer,
-            AgentType::GeneralPurpose,
-        ] {
-            let text = fallback_prompt(agent);
+    fn fallback_prompt_covers_all_catalog_entries() {
+        for entry in FORK_AGENT_CATALOG {
+            let text = fallback_prompt(entry.agent_type);
+            assert_eq!(text, entry.fallback_prompt);
             assert!(!text.is_empty());
             assert!(text.contains("Agent"));
         }
-        assert!(fallback_prompt(AgentType::PlanAuditor).contains("细纲"));
-        assert!(fallback_prompt(AgentType::KnowledgeAuditor).contains("知识库"));
-        assert!(fallback_prompt(AgentType::ChapterCraftAnalyzer).contains("文笔"));
-        assert!(fallback_prompt(AgentType::GeneralPurpose).contains("自定义任务"));
     }
 }

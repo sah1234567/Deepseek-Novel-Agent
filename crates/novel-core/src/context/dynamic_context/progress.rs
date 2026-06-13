@@ -131,11 +131,6 @@ pub fn load_progress(project_root: &Path, session_id: &str, db: &Database) -> St
             Vec::new()
         }
     };
-    let in_progress: Vec<_> = todos
-        .iter()
-        .filter(|t| t.status == "in_progress")
-        .map(|t| t.content.as_str())
-        .collect();
     let mut lines = vec![
         format!("已完成章节文件: {completed}"),
         format!("下一章建议: Chapter {next}"),
@@ -146,8 +141,13 @@ pub fn load_progress(project_root: &Path, session_id: &str, db: &Database) -> St
     if !unit_context.is_empty() {
         lines.push(unit_context);
     }
-    if !in_progress.is_empty() {
-        lines.push(format!("进行中任务: {}", in_progress.join("; ")));
+    let visible_todos: Vec<_> = todos.iter().filter(|t| t.status != "cancelled").collect();
+    if !visible_todos.is_empty() {
+        let summary: Vec<String> = visible_todos
+            .iter()
+            .map(|t| format!("[{}] id={} {}", t.status, t.id, t.content))
+            .collect();
+        lines.push(format!("会话待办: {}", summary.join(" | ")));
     }
     let store = KnowledgeStore::new(project_root);
     if let Some(hint) = format_progress_hint(&store) {
@@ -249,5 +249,35 @@ content
             .expect("s");
         let p = load_progress(tmp.path(), &sid, &db);
         assert!(p.contains("已完成章节文件: 1"));
+    }
+
+    #[test]
+    fn load_progress_lists_session_todos_with_ids() {
+        let tmp = TempDir::new().expect("tmp");
+        let db = Database::open(tmp.path().join("t.db")).expect("db");
+        let sid = db
+            .create_session(tmp.path().to_str().unwrap(), "m")
+            .expect("s");
+        db.upsert_session_todos(
+            &sid,
+            &[
+                novel_state::SessionTodo {
+                    id: "t1".into(),
+                    content: "写细纲".into(),
+                    status: "in_progress".into(),
+                },
+                novel_state::SessionTodo {
+                    id: "t2".into(),
+                    content: "写正文".into(),
+                    status: "pending".into(),
+                },
+            ],
+            false,
+        )
+        .expect("todos");
+        let p = load_progress(tmp.path(), &sid, &db);
+        assert!(p.contains("会话待办:"));
+        assert!(p.contains("[in_progress] id=t1 写细纲"));
+        assert!(p.contains("[pending] id=t2 写正文"));
     }
 }

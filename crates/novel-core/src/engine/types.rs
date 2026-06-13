@@ -8,7 +8,7 @@ use novel_deepseek::ChatClient;
 use novel_logging::{AuditLogger, LogEvent};
 use novel_tools::{PermissionMode, ReadCacheEntry, SubagentWorkQueue, ToolCallSpec, ToolRegistry};
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU32;
 use std::sync::{Arc, Mutex};
@@ -53,6 +53,8 @@ pub struct EngineShared {
     pub abort_controller: Arc<AbortController>,
     pub permission_mode_override: Arc<Mutex<PermissionMode>>,
     pub read_file_cache: Arc<DashMap<PathBuf, ReadCacheEntry>>,
+    /// Paths touched since last SQLite flush (partial UPSERT batch).
+    pub read_cache_dirty_paths: Arc<Mutex<HashSet<PathBuf>>>,
     pub file_op_locks: Arc<DashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>,
     pub subagent_queue: SubagentWorkQueue,
     pub session_llm: SessionLlm,
@@ -80,9 +82,11 @@ impl EngineShared {
         }
     }
 
-    /// Drop all session read-cache entries (e.g. after context compaction).
+    /// Clear in-memory read cache and persisted `session_read_cache` rows (tests / explicit reset).
     pub fn clear_read_file_cache(&self) {
-        self.read_file_cache.clear();
+        if let Err(e) = crate::read_cache::sync::clear_read_file_cache_persisted(self) {
+            tracing::warn!(error = %e, "clear_read_file_cache failed");
+        }
     }
 
     /// Increment the running sub-agent count (called before spawn).

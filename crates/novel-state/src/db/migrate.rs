@@ -105,6 +105,87 @@ impl Database {
         Self::ensure_api_call_count_column(&conn)?;
         Self::drop_unused_legacy_schema(&conn)?;
         Self::ensure_message_archive_table(&conn)?;
+        Self::ensure_session_read_cache_table(&conn)?;
+        Self::ensure_read_cache_anchor_columns(&conn)?;
+        Self::ensure_todo_position_column(&conn)?;
+        Ok(())
+    }
+
+    fn ensure_todo_position_column(conn: &rusqlite::Connection) -> Result<(), StateError> {
+        let mut stmt = conn.prepare("PRAGMA table_info(session_todos)")?;
+        let mut rows = stmt.query([])?;
+        let mut has_position = false;
+        while let Some(row) = rows.next()? {
+            let name: String = row.get(1)?;
+            if name == "position" {
+                has_position = true;
+                break;
+            }
+        }
+        if has_position {
+            return Ok(());
+        }
+        conn.execute("ALTER TABLE session_todos ADD COLUMN position INTEGER", [])?;
+        conn.execute_batch(
+            r#"
+            UPDATE session_todos
+            SET position = (
+                SELECT COUNT(*) - 1
+                FROM session_todos AS older
+                WHERE older.session_id = session_todos.session_id
+                  AND (
+                    older.updated_at < session_todos.updated_at
+                    OR (
+                      older.updated_at = session_todos.updated_at
+                      AND older.todo_id <= session_todos.todo_id
+                    )
+                  )
+            );
+            UPDATE schema_version SET version = 4 WHERE version < 4;
+            "#,
+        )?;
+        Ok(())
+    }
+
+    fn ensure_session_read_cache_table(conn: &rusqlite::Connection) -> Result<(), StateError> {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS session_read_cache (
+                session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                path TEXT NOT NULL,
+                entry_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (session_id, path)
+            );
+            CREATE INDEX IF NOT EXISTS idx_session_read_cache_session
+                ON session_read_cache(session_id);
+            UPDATE schema_version SET version = 3 WHERE version < 3;
+            "#,
+        )?;
+        Ok(())
+    }
+
+    fn ensure_read_cache_anchor_columns(conn: &rusqlite::Connection) -> Result<(), StateError> {
+        let columns = [
+            "read_cache_compaction_count",
+            "read_cache_anchor_turn",
+            "read_cache_anchor_sequence",
+        ];
+        let mut stmt = conn.prepare("PRAGMA table_info(sessions)")?;
+        let mut rows = stmt.query([])?;
+        let mut existing = std::collections::HashSet::new();
+        while let Some(row) = rows.next()? {
+            let name: String = row.get(1)?;
+            existing.insert(name);
+        }
+        for col in columns {
+            if !existing.contains(col) {
+                conn.execute(
+                    &format!("ALTER TABLE sessions ADD COLUMN {col} INTEGER"),
+                    [],
+                )?;
+            }
+        }
         Ok(())
     }
 

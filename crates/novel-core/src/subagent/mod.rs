@@ -1,6 +1,6 @@
 //! Unified async subagent queue, drain, and per-job ReAct runner.
 
-mod fork;
+mod fork_setup;
 pub(crate) mod fork_transcript;
 mod helpers;
 mod llm_turn;
@@ -8,11 +8,11 @@ mod overflow;
 mod react;
 mod runner;
 
-pub use fork::{ForkError, ForkedAgentContext};
+pub use fork_setup::{build_fork_child, ForkError, ForkedAgentContext};
 pub use runner::run_subagent_job;
 
 use crate::engine::session_llm::read_session_llm;
-use crate::{AgentEngine, AgentError, AgentType, ChatMessage, Event};
+use crate::{AgentEngine, AgentError, AgentType, Event};
 use novel_knowledge::{mark_audited, parse_chapter_numbers, AuditKind, KnowledgeStore};
 use novel_tools::{PendingSubagentWork, PermissionMode};
 use std::sync::atomic::Ordering;
@@ -53,37 +53,6 @@ impl SubagentJob {
     pub fn inject_report(&self) -> bool {
         matches!(self.kind, SubagentJobKind::ToolFork { .. })
     }
-}
-
-pub fn build_fork_child(
-    shared: &crate::EngineShared,
-    agent_type: AgentType,
-    task: String,
-) -> Result<ForkedAgentContext, AgentError> {
-    let system_msg = ChatMessage {
-        role: "system".into(),
-        content: shared.system_prompt.clone(),
-        tool_call_id: None,
-        tool_calls: None,
-        reasoning_content: None,
-        ..Default::default()
-    };
-    ForkedAgentContext::fork(
-        &system_msg,
-        shared.session.id.clone(),
-        agent_type,
-        task,
-        agent_type.max_react_loops_for(&shared.settings.agent),
-        std::collections::HashMap::new(),
-        false,
-    )
-    .map_err(|e| {
-        if e == ForkError::InvalidMaxReactLoops(0) {
-            AgentError::NestedForkProhibited
-        } else {
-            AgentError::Fork(e)
-        }
-    })
 }
 
 pub fn clear_subagent_queue(shared: &crate::EngineShared) {

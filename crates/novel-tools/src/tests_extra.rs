@@ -127,9 +127,9 @@ mod novel_tools_tests {
 
 #[cfg(test)]
 mod permission_tests {
-    use crate::{default_registry, PermissionMode, ToolContext, ToolExecutor};
+    use crate::{default_registry, PendingSubagentWork, PermissionMode, ToolContext, ToolExecutor};
     use serde_json::json;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use tempfile::TempDir;
 
     #[test]
@@ -227,6 +227,7 @@ mod permission_tests {
         let ctx = ToolContext {
             permission_mode: PermissionMode::Normal,
             project_root: tmp.path().to_path_buf(),
+            subagent_queue: Some(Arc::new(Mutex::new(Vec::<PendingSubagentWork>::new()))),
             ..ToolContext::new(tmp.path().to_path_buf())
         };
         let spec = crate::ToolCallSpec {
@@ -267,6 +268,7 @@ mod permission_tests {
         let ctx = ToolContext {
             permission_mode: PermissionMode::Auto,
             project_root: tmp.path().to_path_buf(),
+            subagent_queue: Some(Arc::new(Mutex::new(Vec::<PendingSubagentWork>::new()))),
             ..ToolContext::new(tmp.path().to_path_buf())
         };
         ex.execute_one(

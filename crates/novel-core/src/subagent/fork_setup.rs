@@ -1,5 +1,7 @@
-use crate::context::format_fork_task;
-use crate::{AgentDefinition, AgentType, ChatMessage};
+//! Fork initialization: build `ForkedAgentContext` and `[system, task]` message pair.
+
+use crate::agent::format_fork_task;
+use crate::{AgentDefinition, AgentError, AgentType, ChatMessage};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -102,6 +104,38 @@ impl ForkedAgentContext {
         }
         Ok(())
     }
+}
+
+/// Build a fork child context from engine state (shared system prompt + formatted task).
+pub fn build_fork_child(
+    shared: &crate::EngineShared,
+    agent_type: AgentType,
+    task: String,
+) -> Result<ForkedAgentContext, AgentError> {
+    let system_msg = ChatMessage {
+        role: "system".into(),
+        content: shared.system_prompt.clone(),
+        tool_call_id: None,
+        tool_calls: None,
+        reasoning_content: None,
+        ..Default::default()
+    };
+    ForkedAgentContext::fork(
+        &system_msg,
+        shared.session.id.clone(),
+        agent_type,
+        task,
+        agent_type.max_react_loops_for(&shared.settings.agent),
+        HashMap::new(),
+        false,
+    )
+    .map_err(|e| {
+        if e == ForkError::InvalidMaxReactLoops(0) {
+            AgentError::NestedForkProhibited
+        } else {
+            AgentError::Fork(e)
+        }
+    })
 }
 
 #[cfg(test)]

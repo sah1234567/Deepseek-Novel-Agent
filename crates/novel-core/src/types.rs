@@ -115,6 +115,10 @@ pub enum Event {
         completion_tokens: i64,
         context_tokens: i64,
     },
+    /// Session todo list updated after TodoWrite (StatusBar live refresh; avoids blocked get_app_status).
+    SessionTodosUpdated {
+        todos: Vec<novel_state::SessionTodo>,
+    },
     /// Sub-agent lifecycle + scoped stream/tool events. `fork_run_id` keys overlay state; never merged into parent LLM messages.
     SubAgentStarted {
         fork_run_id: String,

@@ -49,7 +49,7 @@ CharacterSearch, PlotGraph, PlotGrid, ForeshadowTracker, Stats, Corkboard, Chara
 
 **PermissionResult：** Allow / Deny / Ask
 
-**ToolContext** 为每个工具调用提供：权限配置（mode/deny_rules/always_allow）、项目路径、会话 DB（TodoWrite 读写）、权限模式覆盖（前端下拉切换）、**内存** Read 文件缓存（同 path 去重、Edit 行域门禁、Edit 后 patch 并标记 `EditPatched` 禁用 dedup；**不持久化**到 SQLite；resume 空表）、同路径 `file_op_locks`（Read/Tail/Edit/Write 串行）、Skills 目录、fork 控制（`allow_fork` / `subagent_queue`）。Compaction 后 `clear_read_file_cache()`，避免 dedup 指向已摘要的历史 tool_result。
+**ToolContext** 为每个工具调用提供：权限配置（mode/deny_rules/always_allow）、项目路径、会话 DB（TodoWrite 读写）、权限模式覆盖（前端下拉切换）、**Read 文件缓存**（主会话；subagent `read_file_cache: None`）、同路径 `file_op_locks`（Read/Tail/Edit/Write 串行）、Skills 目录、fork 控制（`allow_fork` / `subagent_queue`）。`on_read_cache_path_touched` 仅主会话接线脏 path；API 批末 flush。**Subagent 写入门控：** `subagent_mutator_gate`（fork 内层 `subagent_queue: None` 时拒绝 Write/Edit/TodoWrite）。
 
 **写路径约束：** 仅 `validate_write_root`（作品 sandbox 内 + 非受保护路径）。无 `allow_chapter_write` / 章节专禁。
 
@@ -119,7 +119,7 @@ SSE 流开始前创建，Allow 权限的工具在 arguments JSON 完整时即可
 
 `PlanAuditor`, `KnowledgeAuditor`, `ChapterCraftAnalyzer`, **`GeneralPurpose`**
 
-**GeneralPurpose 权限：** 精选工具白名单（Read/Write/Edit/Glob/Grep/CharacterSearch/PlotGraph/Tail/Stats/InvokeSkill/ImpactAnalysis/TodoWrite/WebSearch）；无 ForkSubAgent（禁止嵌套 fork），无 Bash。含 Write/Edit 可在 sandbox 内写 chapters；WebSearch 原始缓存 `{project}/.websearch/`。
+**GeneralPurpose：** 只读自定义调研（`task` = 完整 prompt）；LLM tools schema 与主 Agent 相同；Write/Edit 由 `subagent_mutator_gate` 拒绝。WebSearch 原始缓存 `{project}/.websearch/`。
 
 **与 PostToolUse 的关系：** 用户可在 `settings.json` 启用 PostToolUse matcher，工具执行后自动入队 **KnowledgeAuditor hook**（轻量遗漏扫描，`source=hook`，不 inject 主会话）。写章收尾仍须手动 Fork 完整 KnowledgeAuditor + ChapterCraftAnalyzer。
 

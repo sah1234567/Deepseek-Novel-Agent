@@ -9,7 +9,10 @@ mod fork_runs;
 mod messages;
 mod metadata;
 mod migrate;
+mod read_cache;
 mod sessions;
+
+pub use read_cache::ReadCacheAnchor;
 
 #[cfg(test)]
 mod tests;

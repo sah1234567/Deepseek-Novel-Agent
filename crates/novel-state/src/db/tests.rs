@@ -55,6 +55,50 @@ fn upsert_session_todos_replace_and_merge() {
     assert!(db.list_session_todos(&sid).unwrap().is_empty());
 }
 
+#[test]
+fn session_todos_keep_creation_order_when_status_changes() {
+    let db = test_db();
+    let sid = db.create_session("/tmp/proj", "deepseek-chat").unwrap();
+    db.upsert_session_todos(
+        &sid,
+        &[
+            crate::SessionTodo {
+                id: "1".into(),
+                content: "first".into(),
+                status: "pending".into(),
+            },
+            crate::SessionTodo {
+                id: "2".into(),
+                content: "second".into(),
+                status: "pending".into(),
+            },
+            crate::SessionTodo {
+                id: "3".into(),
+                content: "third".into(),
+                status: "pending".into(),
+            },
+        ],
+        false,
+    )
+    .unwrap();
+    db.upsert_session_todos(
+        &sid,
+        &[crate::SessionTodo {
+            id: "2".into(),
+            content: "second".into(),
+            status: "in_progress".into(),
+        }],
+        true,
+    )
+    .unwrap();
+    let listed = db.list_session_todos(&sid).unwrap();
+    assert_eq!(
+        listed.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+        vec!["1", "2", "3"]
+    );
+    assert_eq!(listed[1].status, "in_progress");
+}
+
 #[rstest]
 #[test]
 fn migration_creates_tables() {

@@ -192,11 +192,12 @@ pub async fn read_project_file(
 pub async fn update_session_todo(
     state: State<'_, AppState>,
     app: AppHandle,
+    session_id: String,
     todo_id: String,
     status: String,
 ) -> Result<(), String> {
     let ctx = state.command_context(app);
-    novel_server::tauri::update_session_todo(&ctx, todo_id, status).await
+    novel_server::tauri::update_session_todo(&ctx, session_id, todo_id, status).await
 }
 
 #[tauri::command]

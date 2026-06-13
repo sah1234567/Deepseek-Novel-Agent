@@ -16,6 +16,7 @@
 
 **ReAct 切分 `partition_messages`：**
 - 跳过 `(0,1)` `[上下文刷新]` user（非 turn 边界）
+- `messages_replay_cutoff` — read cache rebuild / resume 重放起点：最后一条 `[上下文刷新]` 之后；无刷新时 system 之后（与 `body_start` 一致）
 - `summarize_to` — 摘要 API 前缀 `messages[0..summarize_to]`（KV cache 复用）
 - `retain_from` — 保留最近 N 轮完整 user turn 链（默认 5），**原样**保留 tool_calls / reasoning
 

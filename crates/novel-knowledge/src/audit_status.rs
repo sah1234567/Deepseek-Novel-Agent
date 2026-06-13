@@ -8,7 +8,7 @@ pub const AUDIT_STATUS_PATH: &str = "knowledge/meta/audit-status.md";
 const STATUS_TABLE_HEADING: &str = "## 状态表";
 const DEFAULT_TEMPLATE: &str = include_str!("../../../templates/knowledge/meta/audit-status.md");
 
-/// Which audit column to update when a subagent completes.
+/// Which audit column to update when a subagent completes (subset of fork agents; no GeneralPurpose).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuditKind {
     PlanAuditor,
@@ -16,14 +16,18 @@ pub enum AuditKind {
     ChapterCraftAnalyzer,
 }
 
+const AUDIT_KIND_BY_AGENT_NAME: &[(&str, AuditKind)] = &[
+    ("PlanAuditor", AuditKind::PlanAuditor),
+    ("KnowledgeAuditor", AuditKind::KnowledgeAuditor),
+    ("ChapterCraftAnalyzer", AuditKind::ChapterCraftAnalyzer),
+];
+
 impl AuditKind {
     pub fn from_agent_name(name: &str) -> Option<Self> {
-        match name {
-            "PlanAuditor" => Some(Self::PlanAuditor),
-            "KnowledgeAuditor" => Some(Self::KnowledgeAuditor),
-            "ChapterCraftAnalyzer" => Some(Self::ChapterCraftAnalyzer),
-            _ => None,
-        }
+        AUDIT_KIND_BY_AGENT_NAME
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, k)| *k)
     }
 
     pub fn label(self) -> &'static str {

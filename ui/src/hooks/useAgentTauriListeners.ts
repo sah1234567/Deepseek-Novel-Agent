@@ -142,13 +142,15 @@ export function useAgentTauriListeners(deps: AgentListenerDeps) {
             return;
           }
           if (p.wasInterrupted === true) {
-            // Keep optimistic BEGIN_TURN from submitInterrupt when a queued follow-up exists.
             if (messageQueueRef.current.length === 0) {
               dispatchMain({ type: "INTERRUPT" });
             }
             setIsStreaming(false);
             setHasInterruptibleToolInProgress(false);
-            drainMessageQueue();
+            void (async () => {
+              await reloadActiveTailRef.current?.();
+              drainMessageQueue();
+            })();
             return;
           }
           if (p.phase === "start") return;

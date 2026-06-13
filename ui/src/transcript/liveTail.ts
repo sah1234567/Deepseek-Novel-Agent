@@ -6,6 +6,11 @@ export function isLiveOrphanTurn(turn: Turn): boolean {
   return turn.archiveEpoch === undefined && turn.turnNumber === undefined;
 }
 
+/** Remove optimistic live turns before a new BEGIN_TURN (after reload hydrated DB). */
+export function dropLiveOrphanTurns(turns: Turn[]): Turn[] {
+  return turns.filter((t) => !isLiveOrphanTurn(t));
+}
+
 /** Latest in-flight turn (optimistic `BEGIN_TURN`); never the first orphan in the list. */
 export function findLiveTailTurn(machine: TranscriptMachine): Turn | undefined {
   const active = machine.context.turns.filter((t) => t.archiveEpoch === undefined);

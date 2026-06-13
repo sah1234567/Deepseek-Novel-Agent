@@ -1,6 +1,8 @@
 use crate::message::parse_tool_call_input;
+use crate::session_todos::maybe_emit_session_todos_after_tool;
 use crate::{AgentEngine, Event};
 use novel_deepseek::LlmToolCall;
+use novel_state::Database;
 use novel_tools::{
     format_tool_result_for_llm, FormattedToolResult, PermissionResult, StreamingToolExecutor,
     ToolCallSpec, ToolContext, ToolError, ToolOutput, ToolRegistry, ToolResultSpec,
@@ -224,6 +226,7 @@ impl StreamingToolDispatch {
         &mut self,
         registry: &ToolRegistry,
         event_tx: Option<&mpsc::UnboundedSender<Event>>,
+        todo_refresh: Option<(&str, &Database)>,
     ) {
         // Must not drain `completed` —results are collected once in get_remaining_results
         // for persistence and the next LLM call. Draining here caused UI success + missing
@@ -244,9 +247,14 @@ impl StreamingToolDispatch {
             let content = format_tool(registry, spec, result).content;
             if let Some(tx) = event_tx {
                 let _ = tx.send(Event::ToolCallResult {
-                    tool_call_id: id,
+                    tool_call_id: id.clone(),
                     content,
                 });
+            }
+            if let Some((session_id, db)) = todo_refresh {
+                if let Some(s) = spec {
+                    maybe_emit_session_todos_after_tool(&s.name, session_id, db, event_tx);
+                }
             }
         }
     }
@@ -317,11 +325,61 @@ mod tests {
         }
 
         let (ev_tx, mut ev_rx) = mpsc::unbounded_channel();
-        dispatch.poll_ui_results(&reg, Some(&ev_tx));
-        dispatch.poll_ui_results(&reg, Some(&ev_tx));
+        dispatch.poll_ui_results(&reg, Some(&ev_tx), None);
+        dispatch.poll_ui_results(&reg, Some(&ev_tx), None);
         let first = ev_rx.try_recv().expect("ToolCallResult event");
         assert!(matches!(first, Event::ToolCallResult { .. }));
         assert!(ev_rx.try_recv().is_err());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn poll_ui_results_emits_session_todos_after_todo_write() {
+        let tmp = TempDir::new().unwrap();
+        let db = novel_state::Database::open(tmp.path().join("todo_poll.db")).unwrap();
+        let sid = db.create_session("/tmp/proj", "deepseek-chat").unwrap();
+        let reg = Arc::new(default_registry());
+        let queue = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let ctx = ToolContext {
+            permission_mode: PermissionMode::Auto,
+            project_root: tmp.path().to_path_buf(),
+            session_id: sid.clone(),
+            db: Some(Arc::new(db.clone())),
+            subagent_queue: Some(queue),
+            ..ToolContext::new(tmp.path().to_path_buf())
+        };
+        let (abort_tx, abort_rx) = novel_tools::abort_channel();
+        let _ = abort_tx;
+        let mut dispatch = StreamingToolDispatch::new(reg.clone(), ctx.clone(), 4, abort_rx);
+        let tc = LlmToolCall {
+            id: "tw1".into(),
+            name: "TodoWrite".into(),
+            arguments: r#"{"todos":[{"id":"a","content":"write ch1","status":"in_progress"}]}"#
+                .into(),
+        };
+        dispatch.handle_ready(&reg, &ctx, None, tc, true);
+
+        for _ in 0..100 {
+            let done = dispatch
+                .executor_mut()
+                .is_some_and(|e| !e.peek_completed_results().is_empty());
+            if done {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+
+        let (ev_tx, mut ev_rx) = mpsc::unbounded_channel();
+        dispatch.poll_ui_results(&reg, Some(&ev_tx), Some((&sid, &db)));
+        let result = ev_rx.try_recv().expect("ToolCallResult");
+        assert!(matches!(result, Event::ToolCallResult { .. }));
+        let todos_evt = ev_rx.try_recv().expect("SessionTodosUpdated");
+        match todos_evt {
+            Event::SessionTodosUpdated { todos } => {
+                assert_eq!(todos.len(), 1);
+                assert_eq!(todos[0].content, "write ch1");
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
     }
 
     #[test]

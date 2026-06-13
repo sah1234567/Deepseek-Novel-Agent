@@ -11,7 +11,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 pub struct ReadTool;
 
 const MAX_OUTPUT_BYTES: usize = 256 * 1024; // 256 KB
-const FAST_PATH_MAX_SIZE: u64 = 10 * 1024 * 1024; // 10 MB
+use crate::read_cache::FAST_PATH_MAX_SIZE;
 
 fn format_file_size(bytes: usize) -> String {
     if bytes < 1024 {
@@ -240,7 +240,7 @@ impl Tool for ReadTool {
             let metadata = fs::metadata(&full).await.map_err(ToolError::Io)?;
             let fast = metadata.len() < FAST_PATH_MAX_SIZE;
 
-            let (content, _line_count, total_lines, disk_full): (
+            let (content, _line_count, _total_lines, _disk_full): (
                 String,
                 usize,
                 usize,
@@ -258,13 +258,13 @@ impl Tool for ReadTool {
                 (c, lc, tl, disk)
             };
 
-            crate::read_economy::read_pre_check(&path, limit, total_lines)?;
+            crate::read_economy::read_pre_check(&path, limit, _total_lines)?;
 
-            if content.is_empty() && line_offset >= total_lines && total_lines > 0 {
+            if content.is_empty() && line_offset >= _total_lines && _total_lines > 0 {
                 return Ok(ToolOutput {
                     content: format!(
                         "<system-reminder>Warning: the file has only {} lines, but offset is {}. No content to read.</system-reminder>",
-                        total_lines, offset
+                        _total_lines, offset
                     ),
                     is_error: false,
                 });
@@ -284,31 +284,13 @@ impl Tool for ReadTool {
                 add_line_numbers(&content, offset.max(1))
             };
 
-            let mtime = file_mtime_secs(&metadata);
-            let (cache_off, cache_lim) = read_range_key(
-                if limit.is_some() || offset > 1 {
-                    Some(offset)
-                } else {
-                    None
-                },
-                limit,
-            );
-            ctx.store_read_cache(
+            crate::read_cache_ingest::ingest_read_or_tail_into_cache(
+                ctx,
+                &crate::default_registry(),
+                "Read",
                 &full,
-                ReadCacheEntry {
-                    mtime_secs: mtime,
-                    raw_content: content,
-                    offset: cache_off,
-                    limit: cache_lim,
-                    total_lines,
-                    source: ReadCacheSource::Read,
-                    transcript_committed: false,
-                    committed_spans: Vec::new(),
-                    committed_offset: None,
-                    committed_limit: None,
-                },
-                disk_full.as_deref(),
-                None,
+                &input,
+                ReadCacheSource::Read,
             )?;
 
             Ok(ToolOutput {

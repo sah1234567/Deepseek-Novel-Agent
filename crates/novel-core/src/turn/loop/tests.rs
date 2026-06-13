@@ -627,7 +627,7 @@ fn should_continue_inner_after_reasoning_only_completion() {
 }
 
 #[tokio::test]
-async fn compact_and_sync_clears_read_file_cache() {
+async fn compact_and_sync_rebuild_drops_paths_not_in_replay_slice() {
     use novel_tools::{ReadCacheEntry, ReadCacheSource};
     use std::path::PathBuf;
 
@@ -670,6 +670,7 @@ async fn compact_and_sync_clears_read_file_cache() {
     assert_eq!(engine.shared.read_file_cache.len(), 1);
 
     engine.compact_and_sync(None).await.unwrap();
+    // Retained slice has no Read tools — rebuild leaves no stale cache for ch01.md.
     assert!(engine.shared.read_file_cache.is_empty());
 }
 

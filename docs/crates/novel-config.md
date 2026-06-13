@@ -39,7 +39,9 @@ API Key **不在** per-work `settings.json` 中持久化。全局读写：`load_
 
 **permissions：** mode, deny_rules, always_allow
 
-**agent：** knowledge_auditor_max_react_loops, max_tool_concurrency
+**agent：** knowledge_auditor_max_react_loops（默认见 `fork_agents::KNOWLEDGE_AUDITOR_MAX_REACT_LOOPS_DEFAULT`）、max_tool_concurrency
+
+**fork_agents（`fork_agents.rs`）：** `FORKABLE_AGENT_TYPE_NAMES` 与默认 ReAct 上限常量；`ForkSubAgent` JSON schema 与 `novel-core::FORK_AGENT_CATALOG` 共用名称层。
 
 ### 1.4 Hook 配置结构
 

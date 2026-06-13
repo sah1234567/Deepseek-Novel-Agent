@@ -6,6 +6,7 @@ export const IPC_EVENTS = {
   askUserQuestion: "ask-user-question",
   assistantSegmentComplete: "assistant-segment-complete",
   sessionTokensUpdated: "session-tokens-updated",
+  sessionTodosUpdated: "session-todos-updated",
   sessionResumed: "session-resumed",
   permissionModeChanged: "permission-mode-changed",
   compactionProgress: "compaction-progress",

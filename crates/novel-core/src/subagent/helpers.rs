@@ -32,13 +32,16 @@ pub(crate) fn subagent_fork_tool_context(shared: &crate::EngineShared) -> ToolCo
         session_id: shared.session.id.clone(),
         db: Some(Arc::new(shared.session.db.clone())),
         permission_mode_override: Some(Arc::clone(&shared.permission_mode_override)),
-        read_file_cache: Some(Arc::clone(&shared.read_file_cache)),
+        // Subagents do not share the main read_file_cache: promote/dirty_paths are main-only
+        // (aligns with Claude Code subagent readFileState isolation).
+        read_file_cache: None,
         file_op_locks: Some(Arc::clone(&shared.file_op_locks)),
         allow_fork: false,
         subagent_queue: None,
         current_tool_call_id: None,
         skills_dir: Some(shared.agent_skills_dir.clone()),
         global_api_config_path: Some(shared.global_config_path.clone()),
+        on_read_cache_path_touched: None,
     }
 }
 
@@ -248,6 +251,25 @@ mod tests {
     use std::sync::Arc;
     use tempfile::TempDir;
     use tokio::sync::mpsc;
+
+    #[test]
+    fn subagent_fork_tool_context_has_no_read_cache() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("skills")).unwrap();
+        let cfg = crate::EngineConfig {
+            project_root: tmp.path().to_path_buf(),
+            settings_path: tmp.path().join("settings.json"),
+            db_path: tmp.path().join("state.db"),
+            skills_dir: tmp.path().join("skills"),
+            global_config_path: tmp.path().join(".novel-agent/api_config.json"),
+        };
+        let engine = crate::AgentEngine::new(cfg).unwrap();
+        let ctx = super::subagent_fork_tool_context(&engine.shared);
+        assert!(ctx.read_file_cache.is_none());
+        assert!(ctx.on_read_cache_path_touched.is_none());
+        assert!(ctx.file_op_locks.is_some());
+        assert!(!ctx.allow_fork);
+    }
 
     #[test]
     fn forward_subagent_stream_event_gated_until_subscribed() {

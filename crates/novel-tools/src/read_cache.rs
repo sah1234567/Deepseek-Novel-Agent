@@ -4,11 +4,15 @@
 
 use crate::paths::{normalize_rel_path, optional_file_path};
 use crate::ToolError;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub const FILE_UNCHANGED_STUB: &str = "<system-reminder>File has not been changed since last read. Refer to the earlier Read/Tail tool_result in this conversation rather than re-reading.</system-reminder>";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Files at or below this size use full read + merge path (live Read and rebuild ingest).
+pub(crate) const FAST_PATH_MAX_SIZE: u64 = 10 * 1024 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ReadCacheSource {
     /// Written by Read; eligible for Read dedup.
     Read,
@@ -26,7 +30,7 @@ impl ReadCacheSource {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReadCacheEntry {
     pub mtime_secs: u64,
     /// Raw file slice (no line-number prefix).
@@ -564,6 +568,29 @@ pub fn read_range_key(
         (None, None)
     } else {
         (offset, limit)
+    }
+}
+
+pub fn read_cache_entry_to_json(entry: &ReadCacheEntry) -> Result<String, ToolError> {
+    serde_json::to_string(entry).map_err(|e| ToolError::Execution(format!("cache serde: {e}")))
+}
+
+pub fn read_cache_entry_from_json(s: &str) -> Result<ReadCacheEntry, ToolError> {
+    serde_json::from_str(s).map_err(|e| ToolError::Execution(format!("cache serde: {e}")))
+}
+
+/// Load persisted rows into an existing session cache (replaces all entries).
+pub fn hydrate_read_file_cache_into(
+    target: &dashmap::DashMap<std::path::PathBuf, ReadCacheEntry>,
+    project_root: &std::path::Path,
+    rows: &[(String, ReadCacheEntry)],
+) {
+    use crate::paths::resolve_under_project;
+    target.clear();
+    for (path, entry) in rows {
+        let rel = normalize_rel_path(path);
+        let full = resolve_under_project(project_root, &rel);
+        target.insert(full, entry.clone());
     }
 }
 
@@ -1212,6 +1239,15 @@ mod tests {
     }
 
     // -- verify_edit_against_read_cache edge tests --
+
+    #[test]
+    fn read_cache_entry_json_roundtrip() {
+        let disk = lines_disk(20);
+        let entry = partial_entry(&disk, 5, 6, ReadCacheSource::Read);
+        let json = read_cache_entry_to_json(&entry).unwrap();
+        let back = read_cache_entry_from_json(&json).unwrap();
+        assert_eq!(entry, back);
+    }
 
     #[test]
     fn verify_edit_none_entry_returns_ok() {

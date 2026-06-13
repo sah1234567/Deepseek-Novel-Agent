@@ -85,6 +85,27 @@ pub fn partition_messages(messages: &[CompactionMessage], keep_turns: usize) -> 
     }
 }
 
+/// Index of the first message to replay for read-cache rebuild.
+///
+/// - If any `[上下文刷新]` user exists: index after the **last** one.
+/// - Else: after system (index 1), or 0 when there is no system message.
+pub fn messages_replay_cutoff(messages: &[CompactionMessage]) -> usize {
+    if messages.is_empty() {
+        return 0;
+    }
+    let mut cutoff = if messages.first().is_some_and(|m| m.role == "system") {
+        1
+    } else {
+        0
+    };
+    for (i, msg) in messages.iter().enumerate() {
+        if msg.role == "user" && msg.content.starts_with(CONTEXT_REFRESH_USER_PREFIX) {
+            cutoff = i + 1;
+        }
+    }
+    cutoff
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,6 +187,49 @@ mod tests {
         let p = partition_messages(&messages, 1);
         assert_eq!(p.summarize_from, 2);
         assert_eq!(p.retain_from, 4);
+    }
+
+    #[test]
+    fn messages_replay_cutoff_after_last_context_refresh() {
+        let messages = vec![
+            CompactionMessage {
+                role: "system".into(),
+                content: "sys".into(),
+                ..Default::default()
+            },
+            CompactionMessage {
+                role: "user".into(),
+                content: format!("{CONTEXT_REFRESH_USER_PREFIX}\nold"),
+                ..Default::default()
+            },
+            user("turn1"),
+            assistant_tools("Read"),
+            tool("file1"),
+            CompactionMessage {
+                role: "user".into(),
+                content: format!("{CONTEXT_REFRESH_USER_PREFIX}\nnew"),
+                ..Default::default()
+            },
+            user("turn2"),
+            assistant_tools("Edit"),
+            tool("ok"),
+        ];
+        assert_eq!(messages_replay_cutoff(&messages), 6);
+    }
+
+    #[test]
+    fn messages_replay_cutoff_without_refresh_starts_after_system() {
+        let messages = vec![
+            CompactionMessage {
+                role: "system".into(),
+                content: "sys".into(),
+                ..Default::default()
+            },
+            user("turn1"),
+            assistant_tools("Read"),
+            tool("file1"),
+        ];
+        assert_eq!(messages_replay_cutoff(&messages), 1);
     }
 
     #[test]

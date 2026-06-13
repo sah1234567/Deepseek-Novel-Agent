@@ -3,7 +3,7 @@
 #![allow(clippy::too_many_arguments)]
 
 use crate::engine::session_llm::{build_chat_client, SessionLlmSnapshot};
-use crate::hooks::tool_schemas_for_agent;
+use crate::hooks::main_tool_schemas;
 use crate::message::{assistant_from_completion, to_llm_messages_traced, RepairTraceContext};
 use crate::subagent::helpers::{
     execute_subagent_tool_batch, fork_child_push, subagent_push_tool_results,
@@ -61,9 +61,8 @@ pub async fn run_subagent_job(
         &child.fork.task_message,
     )?;
 
-    // Sub-agent inner loop
-    let allowed = child.fork.agent_def.tools.clone();
-    let schemas = tool_schemas_for_agent(&shared.registry, &allowed);
+    // Same tool schemas as main agent (DeepSeek tools-prefix KV cache).
+    let schemas = main_tool_schemas(&shared.registry);
     let max_react_loops = child.fork.max_react_loops;
 
     subagent_run_react_loop(

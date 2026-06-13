@@ -34,6 +34,12 @@ pub struct SessionTokensUpdatedPayload {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SessionTodosUpdatedPayload {
+    pub todos: Vec<novel_state::SessionTodo>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TurnCompletePayload {
     pub cache_hit_tokens: i64,
     pub cache_miss_tokens: i64,

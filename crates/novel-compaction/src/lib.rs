@@ -18,8 +18,8 @@ pub use error::CompactionError;
 pub use message_format::format_for_summary;
 pub use message_types::{CompactionMessage, CompactionToolCall};
 pub use react_cycles::{
-    is_user_turn_start, partition_messages, user_turn_ranges, PartitionResult,
-    CONTEXT_REFRESH_USER_PREFIX,
+    is_user_turn_start, messages_replay_cutoff, partition_messages, user_turn_ranges,
+    PartitionResult, CONTEXT_REFRESH_USER_PREFIX,
 };
 pub use retain_policy::RetainPolicy;
 pub use session_rebuild::{

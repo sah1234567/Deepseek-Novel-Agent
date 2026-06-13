@@ -91,6 +91,8 @@ pub struct ToolContext {
     pub skills_dir: Option<PathBuf>,
     /// `{agent_root}/.novel-agent/api_config.json` — WebSearch loads API key when env is unset.
     pub global_api_config_path: Option<PathBuf>,
+    /// Optional hook when a path's cache entry changes (novel-core wires dirty-path tracking).
+    pub on_read_cache_path_touched: Option<Arc<dyn Fn(PathBuf) + Send + Sync>>,
 }
 
 impl ToolContext {
@@ -115,6 +117,37 @@ impl ToolContext {
             current_tool_call_id: None,
             skills_dir: None,
             global_api_config_path: None,
+            on_read_cache_path_touched: None,
+        }
+    }
+
+    /// Minimal context for transcript-driven cache rebuild (compaction / resume fallback).
+    pub(crate) fn for_cache_rebuild(
+        project_root: PathBuf,
+        cache: Arc<dashmap::DashMap<PathBuf, ReadCacheEntry>>,
+    ) -> Self {
+        Self {
+            permission_mode: PermissionMode::Normal,
+            deny_rules: vec![],
+            always_allow: vec![],
+            project_root,
+            session_id: "rebuild".into(),
+            db: None,
+            permission_mode_override: None,
+            read_file_cache: Some(cache),
+            file_op_locks: None,
+            allow_fork: false,
+            subagent_queue: None,
+            current_tool_call_id: None,
+            skills_dir: None,
+            global_api_config_path: None,
+            on_read_cache_path_touched: None,
+        }
+    }
+
+    fn touch_read_cache_path(&self, path: &Path) {
+        if let Some(cb) = &self.on_read_cache_path_touched {
+            cb(path.to_path_buf());
         }
     }
 
@@ -228,6 +261,7 @@ impl ToolContext {
             let final_entry =
                 merge_read_cache_on_store(existing.as_ref(), entry, disk_full, premerged_raw);
             cache.insert(path.to_path_buf(), final_entry);
+            self.touch_read_cache_path(path);
         }
         Ok(())
     }
@@ -236,6 +270,7 @@ impl ToolContext {
     pub fn store_read_cache_direct(&self, path: &Path, entry: ReadCacheEntry) {
         if let Some(cache) = &self.read_file_cache {
             cache.insert(path.to_path_buf(), entry);
+            self.touch_read_cache_path(path);
         }
     }
 
@@ -264,6 +299,7 @@ impl ToolContext {
             {
                 entry.commit_span(span);
             }
+            self.touch_read_cache_path(path);
         }
     }
 

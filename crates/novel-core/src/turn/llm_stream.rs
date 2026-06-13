@@ -100,12 +100,16 @@ impl AgentEngine {
                     let input = parse_tool_call_input(&tc.arguments, &tc.id, &tc.name);
                     let needs_approval = self.pending_tools.contains_key(&tc.id)
                         || dispatch.pending_specs.contains_key(&tc.id);
-                    let _ = tx.send(Event::ToolCallRequest {
-                        tool_call_id: tc.id.clone(),
-                        name: tc.name.clone(),
-                        input,
-                        needs_approval,
-                    });
+                    // Already handled during stream: only re-notify UI for pending approval.
+                    // A bare ToolCallRequest maps to input_complete and would clobber done status.
+                    if needs_approval {
+                        let _ = tx.send(Event::ToolCallRequest {
+                            tool_call_id: tc.id.clone(),
+                            name: tc.name.clone(),
+                            input,
+                            needs_approval,
+                        });
+                    }
                 }
             }
             for (_, spec) in dispatch.pending_specs.drain() {
@@ -117,7 +121,11 @@ impl AgentEngine {
                     .is_some_and(|e| e.has_interruptible_tool_in_progress()),
                 event_tx,
             );
-            dispatch.poll_ui_results(&self.shared.registry, event_tx);
+            dispatch.poll_ui_results(
+                &self.shared.registry,
+                event_tx,
+                Some((&self.shared.session.id, &self.shared.session.db)),
+            );
             let executor = dispatch.take_executor().ok_or_else(|| {
                 AgentError::Validation("streaming tool executor already taken".into())
             })?;
@@ -245,11 +253,17 @@ impl AgentEngine {
         let dispatch_poll = Arc::clone(&dispatch_arc);
         let registry_poll = Arc::clone(&self.shared.registry);
         let event_tx_poll = event_tx.cloned();
+        let session_id_poll = self.shared.session.id.clone();
+        let db_poll = self.shared.session.db.clone();
         let poll_handle = tokio::spawn(async move {
             while !stream_done_poll.load(Ordering::SeqCst) {
                 tokio::time::sleep(Duration::from_millis(40)).await;
                 if let Ok(mut d) = dispatch_poll.lock() {
-                    d.poll_ui_results(&registry_poll, event_tx_poll.as_ref());
+                    d.poll_ui_results(
+                        &registry_poll,
+                        event_tx_poll.as_ref(),
+                        Some((&session_id_poll, &db_poll)),
+                    );
                 }
             }
         });

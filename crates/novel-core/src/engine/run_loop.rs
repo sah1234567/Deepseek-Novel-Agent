@@ -59,6 +59,9 @@ impl AgentEngine {
             current_tool_call_id: None,
             skills_dir: Some(self.shared.agent_skills_dir.clone()),
             global_api_config_path: Some(self.shared.global_config_path.clone()),
+            on_read_cache_path_touched: Some(crate::read_cache::sync::read_cache_touch_callback(
+                &self.shared.read_cache_dirty_paths,
+            )),
         }
     }
 

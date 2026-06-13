@@ -219,15 +219,35 @@ mod tests {
     use std::path::Path;
     use tempfile::TempDir;
 
+    fn repo_works_dir() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../works")
+    }
+
+    /// Tests must never read/write the real `works/` tree (gitignored local data; absent on CI).
+    fn assert_isolated_from_repo_works(root: &Path) {
+        let Ok(works) = repo_works_dir().canonicalize() else {
+            return;
+        };
+        let root_canon = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        assert!(
+            !root_canon.starts_with(&works),
+            "test project_root must not be under repo works/: {}",
+            root_canon.display()
+        );
+    }
+
     fn test_ctx(tmp: &TempDir) -> ToolContext {
+        let root = tmp.path().to_path_buf();
+        assert_isolated_from_repo_works(&root);
         ToolContext {
             permission_mode: PermissionMode::Normal,
-            project_root: tmp.path().to_path_buf(),
+            project_root: root,
             ..ToolContext::new(tmp.path().to_path_buf())
         }
     }
 
     fn write_file(dir: &Path, name: &str, content: &str) {
+        assert_isolated_from_repo_works(dir);
         let path = dir.join(name);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).unwrap();
@@ -373,5 +393,167 @@ mod tests {
             .unwrap();
         assert!(out.content.contains("limit: 30"));
         assert!(!out.content.contains("line 30"));
+    }
+
+    /// ChapterCraftAnalyzer 推荐的破折号正则（见 `prompt/agents/chapter-craft-analyzer.md`）。
+    const CRAFT_EM_DASH_PATTERN: &str = r"——|--|—|–| - ";
+
+    /// 内联夹具文本（U+2014×2 中文破折号）；不读取 `works/` 下真实章节。
+    const FIXTURE_EM_DASH_LINE: &str =
+        "「他手上有一份当年的事故报告。但那份报告不完整——它只有现场检测的部分，没有审批底稿。」\n";
+
+    async fn grep_in(
+        tmp: &TempDir,
+        pattern: &str,
+        search_root: Option<&str>,
+        glob: Option<&str>,
+    ) -> ToolOutput {
+        let mut input = json!({"pattern": pattern});
+        if let Some(root) = search_root {
+            input["search_root"] = json!(root);
+        }
+        if let Some(g) = glob {
+            input["glob"] = json!(g);
+        }
+        GrepTool.call(input, &test_ctx(tmp)).await.unwrap()
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn em_dash_craft_pattern_matches_chinese_double_em_dash() {
+        let tmp = TempDir::new().unwrap();
+        write_file(
+            tmp.path(),
+            "chapters/target-chapter.md",
+            FIXTURE_EM_DASH_LINE,
+        );
+        let out = grep_in(&tmp, CRAFT_EM_DASH_PATTERN, Some("chapters"), None).await;
+        assert!(
+            out.content.contains("不完整"),
+            "expected Chinese double em dash (U+2014 U+2014) to match craft pattern; got:\n{}",
+            out.content
+        );
+        assert!(out.content.contains("target-chapter.md:1:"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn em_dash_craft_pattern_matches_all_variants() {
+        let tmp = TempDir::new().unwrap();
+        write_file(
+            tmp.path(),
+            "variants.md",
+            "\
+中文双破折号——行\n\
+单 em dash—行\n\
+en dash–行\n\
+ASCII hyphen pair--行\n\
+spaced hyphen - 行\n",
+        );
+        let out = grep_in(&tmp, CRAFT_EM_DASH_PATTERN, None, None).await;
+        for label in [
+            "中文双破折号",
+            "单 em dash",
+            "en dash",
+            "ASCII hyphen pair",
+            "spaced hyphen",
+        ] {
+            assert!(
+                out.content.contains(label),
+                "craft pattern should match {label}; got:\n{}",
+                out.content
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn em_dash_ascii_only_pattern_misses_chinese_double_em_dash() {
+        let tmp = TempDir::new().unwrap();
+        write_file(
+            tmp.path(),
+            "chapters/target-chapter.md",
+            "不完整——它只有现场检测\n",
+        );
+        let out = grep_in(&tmp, "--", Some("chapters"), None).await;
+        assert!(
+            !out.content.contains("不完整"),
+            "ASCII `--` alone must not match U+2014 U+2014; got:\n{}",
+            out.content
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn em_dash_search_root_scopes_to_target_chapter() {
+        let tmp = TempDir::new().unwrap();
+        write_file(
+            tmp.path(),
+            "chapters/other-chapter.md",
+            "开篇——第一处破折号\n",
+        );
+        write_file(
+            tmp.path(),
+            "chapters/target-chapter.md",
+            "「那份报告不完整——它只有现场检测的部分。」\n",
+        );
+        write_file(
+            tmp.path(),
+            "knowledge/plot/outline.md",
+            "大纲里也有——破折号\n",
+        );
+
+        let scoped = grep_in(
+            &tmp,
+            CRAFT_EM_DASH_PATTERN,
+            Some("chapters"),
+            Some("target-chapter.md"),
+        )
+        .await;
+        assert!(
+            scoped.content.contains("不完整"),
+            "search_root scoped to chapter file should find em dash; got:\n{}",
+            scoped.content
+        );
+        assert!(!scoped.content.contains("开篇"));
+        assert!(!scoped.content.contains("大纲"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn em_dash_default_head_limit_can_hide_late_chapter() {
+        let tmp = TempDir::new().unwrap();
+        // 模拟全书搜索：前 80 条命中被早期文件占满，排序靠后的 late-target.md 进不了默认页
+        for i in 0..80 {
+            write_file(
+                tmp.path(),
+                &format!("chapters/filler-{i:03}.md"),
+                "段落——破折号\n",
+            );
+        }
+        write_file(
+            tmp.path(),
+            "chapters/late-target.md",
+            "「那份报告不完整——它只有现场检测的部分。」\n",
+        );
+
+        let project_wide = grep_in(&tmp, CRAFT_EM_DASH_PATTERN, None, None).await;
+        assert!(
+            project_wide.content.contains("pagination"),
+            "expected default 80-match truncation across project root"
+        );
+        assert!(
+            !project_wide.content.contains("不完整"),
+            "late chapter em dash should be absent from first page without search_root; got:\n{}",
+            project_wide.content
+        );
+
+        let scoped = grep_in(
+            &tmp,
+            CRAFT_EM_DASH_PATTERN,
+            Some("chapters"),
+            Some("late-target.md"),
+        )
+        .await;
+        assert!(
+            scoped.content.contains("不完整"),
+            "same pattern with search_root must still find the em dash; got:\n{}",
+            scoped.content
+        );
     }
 }

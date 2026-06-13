@@ -11,8 +11,11 @@ mod novel;
 mod paths;
 mod permission;
 mod read_cache;
+mod read_cache_ingest;
+mod read_cache_replay;
 mod read_economy;
 mod registry;
+mod subagent_gate;
 mod tool_error_hints;
 mod tool_result_format;
 mod tool_result_middleware;
@@ -35,10 +38,12 @@ pub use paths::{
     optional_search_root, resolve_under_project,
 };
 pub use read_cache::{
-    add_line_numbers, file_mtime_secs, read_range_key, ReadCacheEntry, ReadCacheSource,
-    FILE_UNCHANGED_STUB,
+    add_line_numbers, file_mtime_secs, hydrate_read_file_cache_into, read_cache_entry_from_json,
+    read_cache_entry_to_json, read_range_key, ReadCacheEntry, ReadCacheSource, FILE_UNCHANGED_STUB,
 };
+pub use read_cache_replay::{rebuild_read_cache_from_pairs, ReadCacheReplayPair};
 pub use registry::ToolRegistry;
+pub use subagent_gate::subagent_mutator_gate;
 pub use tool_result_format::{
     format_tool_result_for_llm, FormattedToolResult, ToolResultSpec, NEEDS_USER_INPUT_STUB,
 };

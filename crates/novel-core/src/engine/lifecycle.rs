@@ -4,9 +4,9 @@
 //! - **New** session builds a fresh system prompt, inserts the initial system message, and
 //!   freezes metadata (skill IDs, agent definitions) into SQLite.
 //! - **Resume** loads stored messages via `stored_to_chat`, repairs broken tool_use→tool_result
-//!   chains, and recovers the frozen system prompt + agent definitions from metadata.
+//!   chains, recovers frozen metadata, then hydrates or rebuilds read cache from SQLite / transcript.
 //!
-//! Both paths create a fresh `EngineShared` with an empty `read_file_cache`.
+//! Both paths create `EngineShared` with an empty in-memory cache; resume fills it in `try_restore_read_cache_on_resume`.
 
 use super::types::{open_audit_logger, AgentEngine, EngineConfig, EngineShared};
 use crate::context::dynamic_context::{
@@ -24,6 +24,7 @@ use novel_knowledge::KnowledgeStore;
 use novel_tools::{default_registry, PermissionMode, ToolRegistry};
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::atomic::AtomicU32;
 use std::sync::{Arc, Mutex};
 
@@ -135,8 +136,7 @@ impl AgentEngine {
     }
 
     /// Resume an existing session: loads stored messages from SQLite, recovers
-    /// the frozen system prompt + agent metadata, repairs tool_use chains, and
-    /// creates fresh `EngineShared` with an empty `read_file_cache`.
+    /// the frozen system prompt + agent metadata, repairs tool_use chains, restores read cache.
     pub fn resume_with_abort(
         config: EngineConfig,
         session_id: &str,
@@ -267,6 +267,18 @@ impl AgentEngine {
             fork_stream_subs,
         });
 
+        if !stored.is_empty() {
+            if let Err(e) = crate::read_cache::sync::try_restore_read_cache_on_resume(
+                &shared, &messages, &stored,
+            ) {
+                tracing::warn!(
+                    session_id = %session_id,
+                    error = %e,
+                    "read_cache restore on resume failed"
+                );
+            }
+        }
+
         Ok(Self {
             shared,
             messages,
@@ -341,6 +353,7 @@ fn build_engine_shared(bootstrap: EngineSharedBootstrap<'_>) -> EngineShared {
         abort_controller,
         permission_mode_override: Arc::new(Mutex::new(permission_mode)),
         read_file_cache: Arc::new(DashMap::new()),
+        read_cache_dirty_paths: Arc::new(Mutex::new(HashSet::new())),
         file_op_locks: Arc::new(DashMap::new()),
         subagent_queue: Arc::new(Mutex::new(Vec::new())),
         session_llm,

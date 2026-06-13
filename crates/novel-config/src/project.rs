@@ -70,7 +70,7 @@ pub struct AgentConfig {
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
-            knowledge_auditor_max_react_loops: 40,
+            knowledge_auditor_max_react_loops: crate::KNOWLEDGE_AUDITOR_MAX_REACT_LOOPS_DEFAULT,
             max_react_loops: 0,
             max_tool_concurrency: default_max_tool_concurrency(),
         }

@@ -1,5 +1,16 @@
+mod catalog;
+mod prompt;
+
 use novel_config::AgentConfig;
 use serde::{Deserialize, Serialize};
+
+pub use catalog::{fallback_prompt, system_prompt, ForkAgentCatalogEntry, FORK_AGENT_CATALOG};
+pub use novel_config::FORKABLE_AGENT_TYPE_NAMES;
+pub use prompt::{format_fork_task, load_agent_prompt};
+/// All forkable sub-agent catalog rows.
+pub fn fork_agent_catalog() -> &'static [ForkAgentCatalogEntry] {
+    FORK_AGENT_CATALOG
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AgentType {
@@ -10,14 +21,6 @@ pub enum AgentType {
     ChapterCraftAnalyzer,
     GeneralPurpose,
 }
-
-/// Agent types the main session may fork via `ForkSubAgent`.
-pub const FORKABLE_AGENT_TYPE_NAMES: &[&str] = &[
-    "PlanAuditor",
-    "KnowledgeAuditor",
-    "ChapterCraftAnalyzer",
-    "GeneralPurpose",
-];
 
 impl std::fmt::Display for AgentType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -37,90 +40,14 @@ pub struct AgentDefinition {
 
 impl AgentType {
     pub fn definition(self) -> AgentDefinition {
-        match self {
-            AgentType::PlanAuditor => AgentDefinition {
-                agent_type: self,
-                name: "plan-auditor".into(),
-                when_to_use: "细纲完成后的计划结构质量审计（大纲对齐、伏笔密度、因果闭合、人物轮换、字数分配）".into(),
-                system_prompt: include_str!("../../../prompt/agents/plan-auditor.md").into(),
-                max_react_loops: 30,
-                tools: vec![
-                    "Read".into(),
-                    "Grep".into(),
-                    "PlotGraph".into(),
-                    "ForeshadowTracker".into(),
-                    "CharacterSearch".into(),
-                    "TrackingQuery".into(),
-                    "RelationQuery".into(),
-                    "Corkboard".into(),
-                    "Tail".into(),
-                    "Stats".into(),
-                ],
-            },
-            AgentType::KnowledgeAuditor => AgentDefinition {
-                agent_type: self,
-                name: "knowledge-auditor".into(),
-                when_to_use: "知识库遗漏扫描 + 设定一致性深度审计（只读报告）".into(),
-                system_prompt: include_str!("../../../prompt/agents/knowledge-auditor.md").into(),
-                max_react_loops: 40,
-                tools: vec![
-                    "Read".into(),
-                    "Grep".into(),
-                    "CharacterSearch".into(),
-                    "PlotGraph".into(),
-                    "Tail".into(),
-                    "TrackingQuery".into(),
-                    "RelationQuery".into(),
-                    "ForeshadowTracker".into(),
-                ],
-            },
-            AgentType::ChapterCraftAnalyzer => AgentDefinition {
-                agent_type: self,
-                name: "chapter-craft-analyzer".into(),
-                when_to_use: "对话质量 + 叙事节奏 + 情感轨迹 + 设定一致性（只读报告）".into(),
-                system_prompt: include_str!("../../../prompt/agents/chapter-craft-analyzer.md")
-                    .into(),
-                max_react_loops: 25,
-                tools: vec![
-                    "Read".into(),
-                    "Grep".into(),
-                    "CharacterSearch".into(),
-                    "Stats".into(),
-                    "Tail".into(),
-                    "TrackingQuery".into(),
-                    "RelationQuery".into(),
-                ],
-            },
-            AgentType::GeneralPurpose => AgentDefinition {
-                agent_type: self,
-                name: "general-purpose".into(),
-                when_to_use: "一次性自定义任务：调研、批量整理、特殊分析".into(),
-                system_prompt: include_str!("../../../prompt/agents/general_purpose.md").into(),
-                max_react_loops: 20,
-                tools: vec![
-                    "Read".into(),
-                    "Write".into(),
-                    "Edit".into(),
-                    "Grep".into(),
-                    "Glob".into(),
-                    "CharacterSearch".into(),
-                    "PlotGraph".into(),
-                    "Tail".into(),
-                    "Stats".into(),
-                    "InvokeSkill".into(),
-                    "ImpactAnalysis".into(),
-                    "TodoWrite".into(),
-                    "WebSearch".into(),
-                ],
-            },
-        }
+        catalog::catalog_entry(self).to_definition()
     }
 
     pub fn max_react_loops(self) -> u32 {
         self.definition().max_react_loops
     }
 
-    /// Max ReAct loops from settings when configured; fallback to `definition().max_react_loops`.
+    /// Max ReAct loops from settings when configured; fallback to catalog default.
     pub fn max_react_loops_for(self, cfg: &AgentConfig) -> u32 {
         match self {
             AgentType::KnowledgeAuditor => cfg.knowledge_auditor_max_react_loops,
@@ -129,29 +56,24 @@ impl AgentType {
     }
 
     pub fn parse(name: &str) -> Option<Self> {
-        match name {
-            "PlanAuditor" | "plan-auditor" => Some(AgentType::PlanAuditor),
-            "KnowledgeAuditor" | "knowledge-auditor" => Some(AgentType::KnowledgeAuditor),
-            "ChapterCraftAnalyzer" | "chapter-craft-analyzer" => {
-                Some(AgentType::ChapterCraftAnalyzer)
-            }
-            "GeneralPurpose" | "general-purpose" => Some(AgentType::GeneralPurpose),
-            _ => None,
-        }
+        FORK_AGENT_CATALOG
+            .iter()
+            .find(|e| e.display_name == name || e.slug == name)
+            .map(|e| e.agent_type)
+    }
+
+    /// All forkable sub-agent types (catalog order).
+    pub fn forkable_types() -> impl Iterator<Item = AgentType> {
+        FORK_AGENT_CATALOG.iter().map(|e| e.agent_type)
     }
 
     /// Union of tool names on any forkable sub-agent allowlist.
     pub fn union_fork_tool_names() -> Vec<String> {
         use std::collections::HashSet;
         let mut names = HashSet::new();
-        for agent in [
-            AgentType::PlanAuditor,
-            AgentType::KnowledgeAuditor,
-            AgentType::ChapterCraftAnalyzer,
-            AgentType::GeneralPurpose,
-        ] {
-            for t in agent.definition().tools {
-                names.insert(t);
+        for entry in FORK_AGENT_CATALOG {
+            for t in entry.suggested_tools {
+                names.insert((*t).into());
             }
         }
         let mut v: Vec<_> = names.into_iter().collect();
@@ -203,7 +125,7 @@ mod tests {
     }
 
     #[test]
-    fn general_purpose_has_write_not_fork() {
+    fn general_purpose_definition_includes_write_but_subagent_gated() {
         let tools = AgentType::GeneralPurpose.definition().tools;
         assert!(!tools.contains(&"ForkSubAgent".into()));
         assert!(tools.contains(&"Write".into()));

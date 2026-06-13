@@ -78,6 +78,16 @@ pub fn tool_schemas_for_agent(
         .collect()
 }
 
+/// Full main-session tool list (sorted) — shared with fork subagents for DeepSeek tools-prefix cache.
+pub fn main_tool_names(registry: &ToolRegistry) -> Vec<String> {
+    registry.names()
+}
+
+/// Tool schemas for the main agent and fork subagents (must stay identical for KV cache).
+pub fn main_tool_schemas(registry: &ToolRegistry) -> Vec<(String, String, serde_json::Value)> {
+    tool_schemas_for_agent(registry, &main_tool_names(registry))
+}
+
 fn matcher_matches(matcher: &str, tool_name: &str, tool_input: Option<&Value>) -> bool {
     if matcher == "*" || matcher.is_empty() {
         return true;
@@ -148,6 +158,17 @@ mod tests {
         let prompts = run_post_tool_use_hooks(&hooks, "Read", None, &long);
         assert_eq!(prompts.len(), 1);
         assert!(prompts[0].contains('…'));
+    }
+
+    #[test]
+    fn main_tool_schemas_match_registry_names() {
+        let reg = novel_tools::default_registry();
+        let names = main_tool_names(&reg);
+        let schemas = main_tool_schemas(&reg);
+        assert_eq!(schemas.len(), names.len());
+        for (i, (n, _, _)) in schemas.iter().enumerate() {
+            assert_eq!(n, &names[i]);
+        }
     }
 
     #[test]

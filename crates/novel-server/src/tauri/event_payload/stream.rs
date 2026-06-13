@@ -1,7 +1,10 @@
 use novel_core::Event;
 
 use super::serialize_payload;
-use crate::tauri::events::{SessionTokensUpdatedPayload, StreamChunkPayload, TurnCompletePayload};
+use crate::tauri::events::{
+    SessionTodosUpdatedPayload, SessionTokensUpdatedPayload, StreamChunkPayload,
+    TurnCompletePayload,
+};
 
 pub(crate) fn stream_payload(
     event: &Event,
@@ -33,6 +36,13 @@ pub(crate) fn stream_payload(
             },
         )
         .map(|payload| ("session-tokens-updated".into(), payload)),
+        Event::SessionTodosUpdated { todos } => serialize_payload(
+            "session-todos-updated",
+            &SessionTodosUpdatedPayload {
+                todos: todos.clone(),
+            },
+        )
+        .map(|payload| ("session-todos-updated".into(), payload)),
         Event::TurnComplete {
             cache_hit_tokens,
             cache_miss_tokens,

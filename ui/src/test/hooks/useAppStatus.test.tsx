@@ -174,4 +174,36 @@ describe("useAppStatus session-tokens-updated", () => {
     expect(result.current.status?.sessionCompletion).toBe(8);
     expect(result.current.status?.contextTokens).toBe(35);
   });
+
+  it("patches todos from session-todos-updated without get_app_status", async () => {
+    const handlers = installListenHandlers();
+    const { result } = renderHook(() => useAppStatus());
+    await waitFor(() => expect(result.current.status?.todos).toEqual([]));
+
+    const statusCallsBefore = invokeMock.mock.calls.filter(
+      ([cmd]) => cmd === "get_app_status",
+    ).length;
+
+    const onTodos = handlers.get(IPC_EVENTS.sessionTodosUpdated);
+    expect(onTodos).toBeDefined();
+
+    await act(async () => {
+      onTodos?.({
+        payload: {
+          todos: [
+            { id: "t1", content: "outline", status: "in_progress" },
+          ],
+        },
+      });
+    });
+
+    expect(result.current.status?.todos).toEqual([
+      { id: "t1", content: "outline", status: "in_progress" },
+    ]);
+
+    const statusCallsAfter = invokeMock.mock.calls.filter(
+      ([cmd]) => cmd === "get_app_status",
+    ).length;
+    expect(statusCallsAfter).toBe(statusCallsBefore);
+  });
 });

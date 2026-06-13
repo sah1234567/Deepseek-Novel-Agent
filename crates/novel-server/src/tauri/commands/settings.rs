@@ -3,6 +3,17 @@ use crate::tauri::state::CommandContext;
 
 use super::engine_ipc::{emit_permission_mode_changed, send_engine_reply};
 use super::open_db;
+use crate::tauri::events::SessionTodosUpdatedPayload;
+use tauri::Emitter;
+
+pub fn emit_session_todos_updated(app: &tauri::AppHandle, todos: Vec<novel_state::SessionTodo>) {
+    if let Err(e) = app.emit(
+        "session-todos-updated",
+        SessionTodosUpdatedPayload { todos },
+    ) {
+        tracing::warn!(error = %e, "session-todos-updated emit failed");
+    }
+}
 
 pub async fn get_app_status(ctx: &CommandContext) -> Result<AppStatus, String> {
     send_engine_reply(ctx, |reply| EngineCommand::GetStatus { reply }).await
@@ -48,10 +59,10 @@ pub async fn set_api_config(
 
 pub async fn update_session_todo(
     ctx: &CommandContext,
+    session_id: String,
     todo_id: String,
     status: String,
 ) -> Result<(), String> {
-    let session_id = get_app_status(ctx).await?.session_id;
     let db = open_db(ctx).await?;
     let todos = db
         .list_session_todos(&session_id)
@@ -68,5 +79,10 @@ pub async fn update_session_todo(
         }],
         true,
     )
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+    let updated = db
+        .list_session_todos(&session_id)
+        .map_err(|e| e.to_string())?;
+    emit_session_todos_updated(&ctx.app_handle, updated);
+    Ok(())
 }

@@ -1,4 +1,4 @@
-use crate::hooks::tool_schemas_for_agent;
+use crate::hooks::main_tool_schemas;
 use crate::message::{assistant_from_completion, to_llm_messages_traced, RepairTraceContext};
 use crate::subagent::{clear_subagent_queue, drain_subagent_jobs};
 use crate::turn::llm_stream::{should_continue_inner_after_completion, LlmCallOutcome};
@@ -97,7 +97,7 @@ impl AgentEngine {
                 return Ok(reason);
             }
 
-            let schemas = tool_schemas_for_agent(&self.shared.registry, &self.main_tool_names());
+            let schemas = main_tool_schemas(&self.shared.registry);
 
             let llm_msgs = to_llm_messages_traced(
                 &self.messages,
@@ -133,6 +133,13 @@ impl AgentEngine {
             }
 
             drain_subagent_jobs(self, event_tx).await?;
+            if let Err(e) = crate::read_cache::sync::flush_dirty_read_cache_paths(
+                &self.shared,
+                self.turn_number as i32,
+                self.turn_message_seq,
+            ) {
+                tracing::warn!(error = %e, "read_cache flush after inner LLM API failed");
+            }
 
             // Update real context token count from API response.
             // Total = input (cache_hit + cache_miss) + output (completion_tokens).
@@ -174,8 +181,5 @@ impl AgentEngine {
                 Err(other) => return Ok(other),
             }
         }
-    }
-    fn main_tool_names(&self) -> Vec<String> {
-        self.shared.registry.names()
     }
 }

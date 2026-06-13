@@ -149,22 +149,13 @@ impl Tool for TailTool {
 
             let formatted = add_line_numbers(&raw, start_line);
 
-            ctx.store_read_cache(
+            crate::read_cache_ingest::ingest_read_or_tail_into_cache(
+                ctx,
+                &crate::default_registry(),
+                "Tail",
                 &full,
-                ReadCacheEntry {
-                    mtime_secs: mtime,
-                    raw_content: raw,
-                    offset: Some(start_line),
-                    limit: Some(take),
-                    total_lines,
-                    source: ReadCacheSource::Tail,
-                    transcript_committed: false,
-                    committed_spans: Vec::new(),
-                    committed_offset: None,
-                    committed_limit: None,
-                },
-                Some(&content),
-                None,
+                &input,
+                ReadCacheSource::Tail,
             )?;
 
             Ok(ToolOutput {

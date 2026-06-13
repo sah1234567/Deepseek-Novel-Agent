@@ -3,6 +3,7 @@
 
 mod agent_config;
 mod error;
+mod fork_agents;
 mod hook;
 mod model;
 mod paths;
@@ -13,6 +14,11 @@ pub use agent_config::{
     AgentApiConfig,
 };
 pub use error::ConfigError;
+pub use fork_agents::{
+    is_forkable_agent_type, CHAPTER_CRAFT_ANALYZER_MAX_REACT_LOOPS, FORKABLE_AGENT_TYPE_NAMES,
+    GENERAL_PURPOSE_MAX_REACT_LOOPS, KNOWLEDGE_AUDITOR_MAX_REACT_LOOPS_DEFAULT,
+    PLAN_AUDITOR_MAX_REACT_LOOPS,
+};
 pub use hook::{HookConfig, HookMatcher, HookRule};
 pub use model::{ModelConfig, Provider};
 pub use paths::{

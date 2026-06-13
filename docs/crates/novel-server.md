@@ -36,6 +36,8 @@ React (ui/) ──invoke/listen──► src-tauri/commands.rs
 
 `AppConfig` 以 `Arc<RwLock<_>>` 共享于 engine loop 与 Tauri commands 之间，切换作品时更新 `active_project`。`CommandContext` 封装 engine 命令通道、config、abort_controller、`fork_stream_subs`，供所有 Tauri command 使用。Engine 产生的 `Event` 经 `spawn_event_forwarder` + `stream_coalesce`（50ms 合并 `stream-chunk` / `sub-agent-stream`；segment/tool/lifecycle 前强制 flush）推送到前端；emit 失败 1s rate-limit warn。
 
+**无 read file cache IPC：** read cache 为引擎内部状态；`resume_session` / `get_app_status` 等契约不变。Resume 时 `novel-core` 在 `lifecycle` 内 hydrate/rebuild，前端无感知。
+
 ### 1.3 EngineCommand
 
 | EngineCommand | 说明 |
@@ -71,7 +73,7 @@ React (ui/) ──invoke/listen──► src-tauri/commands.rs
 }
 ```
 
-`status` 取值：`pending` | `in_progress` | `completed` | `cancelled`（与 TodoWrite schema 一致）。前端 StatusBar 分组展示前三类，`cancelled` 不显示。
+`status` 取值：`pending` | `in_progress` | `completed` | `cancelled`（与 TodoWrite schema 一致）。StatusBar：**有未完成项**时按前三类分组（`completed` 在「已完成」区划掉）；`cancelled` 不显示；**全部完成或列表为空**时下拉为「暂无待办事项」。
 
 `projectInitialized`：`knowledge/` 或 `AGENTS.md` 存在；`activeWorkName` 来自当前 `AppConfig.active_project`。
 
@@ -93,7 +95,7 @@ React (ui/) ──invoke/listen──► src-tauri/commands.rs
 | `interrupt` | 中断当前 turn | Esc / 发送中断 |
 | `approve_tool` / `deny_tool` | 工具批准/拒绝 | ChatPanel |
 | `answer_question` | AskUserQuestion | 问答 UI |
-| `get_app_status` | 初始/切 session 灌入；30s 非 token 兜底 + `permission-mode-changed` / `tool-call-request`(result) / turn 结束 `onTurnComplete` 刷新；token 四字段主路径为 `session-tokens-updated` | `useAppStatus` |
+| `get_app_status` | 初始/切 session 灌入；30s 非 token/todo 兜底 + `permission-mode-changed` / turn 结束 `onTurnComplete` 刷新；token 四字段主路径为 `session-tokens-updated`；todos 主路径为 `session-todos-updated` | `useAppStatus` |
 | `set_permission_mode` | 权限模式 | ChatPanel 底栏 |
 | `list_works` | 作品列表 | StatusBar 下拉 |
 | `create_work(name)` | 新建作品 + 切换 + 新 session | StatusBar |
@@ -110,7 +112,7 @@ React (ui/) ──invoke/listen──► src-tauri/commands.rs
 **前端 Turn 内存（纯 UI，无额外 IPC）：** `useTranscriptLoader` bootstrap 加载 turn 0（若有）+ active 尾部 6 轮（`TAIL_LOADED_TURNS`）；上滑 `IntersectionObserver` 懒加载；浏览 VIEW 6 轮滑动窗口、超 18 轮 loaded 时 `planMemoryWindow` 溢出淘汰；贴底欠填时 `planTailContentFill` 向上预取；贴底区稳定后 `planMemoryReconcile` 收缩回 TAIL 6。策略常量见 `ui/src/transcript/loadPolicy.ts`；计划函数见 `turnLoadPlan` / `turnMemoryPolicy`。详见 [FRAMEWORK §2.5 Turn 级懒加载](../../FRAMEWORK.md#25-前端状态与-ipc)。
 | `init_novel_project` | 当前作品 scaffold | SettingsPanel |
 | `list_project_files` / `read_project_file` | 文件树 | FileTreePanel |
-| `update_session_todo` | Todo 状态 | StatusBar Todo 下拉 |
+| `update_session_todo` | Todo 状态（直写 DB + emit `session-todos-updated`） | StatusBar Todo 下拉 |
 | `get_api_config` / `set_api_config` | 全局 API（json） | SettingsPanel |
 
 共 **25** 个 Tauri command（见 `src-tauri/src/main.rs` `generate_handler!`）。
@@ -121,7 +123,7 @@ React (ui/) ──invoke/listen──► src-tauri/commands.rs
 invoke("resume_session", { sessionId });
 invoke("get_session_transcript_layout", { sessionId: null });
 invoke("get_session_message_turns", { sessionId: null, fromTurn: 1, toTurn: 5 });
-invoke("update_session_todo", { todoId, status });
+invoke("update_session_todo", { sessionId, todoId, status });
 invoke("approve_tool", { toolCallId });
 ```
 
@@ -154,6 +156,7 @@ invoke("approve_tool", { toolCallId });
 | `ask-user-question` | AskUserQuestion；`questions[]` 经 `ask_questions_for_ui` 输出 **camelCase**（`allowMultiple` / `allowCustom`） |
 | `turn-complete` | TurnComplete（含 `wasInterrupted`）/ TurnStart / Error（`phase: "error"`）；含 turn 级 token 字段（终局 payload 标记）；`onTurnComplete` → `useAppStatus` 单次 `get_app_status`（非 StatusBar token 主路径） |
 | `session-tokens-updated` | SessionTokensUpdated；每次 LLM `accumulate_session_tokens` 成功后推送（含 SubAgent）；**`useAppStatus` 局部 patch token 四字段**（不调用 `get_app_status`） |
+| `session-todos-updated` | SessionTodosUpdated；`TodoWrite`（`poll_ui_results` / approve 路径）与 `update_session_todo` 后推送全量列表；**`useAppStatus` 局部 patch `todos`**（turn 进行中即可；不调用 `get_app_status`） |
 | `session-resumed` | create/open work、create/resume session；`useAgent` 清 streaming；`useProjectFiles` refresh；**不**触发 `useAppStatus` refresh（避免与 invoke 竞态） |
 | `permission-mode-changed` | SetPermissionMode → `useAppStatus` refresh |
 | `sub-agent-started` / `sub-agent-complete` | 子 Agent；payload 含 `forkRunId`、`agentType`、`parentToolCallId`（前端据其推断 `source`: tool \| hook） |

@@ -9,7 +9,7 @@ mod session;
 mod todo;
 mod turn_bounds;
 
-pub use db::Database;
+pub use db::{Database, ReadCacheAnchor};
 pub use error::StateError;
 pub use fork::ForkMessage;
 pub use message::StoredMessage;

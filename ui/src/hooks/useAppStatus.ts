@@ -61,8 +61,8 @@ export function useAppStatus() {
     }
   }, []);
 
-  // Initial load + 30s fallback for non-token fields (todos, turn flags). Runtime token
-  // counters are driven by `session-tokens-updated` (main and subagent LLM calls).
+  // Initial load + 30s fallback for turn flags etc. Token counters use
+  // `session-tokens-updated`; todos use `session-todos-updated`.
   useEffect(() => {
     void refresh();
     const interval = setInterval(() => void refresh(), 30000);
@@ -91,14 +91,12 @@ export function useAppStatus() {
               : prev,
           );
         }),
-      // Tool result refresh: todos and turn flags — not the primary token update path.
       () =>
-        listen<{ phase?: string }>(IPC_EVENTS.toolCallRequest, (event) => {
-          if (event.payload.phase === "result") {
-            void refresh();
-          }
+        listen<{ todos: SessionTodo[] }>(IPC_EVENTS.sessionTodosUpdated, (event) => {
+          const todos = event.payload.todos ?? [];
+          setStatus((prev) => (prev ? { ...prev, todos } : prev));
         }),
-      // Turn-end refresh (`AgentProvider.onTurnComplete`): turnNumber, todos, etc.
+      // Turn-end refresh (`AgentProvider.onTurnComplete`): turnNumber, turn flags, etc.
       // Token fields stay event-driven via `session-tokens-updated`.
       // Session switches refresh via invoke callers (resumeSession / createSession / openWork).
       () => listen(IPC_EVENTS.permissionModeChanged, () => void refresh()),
@@ -177,11 +175,10 @@ export function useAppStatus() {
   }, [refresh]);
 
   const updateSessionTodo = useCallback(
-    async (todoId: string, status: string) => {
-      await invoke(IPC_COMMANDS.updateSessionTodo, { todoId, status });
-      await refresh();
+    async (todoId: string, status: string, sessionId: string) => {
+      await invoke(IPC_COMMANDS.updateSessionTodo, { todoId, status, sessionId });
     },
-    [refresh],
+    [],
   );
 
   return {

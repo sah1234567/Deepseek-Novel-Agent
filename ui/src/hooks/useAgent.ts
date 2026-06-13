@@ -26,6 +26,7 @@ import {
   forkBindingSnapshotKey,
   isTurnInProgress as transcriptTurnInProgress,
 } from "../transcript";
+import { isLiveOrphanTurn } from "../transcript/liveTail";
 import {
   applyForkDbToMap,
   dispatchForkEvent,
@@ -111,6 +112,17 @@ export function useAgent(onTurnComplete?: (prefetched?: AppStatus) => void) {
   }, []);
 
   const reloadActiveTailRef = useRef<(() => Promise<void>) | undefined>(undefined);
+
+  const beginUserTurn = useCallback(
+    async (userMsg: UIMessage) => {
+      if (transcriptMachineRef.current.context.turns.some(isLiveOrphanTurn)) {
+        await reloadActiveTailRef.current?.();
+      }
+      dispatchMain({ type: "BEGIN_TURN", user: userMsg });
+      setIsStreaming(true);
+    },
+    [dispatchMain],
+  );
 
   /** Register lazy-loader tail reload; returns cleanup. Called from ChatPanel. */
   const registerReloadActiveTail = useCallback((reloadActiveTail: () => Promise<void>) => {
@@ -214,41 +226,41 @@ export function useAgent(onTurnComplete?: (prefetched?: AppStatus) => void) {
         role: "user",
         contentBlocks: [{ blockIndex: 0, kind: "text", text: trimmed }],
       };
-      dispatchMain({ type: "BEGIN_TURN", user: userMsg });
-      setIsStreaming(true);
       setQuestionError(null);
+      await beginUserTurn(userMsg);
       void invoke<string>(IPC_COMMANDS.sendMessage, { content: trimmed, model: modelRef.current }).catch((e) => {
         setQuestionError(String(e));
         setIsStreaming(false);
       });
     },
-    [dispatchMain],
+    [beginUserTurn],
   );
 
   const submitInterrupt = useCallback(
     async (content: string) => {
       const trimmed = content.trim();
       if (!trimmed) return;
+      dispatchMain({ type: "INTERRUPT" });
+      setQuestionError(null);
+      try {
+        await invoke(IPC_COMMANDS.interrupt, { reason: "interrupt" });
+        await reloadActiveTailRef.current?.();
+      } catch (e) {
+        setQuestionError(String(e));
+        return;
+      }
       const userMsg: UIMessage = {
         id: crypto.randomUUID(),
         role: "user",
         contentBlocks: [{ blockIndex: 0, kind: "text", text: trimmed }],
       };
-      setTranscriptMachine((m) => {
-        let next = dispatchTranscriptEvent(m, { type: "INTERRUPT" });
-        next = dispatchTranscriptEvent(next, { type: "BEGIN_TURN", user: userMsg });
-        return next;
-      });
-      messageQueueRef.current.push(trimmed);
-      setQuestionError(null);
-      try {
-        await invoke(IPC_COMMANDS.interrupt, { reason: "interrupt" });
-      } catch (e) {
-        messageQueueRef.current.pop();
+      await beginUserTurn(userMsg);
+      void invoke<string>(IPC_COMMANDS.sendMessage, { content: trimmed, model: modelRef.current }).catch((e) => {
         setQuestionError(String(e));
-      }
+        setIsStreaming(false);
+      });
     },
-    [],
+    [beginUserTurn, dispatchMain],
   );
 
   const interrupt = useCallback(async () => {

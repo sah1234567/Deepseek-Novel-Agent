@@ -1,10 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AppStatus, SessionSummary, SessionTodo, WorkSummary } from "../hooks/useAppStatus";
-import {
-  countIncompleteTodos,
-  groupTodosForDisplay,
-  hasVisibleTodos,
-} from "../utils/todoDisplay";
+import { countIncompleteTodos, visibleTodosForDisplay } from "../utils/todoDisplay";
 import "./StatusBar.css";
 
 interface StatusBarProps {
@@ -58,8 +54,8 @@ function TodoDropdown({
   onCycle: (id: string, next: string) => void;
 }) {
   const incompleteCount = countIncompleteTodos(todos);
-  const sections = groupTodosForDisplay(todos);
-  const showEmpty = !hasVisibleTodos(todos);
+  const visibleTodos = visibleTodosForDisplay(todos);
+  const showEmpty = visibleTodos.length === 0;
 
   return (
     <div className="todo-dropdown-wrapper">
@@ -77,34 +73,29 @@ function TodoDropdown({
           {showEmpty ? (
             <p className="todo-dropdown-empty">暂无待办事项</p>
           ) : (
-            sections.map((section) => (
-              <section key={section.status} className="todo-dropdown-section">
-                <h3 className="todo-dropdown-section-title">{section.title}</h3>
-                <ul className="todo-dropdown-list">
-                  {section.items.map((todo) => (
-                    <li
-                      key={todo.id}
-                      className={`todo-dropdown-item todo-dropdown-${todo.status}`}
-                    >
-                      <button
-                        type="button"
-                        className="todo-dropdown-status"
-                        title="点击切换状态"
-                        onClick={() =>
-                          onCycle(todo.id, STATUS_CYCLE[todo.status] ?? "pending")
-                        }
-                      >
-                        <span className="todo-dropdown-icon">
-                          {STATUS_ICON[todo.status] ?? "○"}
-                        </span>
-                        {STATUS_LABEL[todo.status] ?? todo.status}
-                      </button>
-                      <span className="todo-dropdown-content">{todo.content}</span>
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            ))
+            <ul className="todo-dropdown-list">
+              {visibleTodos.map((todo) => (
+                <li
+                  key={todo.id}
+                  className={`todo-dropdown-item todo-dropdown-${todo.status}`}
+                >
+                  <button
+                    type="button"
+                    className="todo-dropdown-status"
+                    title="点击切换状态"
+                    onClick={() =>
+                      onCycle(todo.id, STATUS_CYCLE[todo.status] ?? "pending")
+                    }
+                  >
+                    <span className="todo-dropdown-icon">
+                      {STATUS_ICON[todo.status] ?? "○"}
+                    </span>
+                    {STATUS_LABEL[todo.status] ?? todo.status}
+                  </button>
+                  <span className="todo-dropdown-content">{todo.content}</span>
+                </li>
+              ))}
+            </ul>
           )}
         </div>
       )}
@@ -167,6 +158,8 @@ export function StatusBar({
     const incomplete = countIncompleteTodos(status?.todos ?? []);
     if (incomplete > 0 && prevIncompleteRef.current === 0) {
       setTodoOpen(true);
+    } else if (incomplete === 0 && prevIncompleteRef.current > 0) {
+      setTodoOpen(false);
     }
     prevIncompleteRef.current = incomplete;
   }, [status?.todos]);

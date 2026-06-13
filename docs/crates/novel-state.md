@@ -11,13 +11,17 @@
 源码按职责拆分 `crates/novel-state/src/db/{mod,migrate,sessions,messages,metadata,fork_runs}.rs`；JSON 列解析失败返回 `rusqlite::Error` 而非静默默认值。
 
 - r2d2 连接池 + rusqlite，WAL 模式
-- `Database::open(path)` 自动 migrations（schema v2 含 `message_archive`）
+- `Database::open(path)` 自动 migrations（schema v3 含 `session_read_cache` + sessions 锚点列）
 - 最大连接 8，超时 5s
 - **每作品独立 DB：** `{work}/.novel-agent/state.db`
 
 ### 1.2 Schema（7 表 + schema_version）
 
-**schema_version：** 迁移版本号（当前 v2）
+**schema_version：** 迁移版本号（当前 v3）
+
+**session_read_cache：** `(session_id, path)` 主键；`entry_json` 为完整 `ReadCacheEntry` 当前态（每 path 一行，`ON CONFLICT REPLACE`）；非 API 历史表。
+
+**sessions** 锚点列（read cache resume 快路径）：`read_cache_compaction_count`、`read_cache_anchor_turn`、`read_cache_anchor_sequence`。
 
 **sessions：** UUID 主键，project_root, title, status, model, provider
 - Token 三类：`cache_hit_tokens`, `cache_miss_tokens`, `completion_tokens`（各自独立 `+=`）

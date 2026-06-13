@@ -46,7 +46,10 @@ impl Tool for TodoWriteTool {
         "TodoWrite"
     }
     fn description(&self) -> &str {
-        "Track chapter and planning progress todos for the session"
+        "Update session todos shown in the StatusBar. Default merge=true: upsert by id, \
+         preserve list order; only send items you create or change. Omit merge or merge=true \
+         for status/content updates. merge=false replaces the entire list (avoid unless \
+         replanning). Keep stable ids; at most one in_progress."
     }
     fn input_schema(&self) -> Value {
         json!({
@@ -54,17 +57,27 @@ impl Tool for TodoWriteTool {
             "properties": {
                 "todos": {
                     "type": "array",
+                    "description": "Items to create or update (merge mode does not delete omitted ids)",
                     "items": {
                         "type": "object",
                         "properties": {
-                            "id": {"type": "string"},
+                            "id": {
+                                "type": "string",
+                                "description": "Stable id; reuse when updating status or content"
+                            },
                             "content": {"type": "string"},
-                            "status": {"type": "string", "enum": ["pending", "in_progress", "completed", "cancelled"]}
+                            "status": {
+                                "type": "string",
+                                "enum": ["pending", "in_progress", "completed", "cancelled"]
+                            }
                         },
                         "required": ["id", "content", "status"]
                     }
                 },
-                "merge": {"type": "boolean"}
+                "merge": {
+                    "type": "boolean",
+                    "description": "Default true: incremental upsert. false: delete all session todos then write this list"
+                }
             },
             "required": ["todos"]
         })

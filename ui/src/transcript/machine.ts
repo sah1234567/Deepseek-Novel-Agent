@@ -5,7 +5,7 @@ import {
   withOpenSegment,
   type ToolSegmentLocation,
 } from "./mutate";
-import { isLiveOrphanTurn, reconcileOrphanLiveTurns } from "./liveTail";
+import { dropLiveOrphanTurns, isLiveOrphanTurn, reconcileOrphanLiveTurns } from "./liveTail";
 import { evictTurnsFromMachine, mergeTurnsIntoMachine } from "./merge";
 import {
   segmentMessageId,
@@ -183,6 +183,16 @@ function resolveToolSegment(ctx: TranscriptContext, toolCallId: string): LlmSegm
   return findToolSegment(ctx, toolCallId) ?? ctx.openSegment;
 }
 
+function statusAfterInputComplete(
+  existing: ToolCall | undefined,
+  needsApproval: boolean,
+): ToolCall["status"] {
+  if (existing?.status === "done" || existing?.status === "denied") {
+    return existing.status;
+  }
+  return needsApproval ? "pending" : "running";
+}
+
 function handleToolEvent(machine: TranscriptMachine, event: Extract<TranscriptEvent, { type: "TOOL" }>): TranscriptMachine {
   const { phase, toolCallId } = event;
 
@@ -277,10 +287,11 @@ function handleToolEvent(machine: TranscriptMachine, event: Extract<TranscriptEv
     if (!seg || !event.toolName) {
       return machine;
     }
+    const existing = seg.tools.find((t) => t.id === toolCallId);
     upsertToolInSegment(seg, toolCallId, {
       name: event.toolName,
       input: event.input ?? {},
-      status: event.needsApproval ? "pending" : "running",
+      status: statusAfterInputComplete(existing, !!event.needsApproval),
       needsApproval: !!event.needsApproval,
       parsedInput: event.input,
     });
@@ -369,7 +380,17 @@ export function dispatchTranscriptEvent(
   switch (event.type) {
     case "BEGIN_TURN": {
       const ctx = cloneContext(machine.context);
-      ctx.turns = reconcileOrphanLiveTurns(ctx.turns, machine.phase);
+      const maxActiveTurn = Math.max(
+        0,
+        ...ctx.turns
+          .filter((t) => t.archiveEpoch === undefined && t.turnNumber !== undefined)
+          .map((t) => t.turnNumber!),
+      );
+      // After reloadActiveTail, numbered turns exist and live orphans are stale copies.
+      // When maxActiveTurn is still 0, keep prior live orphans (multi-turn tests / pre-reload).
+      if (ctx.turns.some(isLiveOrphanTurn) && maxActiveTurn > 0) {
+        ctx.turns = dropLiveOrphanTurns(ctx.turns);
+      }
       ctx.turns.push({
         turnId: event.user.id,
         user: event.user,

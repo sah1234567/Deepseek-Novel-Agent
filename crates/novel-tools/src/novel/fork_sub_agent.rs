@@ -1,15 +1,9 @@
 use crate::{require_str, Tool, ToolContext, ToolError, ToolOutput, ValidationError};
 use async_trait::async_trait;
+use novel_config::FORKABLE_AGENT_TYPE_NAMES;
 use serde_json::{json, Value};
 
 pub struct ForkSubAgentTool;
-
-const VALID_AGENT_TYPES: &[&str] = &[
-    "PlanAuditor",
-    "KnowledgeAuditor",
-    "ChapterCraftAnalyzer",
-    "GeneralPurpose",
-];
 
 #[async_trait]
 impl Tool for ForkSubAgentTool {
@@ -34,8 +28,8 @@ impl Tool for ForkSubAgentTool {
             "properties": {
                 "agent_type": {
                     "type": "string",
-                    "enum": VALID_AGENT_TYPES,
-                    "description": "Sub-agent type. GeneralPurpose = custom one-off subagent (task is the full prompt)."
+                    "enum": FORKABLE_AGENT_TYPE_NAMES,
+                    "description": "Sub-agent type. GeneralPurpose = read-only custom subagent (task is the full prompt; writes gated at runtime)."
                 },
                 "task": {
                     "type": "string",
@@ -82,7 +76,7 @@ pub(crate) fn enqueue_fork_subagent(
         ));
     }
     let agent_type = require_str(input, "agent_type")?;
-    if !VALID_AGENT_TYPES.contains(&agent_type.as_str()) {
+    if !novel_config::is_forkable_agent_type(&agent_type) {
         return Err(ToolError::Validation(ValidationError::InvalidField(
             format!("agent_type: {agent_type}"),
         )));
@@ -130,6 +124,16 @@ mod tests {
     use super::*;
     use crate::PermissionMode;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn fork_sub_agent_schema_enum_matches_forkable_names() {
+        let schema = ForkSubAgentTool.input_schema();
+        let enum_vals = schema["properties"]["agent_type"]["enum"]
+            .as_array()
+            .expect("enum");
+        let names: Vec<&str> = enum_vals.iter().map(|v| v.as_str().unwrap()).collect();
+        assert_eq!(names, FORKABLE_AGENT_TYPE_NAMES);
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn rejects_fork_when_not_allowed() {

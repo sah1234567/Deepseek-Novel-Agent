@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { UIMessage } from "../types/messages";
 import { flatMessagesToTranscript, transcriptToFlatMessages } from "./convert";
 import { createInitialMachine, dispatchTranscriptEvent } from "./machine";
+import { findTurnInMachine } from "./merge";
 import { flatMessagesToMachine } from "./flatParse";
 import { hydrateAllForTest } from "./testHelpers";
 import { SYNTHETIC_USER_ID } from "./types";
@@ -162,6 +163,44 @@ describe("dispatchTranscriptEvent", () => {
     expect(m.context.openSegment?.tools[0].status).toBe("done");
   });
 
+  it("T10b: BEGIN_TURN after INTERRUPT keeps prior turn when hydrated from DB", () => {
+    let m = createInitialMachine();
+    m = dispatchTranscriptEvent(m, { type: "BEGIN_TURN", user: userMsg("u1") });
+    m = dispatchTranscriptEvent(m, {
+      type: "STREAM_CHUNK",
+      messageId: "a1",
+      delta: "partial",
+      kind: "text",
+    });
+    m = dispatchTranscriptEvent(m, { type: "INTERRUPT" });
+    m = dispatchTranscriptEvent(m, {
+      type: "MERGE_TURNS",
+      bundles: [
+        {
+          turnNumber: 1,
+          messages: [
+            {
+              id: "u1",
+              role: "user",
+              contentBlocks: [{ blockIndex: 0, kind: "text", text: "hello" }],
+            },
+            {
+              id: "a1",
+              role: "assistant",
+              contentBlocks: [{ blockIndex: 0, kind: "text", text: "partial" }],
+            },
+          ],
+        },
+      ],
+    });
+    m = dispatchTranscriptEvent(m, { type: "BEGIN_TURN", user: userMsg("u2", "u2") });
+    expect(m.context.turns).toHaveLength(2);
+    expect(findTurnInMachine(m, 1)?.segments[0].assistant.contentBlocks[0]?.text).toBe(
+      "partial",
+    );
+    expect(m.context.turns[1].user.contentBlocks[0]?.text).toBe("u2");
+  });
+
   it("T10: INTERRUPT commits partial assistant", () => {
     let m = createInitialMachine();
     m = dispatchTranscriptEvent(m, { type: "BEGIN_TURN", user: userMsg("u1") });
@@ -287,6 +326,73 @@ describe("dispatchTranscriptEvent", () => {
     });
     expect(m.context.turns[0].segments[0].tools[0].status).toBe("running");
     expect(m.context.openSegment?.tools.length ?? 0).toBe(0);
+  });
+
+  it("input_complete after result keeps done status and result", () => {
+    let m = createInitialMachine();
+    m = dispatchTranscriptEvent(m, { type: "BEGIN_TURN", user: userMsg("u1") });
+    m = dispatchTranscriptEvent(m, {
+      type: "TOOL",
+      phase: "start",
+      toolCallId: "t1",
+      toolName: "Read",
+    });
+    m = dispatchTranscriptEvent(m, {
+      type: "TOOL",
+      phase: "input_complete",
+      toolCallId: "t1",
+      toolName: "Read",
+      input: { file_path: "knowledge/plot/大纲.md" },
+    });
+    m = dispatchTranscriptEvent(m, {
+      type: "TOOL",
+      phase: "result",
+      toolCallId: "t1",
+      content: "大纲正文",
+    });
+    m = dispatchTranscriptEvent(m, {
+      type: "TOOL",
+      phase: "input_complete",
+      toolCallId: "t1",
+      toolName: "Read",
+      input: { file_path: "knowledge/plot/大纲.md" },
+    });
+    const tool = m.context.openSegment?.tools.find((t) => t.id === "t1");
+    expect(tool?.status).toBe("done");
+    expect(tool?.result).toBe("大纲正文");
+  });
+
+  it("input_complete after denied keeps denied", () => {
+    let m = createInitialMachine();
+    m = dispatchTranscriptEvent(m, { type: "BEGIN_TURN", user: userMsg("u1") });
+    m = dispatchTranscriptEvent(m, {
+      type: "TOOL",
+      phase: "start",
+      toolCallId: "t1",
+      toolName: "Write",
+    });
+    m = dispatchTranscriptEvent(m, {
+      type: "TOOL",
+      phase: "input_complete",
+      toolCallId: "t1",
+      toolName: "Write",
+      input: { file_path: "out.md", content: "x" },
+      needsApproval: true,
+    });
+    m = dispatchTranscriptEvent(m, {
+      type: "PATCH_TOOL",
+      toolCallId: "t1",
+      patch: { status: "denied", needsApproval: false },
+    });
+    m = dispatchTranscriptEvent(m, {
+      type: "TOOL",
+      phase: "input_complete",
+      toolCallId: "t1",
+      toolName: "Write",
+      input: { file_path: "out.md", content: "x" },
+    });
+    const tool = m.context.openSegment?.tools.find((t) => t.id === "t1");
+    expect(tool?.status).toBe("denied");
   });
 
   it("tool result with openSegment for next API updates prior segment tool", () => {

@@ -1,7 +1,9 @@
 #![allow(clippy::unwrap_used)]
 
-use novel_tools::{default_registry, PermissionMode, ToolCallSpec, ToolContext, ToolExecutor};
-use std::sync::Arc;
+use novel_tools::{
+    default_registry, PendingSubagentWork, PermissionMode, ToolCallSpec, ToolContext, ToolExecutor,
+};
+use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
 #[tokio::test]
@@ -14,6 +16,7 @@ async fn read_write_edit_chain() {
     let ctx = ToolContext {
         permission_mode: PermissionMode::Auto,
         project_root: root.clone(),
+        subagent_queue: Some(Arc::new(Mutex::new(Vec::<PendingSubagentWork>::new()))),
         ..ToolContext::new(root.clone())
     };
     ex.execute_one(
@@ -82,6 +85,7 @@ async fn main_session_may_write_chapter_in_sandbox() {
     let ctx = ToolContext {
         permission_mode: PermissionMode::Auto,
         project_root: root.clone(),
+        subagent_queue: Some(Arc::new(Mutex::new(Vec::<PendingSubagentWork>::new()))),
         ..ToolContext::new(root)
     };
     ex.execute_one(

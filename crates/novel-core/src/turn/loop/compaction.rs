@@ -296,10 +296,26 @@ impl AgentEngine {
             }
         }
         self.commit_message_slice(new_messages)?;
-        self.shared.clear_read_file_cache();
+        let stored = self
+            .shared
+            .session
+            .db
+            .get_session_messages(&self.shared.session.id, None)
+            .map_err(AgentError::from)?;
+        if let Err(e) = crate::read_cache::sync::rebuild_and_reconcile_read_cache(
+            &self.shared,
+            &self.messages,
+            &stored,
+        ) {
+            tracing::warn!(
+                session_id = %self.shared.session.id,
+                error = %e,
+                "read_cache rebuild after compaction failed"
+            );
+        }
         tracing::debug!(
             session_id = %self.shared.session.id,
-            "read_file_cache_cleared_after_compaction"
+            "read_file_cache_rebuilt_after_compaction"
         );
         self.last_context_tokens = 0;
 

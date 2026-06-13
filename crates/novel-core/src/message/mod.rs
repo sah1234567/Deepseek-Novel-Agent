@@ -5,6 +5,7 @@ mod display;
 mod llm;
 mod missing_blocks;
 mod repair;
+pub(crate) mod tool_pairs;
 pub(crate) mod turn_rows;
 
 pub use convert::{

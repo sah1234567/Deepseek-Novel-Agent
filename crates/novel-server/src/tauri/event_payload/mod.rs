@@ -238,6 +238,17 @@ mod tests {
         };
         let (tn, _) = core_event_payload(&tokens, "m").unwrap();
         assert_eq!(tn, "session-tokens-updated");
+
+        let todos = Event::SessionTodosUpdated {
+            todos: vec![novel_state::SessionTodo {
+                id: "t1".into(),
+                content: "x".into(),
+                status: "pending".into(),
+            }],
+        };
+        let (todo_name, todo_payload) = core_event_payload(&todos, "m").unwrap();
+        assert_eq!(todo_name, "session-todos-updated");
+        assert_eq!(todo_payload["todos"][0]["content"], "x");
     }
 
     #[test]

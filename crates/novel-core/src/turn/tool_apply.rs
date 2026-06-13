@@ -3,6 +3,7 @@
 use crate::context::dynamic_context::parse_skill_reference_path;
 use crate::hooks::knowledge_auditor_hook_task;
 use crate::message::tool_result_message;
+use crate::session_todos::maybe_emit_session_todos_after_tool;
 use crate::turn::format_tool;
 use crate::{AgentEngine, AgentError, Event};
 use novel_logging::LogEvent;
@@ -34,6 +35,15 @@ impl AgentEngine {
         self.record_tool_success();
         if let Some(s) = spec {
             self.apply_post_success_tool_effects(s, success, hook_task);
+            // Streaming path already emitted via poll_ui_results (skip_ui_result_emit).
+            if success && !skip_ui_result_emit {
+                maybe_emit_session_todos_after_tool(
+                    &s.name,
+                    &self.shared.session.id,
+                    &self.shared.session.db,
+                    event_tx,
+                );
+            }
         }
         Ok(())
     }

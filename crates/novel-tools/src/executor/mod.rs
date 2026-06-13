@@ -50,6 +50,10 @@ impl ToolExecutor {
         tool.validate_input(&call.input)?;
         let mut ctx = ctx.clone();
         ctx.current_tool_call_id = Some(call.id.clone());
+        if let Some(reason) = crate::subagent_mutator_gate(&call.name, &ctx) {
+            tracing::debug!(tool = %call.name, "subagent_mutator_denied");
+            return Err(ToolError::PermissionDenied(reason));
+        }
         match tool.check_permissions(&call.input, &ctx) {
             crate::PermissionResult::Allow => {}
             crate::PermissionResult::Deny { reason } => {
@@ -218,5 +222,36 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ToolError::UnknownTool(_)));
+    }
+
+    #[tokio::test]
+    async fn executor_denies_write_on_subagent_context() {
+        let tmp = TempDir::new().unwrap();
+        let target = tmp.path().join("blocked.md");
+        let reg = Arc::new(default_registry());
+        let ex = ToolExecutor::new(reg);
+        let ctx = ToolContext {
+            permission_mode: PermissionMode::Auto,
+            allow_fork: false,
+            subagent_queue: None,
+            project_root: tmp.path().to_path_buf(),
+            ..ToolContext::new(tmp.path().to_path_buf())
+        };
+        let err = ex
+            .execute_one(
+                &ToolCallSpec {
+                    id: "w1".into(),
+                    name: "Write".into(),
+                    input: serde_json::json!({
+                        "file_path": "blocked.md",
+                        "content": "nope"
+                    }),
+                },
+                &ctx,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ToolError::PermissionDenied(_)));
+        assert!(!target.exists());
     }
 }
