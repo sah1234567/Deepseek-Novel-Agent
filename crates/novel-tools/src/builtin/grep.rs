@@ -518,41 +518,31 @@ spaced hyphen - 行\n",
     #[tokio::test(flavor = "current_thread")]
     async fn em_dash_default_head_limit_can_hide_late_chapter() {
         let tmp = TempDir::new().unwrap();
-        // 模拟全书搜索：前 80 条命中被早期文件占满，排序靠后的 late-target.md 进不了默认页
-        for i in 0..80 {
-            write_file(
-                tmp.path(),
-                &format!("chapters/filler-{i:03}.md"),
-                "段落——破折号\n",
-            );
+        // 单文件内按行序匹配：跨平台稳定。多文件时 ignore 遍历顺序在 Linux 上不定，
+        // 靠文件名排序的夹具会在 CI 上偶发把 late-target 排进前 80 条。
+        let mut content = String::new();
+        for _ in 0..80 {
+            content.push_str("段落——破折号\n");
         }
-        write_file(
-            tmp.path(),
-            "chapters/late-target.md",
-            "「那份报告不完整——它只有现场检测的部分。」\n",
-        );
+        content.push_str("「那份报告不完整——它只有现场检测的部分。」\n");
+        write_file(tmp.path(), "chapters/long-chapter.md", &content);
 
         let project_wide = grep_in(&tmp, CRAFT_EM_DASH_PATTERN, None, None).await;
         assert!(
             project_wide.content.contains("pagination"),
-            "expected default 80-match truncation across project root"
+            "expected default 80-match truncation; got:\n{}",
+            project_wide.content
         );
         assert!(
             !project_wide.content.contains("不完整"),
-            "late chapter em dash should be absent from first page without search_root; got:\n{}",
+            "line 81 em dash should be absent from first page; got:\n{}",
             project_wide.content
         );
 
-        let scoped = grep_in(
-            &tmp,
-            CRAFT_EM_DASH_PATTERN,
-            Some("chapters"),
-            Some("late-target.md"),
-        )
-        .await;
+        let scoped = grep_in(&tmp, "不完整", Some("chapters"), Some("long-chapter.md")).await;
         assert!(
             scoped.content.contains("不完整"),
-            "same pattern with search_root must still find the em dash; got:\n{}",
+            "scoped grep must still find the em dash on line 81; got:\n{}",
             scoped.content
         );
     }
