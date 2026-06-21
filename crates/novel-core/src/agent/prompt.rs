@@ -39,6 +39,12 @@ pub fn format_fork_task(
         ));
     }
 
+    if agent_type == AgentType::MemoryExtractor {
+        // Memory extractor's full task prompt is self-contained in
+        // prompt/memory/extraction-task.md — no separate agent shell needed.
+        return Ok(task.to_string());
+    }
+
     let agent_prompt = load_agent_prompt(agent_type)?;
     Ok(format!(
         "{agent_prompt}\n\n{runtime_constraints}\n\n---\n\n{task}"
@@ -107,6 +113,16 @@ mod tests {
         assert!(t.contains("## 自定义任务"));
         assert!(t.contains(custom));
         assert!(t.contains("写入门控"));
+    }
+
+    #[test]
+    fn memory_extractor_fork_task_is_pass_through() {
+        // MemoryExtractor's task is self-contained in prompt/memory/extraction-task.md;
+        // format_fork_task passes it through unchanged (no agent shell wrapper).
+        let tools = AgentType::MemoryExtractor.definition().tools;
+        let task = "分析最近 5 条消息并更新 memory。";
+        let t = format_fork_task(AgentType::MemoryExtractor, task, &tools).expect("task");
+        assert_eq!(t, task);
     }
 
     #[test]

@@ -9,6 +9,7 @@ novel-logging = { path = "../novel-logging" }
 novel-compaction = { path = "../novel-compaction" }
 novel-config = { path = "../novel-config" }
 novel-knowledge = { path = "../novel-knowledge" }
+novel-memory = { path = "../novel-memory" }
 novel-deepseek = { path = "../novel-deepseek" }
 novel-skills = { path = "../novel-skills" }
 novel-state = { path = "../novel-state" }

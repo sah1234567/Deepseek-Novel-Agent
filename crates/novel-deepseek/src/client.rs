@@ -3,8 +3,8 @@ use crate::config::chat_api_base;
 use crate::error::LlmError;
 use crate::tool_args::parse_tool_arguments;
 use crate::types::{
-    ContentBlockKind, LlmChatMessage, LlmCompletion, LlmToolCall, StreamEvent, StreamOutcome,
-    TokenUsage, WebSearchResult,
+    ChatRequestOptions, ContentBlockKind, LlmChatMessage, LlmCompletion, LlmToolCall, StreamEvent,
+    StreamOutcome, TokenUsage, WebSearchResult,
 };
 use futures::StreamExt;
 use serde::Deserialize;
@@ -243,8 +243,16 @@ impl ChatClient {
         let oai = Self::to_openai_messages(messages);
         let tool_defs = Self::build_tools(tools);
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.drain_usage_background(&oai, &tool_defs, initial, tx, 1)
-            .await;
+        self.drain_usage_background(
+            &oai,
+            &tool_defs,
+            initial,
+            tx,
+            1,
+            self.thinking_enabled,
+            None,
+        )
+        .await;
         rx.await.ok().flatten()
     }
 
@@ -261,13 +269,44 @@ impl ChatClient {
             .collect()
     }
 
+    // ── Streaming body (all business chat goes through here) ──
+
+    fn build_stream_body(
+        model: &str,
+        openai_messages: &[Value],
+        tool_defs: &[Value],
+        max_tokens: u32,
+        thinking_enabled: bool,
+        response_format: Option<&serde_json::Value>,
+    ) -> Value {
+        let mut body = serde_json::json!({
+            "model": model,
+            "messages": openai_messages,
+            "max_tokens": max_tokens,
+            "stream": true,
+            "stream_options": { "include_usage": true },
+        });
+        if thinking_enabled {
+            body["thinking"] = serde_json::json!({ "type": "enabled" });
+        }
+        if let Some(fmt) = response_format {
+            body["response_format"] = fmt.clone();
+        }
+        if !tool_defs.is_empty() {
+            body["tools"] = Value::Array(tool_defs.to_vec());
+        }
+        body
+    }
+
     // ── Streaming ─────────────────────────────────────────────
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_stream<TF, EE>(
         &mut self,
         messages: &[LlmChatMessage],
         tools: &[(String, String, Value)],
         max_tokens: u32,
+        options: ChatRequestOptions,
         mut on_event: EE,
         mut on_tool_call: Option<TF>,
         cancel: Option<Arc<AtomicBool>>,
@@ -278,48 +317,20 @@ impl ChatClient {
     {
         let openai_msgs = Self::to_openai_messages(messages);
         let tool_defs = Self::build_tools(tools);
+        let thinking = options.resolve_thinking(self);
 
-        let mut body = serde_json::json!({
-            "model": self.model,
-            "messages": openai_msgs,
-            "max_tokens": max_tokens,
-            "stream": true,
-            "stream_options": { "include_usage": true },
-        });
-        if self.thinking_enabled {
-            body["thinking"] = serde_json::json!({ "type": "enabled" });
-        }
-        if !tool_defs.is_empty() {
-            body["tools"] = Value::Array(tool_defs.clone());
-        }
+        let body = Self::build_stream_body(
+            &self.model,
+            &openai_msgs,
+            &tool_defs,
+            max_tokens,
+            thinking,
+            options.response_format.as_ref(),
+        );
 
-        let url = format!("{}/chat/completions", self.api_base);
         let resp = self
-            .http
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("Content-Type", "application/json")
-            .header("Accept", "text/event-stream")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| LlmError::Api(e.to_string()))?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            let preview: String = text.chars().take(500).collect();
-            if status.as_u16() == 429 {
-                tracing::warn!(%status, body_preview = %preview, "deepseek_rate_limited");
-                return Err(LlmError::RateLimited(text));
-            }
-            if status.as_u16() == 400 && text.to_lowercase().contains("maximum context length") {
-                tracing::warn!(%status, body_preview = %preview, "deepseek_context_length_exceeded");
-                return Err(LlmError::ContextLengthExceeded { body: text });
-            }
-            tracing::warn!(%status, body_preview = %preview, "deepseek_http_error");
-            return Err(LlmError::Api(format!("HTTP {status}: {text}")));
-        }
+            .send_chat_request(&body, Some("text/event-stream"))
+            .await?;
 
         let byte_stream = resp.bytes_stream();
         futures::pin_mut!(byte_stream);
@@ -327,13 +338,19 @@ impl ChatClient {
         let mut acc = StreamAccumulators::new();
         let mut line_buf = String::new();
 
-        // For background drain on cancel
+        // For background drain on cancel — carry resolved thinking + same options
         let drain_self = self.clone();
-        let drain_msgs = Self::to_openai_messages(messages);
+        let drain_msgs = openai_msgs;
         let drain_tools = tool_defs;
 
         let return_cancelled = |acc: StreamAccumulators| {
-            Ok(drain_self.cancelled_stream_outcome(acc, &drain_msgs, &drain_tools))
+            Ok(drain_self.cancelled_stream_outcome(
+                acc,
+                &drain_msgs,
+                &drain_tools,
+                thinking,
+                options.response_format.as_ref(),
+            ))
         };
 
         loop {
@@ -462,6 +479,8 @@ impl ChatClient {
         mut acc: StreamAccumulators,
         drain_msgs: &[Value],
         drain_tools: &[Value],
+        thinking_enabled: bool,
+        response_format: Option<&serde_json::Value>,
     ) -> StreamOutcome {
         let tool_calls = Self::drain_pending(&mut acc.pending);
         let partial = Self::make_completion(
@@ -476,9 +495,10 @@ impl ChatClient {
         let usage_snapshot = acc.usage.clone();
         let msgs = drain_msgs.to_vec();
         let tools = drain_tools.to_vec();
+        let rf = response_format.cloned();
         tokio::spawn(async move {
             let _ = drain_self
-                .drain_usage_background(&msgs, &tools, usage_snapshot, tx, 30)
+                .drain_usage_background(&msgs, &tools, usage_snapshot, tx, 30, thinking_enabled, rf)
                 .await;
         });
         StreamOutcome::Cancelled {
@@ -539,6 +559,7 @@ impl ChatClient {
     /// session counter moves forward — the original turn's true breakdown is
     /// gone. Use the SSE `usage` chunk when available; drain is a last resort
     /// so interrupted turns record something rather than nothing.
+    #[allow(clippy::too_many_arguments)]
     async fn drain_usage_background(
         &self,
         messages: &[Value],
@@ -546,27 +567,29 @@ impl ChatClient {
         initial: Option<TokenUsage>,
         tx: tokio::sync::oneshot::Sender<Option<TokenUsage>>,
         timeout_secs: u64,
+        thinking_enabled: bool,
+        response_format: Option<serde_json::Value>,
     ) {
+        // Build a minimal non-streaming body inline — drain is the only
+        // path that doesn't go through `create_stream`.  `stream: false`
+        // and `max_tokens: 1` minimise cost for this usage-only request.
         let mut body = serde_json::json!({
-            "model": self.model, "messages": messages,
-            "max_tokens": 1, "stream": false,
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": 1,
+            "stream": false,
         });
-        if self.thinking_enabled {
+        if thinking_enabled {
             body["thinking"] = serde_json::json!({ "type": "enabled" });
+        }
+        if let Some(fmt) = &response_format {
+            body["response_format"] = fmt.clone();
         }
         if !tools.is_empty() {
             body["tools"] = Value::Array(tools.to_vec());
         }
-        let url = format!("{}/chat/completions", self.api_base);
         let drain = async {
-            let resp = self
-                .http
-                .post(&url)
-                .header("Authorization", format!("Bearer {}", self.api_key))
-                .json(&body)
-                .send()
-                .await
-                .ok()?;
+            let resp = self.send_chat_request(&body, None).await.ok()?;
             let json: Value = resp.json().await.ok()?;
             let u = json.get("usage")?;
             let hit = u
@@ -587,29 +610,6 @@ impl ChatClient {
         let _ = tx.send(final_usage);
     }
 
-    pub async fn complete_via_stream(
-        &mut self,
-        messages: &[LlmChatMessage],
-        tools: &[(String, String, Value)],
-        max_tokens: u32,
-        cancel: Option<Arc<AtomicBool>>,
-    ) -> Result<LlmCompletion, LlmError> {
-        match self
-            .create_stream(
-                messages,
-                tools,
-                max_tokens,
-                |_| {},
-                None::<fn(LlmToolCall)>,
-                cancel,
-            )
-            .await?
-        {
-            StreamOutcome::Complete(c) => Ok(c),
-            StreamOutcome::Cancelled { .. } => Err(LlmError::Cancelled),
-        }
-    }
-
     pub fn offline_complete(messages: &[LlmChatMessage]) -> LlmCompletion {
         let last_user = messages
             .iter()
@@ -624,6 +624,52 @@ impl ChatClient {
             reasoning_content: None,
             stop_reason: None,
         }
+    }
+
+    /// Shared HTTP transport for `/chat/completions`.
+    ///
+    /// `create_stream` and `drain_usage_background` both POST to the same
+    /// endpoint with the same auth — only the `Accept` header, `stream` flag,
+    /// and response processing differ. Error classification is handled here once.
+    async fn send_chat_request(
+        &self,
+        body: &serde_json::Value,
+        accept: Option<&str>,
+    ) -> Result<reqwest::Response, LlmError> {
+        let url = format!("{}/chat/completions", self.api_base);
+        let mut req = self
+            .http
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json");
+        if let Some(ct) = accept {
+            req = req.header("Accept", ct);
+        }
+
+        let resp = req
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| LlmError::Api(e.to_string()))?;
+
+        if resp.status().is_success() {
+            return Ok(resp);
+        }
+
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        let preview: String = text.chars().take(500).collect();
+
+        if status.as_u16() == 429 {
+            tracing::warn!(%status, body_preview = %preview, "chat_completion_rate_limited");
+            return Err(LlmError::RateLimited(text));
+        }
+        if status.as_u16() == 400 && text.to_lowercase().contains("maximum context length") {
+            tracing::warn!(%status, body_preview = %preview, "chat_completion_context_length_exceeded");
+            return Err(LlmError::ContextLengthExceeded { body: text });
+        }
+        tracing::warn!(%status, body_preview = %preview, "chat_completion_http_error");
+        Err(LlmError::Api(format!("HTTP {status}: {text}")))
     }
 
     /// Perform a web search via DeepSeek's `web_search_20250305` server-side tool.
@@ -969,7 +1015,15 @@ mod tests {
             reasoning_content: None,
         }];
         let outcome = client
-            .create_stream(&messages, &[], 64, |_| {}, None::<fn(LlmToolCall)>, None)
+            .create_stream(
+                &messages,
+                &[],
+                64,
+                ChatRequestOptions::default(),
+                |_| {},
+                None::<fn(LlmToolCall)>,
+                None,
+            )
             .await
             .expect("stream ok");
         match outcome {
@@ -1025,6 +1079,7 @@ mod tests {
                 &messages,
                 &[],
                 32,
+                ChatRequestOptions::default(),
                 move |_| {
                     cancel_on_event.store(true, Ordering::SeqCst);
                 },

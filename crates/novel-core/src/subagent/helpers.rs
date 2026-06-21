@@ -42,6 +42,26 @@ pub(crate) fn subagent_fork_tool_context(shared: &crate::EngineShared) -> ToolCo
         skills_dir: Some(shared.agent_skills_dir.clone()),
         global_api_config_path: Some(shared.global_config_path.clone()),
         on_read_cache_path_touched: None,
+        memory_fork_mode: false,
+    }
+}
+
+pub(crate) fn subagent_memory_fork_tool_context(shared: &crate::EngineShared) -> ToolContext {
+    ToolContext {
+        memory_fork_mode: true,
+        permission_mode: PermissionMode::Auto,
+        ..subagent_fork_tool_context(shared)
+    }
+}
+
+pub(crate) fn subagent_tool_context(
+    shared: &crate::EngineShared,
+    agent_type: AgentType,
+) -> ToolContext {
+    if agent_type == AgentType::MemoryExtractor {
+        subagent_memory_fork_tool_context(shared)
+    } else {
+        subagent_fork_tool_context(shared)
     }
 }
 

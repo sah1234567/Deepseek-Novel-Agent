@@ -1,5 +1,4 @@
 mod frozen;
-mod memory;
 mod progress;
 mod skills;
 
@@ -55,7 +54,7 @@ pub fn build_dynamic_context(
     DynamicContext {
         agents_md: agents_md.to_string(),
         knowledge_index: index.chars().take(2000).collect(),
-        memory: memory::load_memory(project_root, 4096),
+        memory: novel_memory::load_memory(project_root, 4096),
         progress: progress::load_progress(project_root, session_id, db),
         skill_summaries,
         workspace_path: project_root
@@ -75,9 +74,9 @@ mod tests {
         format_activated_skill_block(project_root, agent_skills_dir, invoked_skill_ids, &[])
     }
     use super::frozen::FrozenStaticContext;
-    use super::memory::load_memory;
     use super::skills::{dedupe_reference_paths, dedupe_skill_ids};
     use super::*;
+    use novel_memory::load_memory;
     use tempfile::TempDir;
 
     #[test]
@@ -87,12 +86,14 @@ mod tests {
     }
 
     #[test]
-    fn load_memory_reads_index_and_body() {
+    fn load_memory_reads_memory_in_subdir() {
         let tmp = TempDir::new().expect("tmp");
         let mem = tmp.path().join("memory");
-        std::fs::create_dir_all(&mem).expect("dir");
-        std::fs::write(mem.join("MEMORY.md"), "[hero]\n").expect("w");
-        std::fs::write(mem.join("hero.md"), "bio").expect("w");
+        let guard_dir = mem.join("character_guardrails");
+        std::fs::create_dir_all(&guard_dir).expect("dir");
+        let content =
+            "---\nname: hero\ndescription: 主角设定\nchapter: Ch1\nstatus: active\n---\n\nbio";
+        std::fs::write(guard_dir.join("hero.md"), content).expect("w");
         let out = load_memory(tmp.path(), 4096);
         assert!(out.contains("hero"));
         assert!(out.contains("bio"));

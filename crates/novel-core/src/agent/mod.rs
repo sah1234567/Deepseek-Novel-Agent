@@ -20,6 +20,8 @@ pub enum AgentType {
     KnowledgeAuditor,
     ChapterCraftAnalyzer,
     GeneralPurpose,
+    /// 后台 extractMemories（非 ForkSubAgent 可选类型）
+    MemoryExtractor,
 }
 
 impl std::fmt::Display for AgentType {
@@ -40,6 +42,9 @@ pub struct AgentDefinition {
 
 impl AgentType {
     pub fn definition(self) -> AgentDefinition {
+        if self == AgentType::MemoryExtractor {
+            return catalog::memory_extractor_definition();
+        }
         catalog::catalog_entry(self).to_definition()
     }
 

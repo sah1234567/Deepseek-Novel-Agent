@@ -106,6 +106,38 @@ pub enum ContentBlockKind {
     ToolCall,
 }
 
+/// Per-request overrides for [`crate::ChatClient::create_stream`].
+///
+/// Unset fields fall back to the client's defaults (model, thinking_enabled).
+/// This keeps the client as the long-lived profile while allowing per-call
+/// adjustments (e.g. memory side-query force-disables thinking and passes
+/// a `response_format` schema).
+#[derive(Debug, Clone, Default)]
+pub struct ChatRequestOptions {
+    /// `None` → use `ChatClient::thinking_enabled`.
+    pub thinking: Option<bool>,
+    /// Structured output schema (e.g. memory selector JSON schema).
+    /// Main turn / subagent / compaction do not use this.
+    pub response_format: Option<serde_json::Value>,
+}
+
+impl ChatRequestOptions {
+    /// Convenience constructor for memory side-queries: always disables
+    /// thinking (defensive — even if the flash client was misconfigured)
+    /// and attaches the JSON schema for structured output.
+    pub fn for_memory_side_query(response_format: Option<serde_json::Value>) -> Self {
+        Self {
+            thinking: Some(false),
+            response_format,
+        }
+    }
+
+    /// Resolve the effective thinking flag for this request.
+    pub(crate) fn resolve_thinking(&self, client: &crate::ChatClient) -> bool {
+        self.thinking.unwrap_or(client.thinking_enabled)
+    }
+}
+
 /// A single web search result from DeepSeek's `web_search_20250305` server-side tool.
 #[derive(Debug, Clone, Serialize)]
 pub struct WebSearchResult {

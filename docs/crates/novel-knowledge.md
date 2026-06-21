@@ -107,3 +107,7 @@ memory/                   ← 跨 session 记忆（Agent Write 维护）
 ### 1.8 INDEX
 
 `knowledge/INDEX.md` 由 `rebuild_index` 维护，注入 system prompt 与 compaction refresh。当前扫描 `characters/`、`plot/`、`shared-systems/`，以及 `worlds/` 子目录下的所有世界。
+
+### 1.9 记忆类型（Memory Types）
+
+全部记忆逻辑（类型定义、文件扫描、选择、提取、预取、fork 守卫）在 [`novel-memory`](novel-memory.md) 中自包含，**不依赖** `novel-knowledge`。此前共用的三个组件（`parse_frontmatter`、`truncate_bytes_utf8`、`KnowledgeStore`）已内联或替换为 `std::fs`。

@@ -4,6 +4,7 @@ use novel_knowledge::{
     derive_character_snapshot, derive_foreshadow_categories, derive_relation_cross_index,
     rebuild_index, KnowledgeStore,
 };
+use novel_memory::{memory_header, scan_memory_files, MemoryType};
 use serde_json::{json, Value};
 
 pub struct KnowledgeDeriveTool;
@@ -50,6 +51,67 @@ pub(crate) fn rebuild_knowledge_index_op(store: &KnowledgeStore) -> Result<ToolO
     })
 }
 
+pub(crate) fn stale_memory_check_op(store: &KnowledgeStore) -> Result<ToolOutput, ToolError> {
+    let memory_dir = store.root.join("memory");
+    let headers = scan_memory_files(&memory_dir);
+
+    // Only check plot_decision and character_guardrail types for staleness
+    let checkable: Vec<_> = headers
+        .iter()
+        .filter(|h| {
+            h.memory_type == MemoryType::PlotDecision
+                || h.memory_type == MemoryType::CharacterGuardrail
+        })
+        .collect();
+
+    if checkable.is_empty() {
+        return Ok(ToolOutput {
+            content: "No plot_decision or character_guardrail memories to check.".into(),
+            is_error: false,
+        });
+    }
+
+    // Read INDEX.md to estimate current chapter
+    let current_chapter = store
+        .read_file("knowledge/INDEX.md")
+        .ok()
+        .and_then(|idx| {
+            // Count chapter-NNN.md references in index
+            let count = idx
+                .lines()
+                .filter(|l| l.contains("chapter-") && l.ends_with(".md"))
+                .count();
+            if count > 0 {
+                Some(count as u32)
+            } else {
+                None
+            }
+        })
+        .unwrap_or(0);
+
+    let mut report = String::from("## Stale Memory Check\n\n");
+    report.push_str(&format!("Current chapter estimate: {current_chapter}\n\n"));
+
+    let mut stale_count = 0;
+    for h in &checkable {
+        let header = memory_header(&h.rel_path, &h.frontmatter.chapter, current_chapter);
+        report.push_str(&format!("- {header}\n"));
+        if header.contains("距当前") {
+            stale_count += 1;
+        }
+    }
+
+    report.push_str(&format!(
+        "\n{stale_count} memory file(s) may be stale (>20 chapters old).\n"
+    ));
+    report.push_str("\nReview these memories and mark deprecated if no longer applicable.");
+
+    Ok(ToolOutput {
+        content: report,
+        is_error: false,
+    })
+}
+
 pub(crate) fn run_knowledge_derive_op(
     store: &KnowledgeStore,
     operation: &str,
@@ -60,6 +122,7 @@ pub(crate) fn run_knowledge_derive_op(
         "foreshadow_categories" => derive_foreshadow_categories_op(store),
         "relation_index" => derive_relation_index_op(store),
         "rebuild_index" => rebuild_knowledge_index_op(store),
+        "stale_memory_check" => stale_memory_check_op(store),
         _ => Err(ToolError::Execution(format!(
             "unknown operation: {operation}"
         ))),
@@ -72,7 +135,7 @@ impl Tool for KnowledgeDeriveTool {
         "KnowledgeDerive"
     }
     fn description(&self) -> &str {
-        "Derive snapshots, foreshadow categories, relation index, or rebuild INDEX.md"
+        "Derive snapshots, foreshadow categories, relation index, rebuild INDEX.md, or check stale memories"
     }
     fn input_schema(&self) -> Value {
         json!({
@@ -80,7 +143,7 @@ impl Tool for KnowledgeDeriveTool {
             "properties": {
                 "operation": {
                     "type": "string",
-                    "enum": ["character_snapshot", "foreshadow_categories", "relation_index", "rebuild_index"]
+                    "enum": ["character_snapshot", "foreshadow_categories", "relation_index", "rebuild_index", "stale_memory_check"]
                 },
                 "character_path": {"type": "string", "description": "Relative path for characterSnapshot, e.g. knowledge/characters/林若烟.md"}
             },

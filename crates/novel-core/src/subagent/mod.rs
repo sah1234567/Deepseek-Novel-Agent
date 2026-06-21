@@ -4,11 +4,13 @@ mod fork_setup;
 pub(crate) mod fork_transcript;
 mod helpers;
 mod llm_turn;
+mod memory_extractor;
 mod overflow;
 mod react;
 mod runner;
 
 pub use fork_setup::{build_fork_child, ForkError, ForkedAgentContext};
+pub use memory_extractor::spawn_memory_extraction;
 pub use runner::run_subagent_job;
 
 use crate::engine::session_llm::read_session_llm;
@@ -21,8 +23,12 @@ use tokio::sync::mpsc;
 
 #[derive(Debug, Clone)]
 pub enum SubagentJobKind {
-    ToolFork { parent_tool_call_id: String },
+    ToolFork {
+        parent_tool_call_id: String,
+    },
     HookAuditor,
+    /// Background extractMemories (no UI overlay, no parent report injection).
+    MemoryExtraction,
 }
 
 #[derive(Debug, Clone)]

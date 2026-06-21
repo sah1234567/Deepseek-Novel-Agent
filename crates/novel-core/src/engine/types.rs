@@ -141,6 +141,12 @@ pub struct AgentEngine {
     pub(crate) has_interruptible_tool_in_progress: bool,
     /// Main-session LLM client; built via `session_llm::build_chat_client` / `init_llm`.
     pub(crate) llm: Option<ChatClient>,
+    /// Lightweight V4 Flash client for memory relevance selection (sideQuery).
+    pub(crate) memory_selector: Option<ChatClient>,
+    /// In-flight memory prefetch handle; set at turn start, consumed at turn end.
+    pub(crate) memory_prefetch: Option<novel_memory::MemoryPrefetch>,
+    /// Background memory extraction state machine (cursor, guards, coalescing).
+    pub(crate) memory_extractor: Arc<novel_memory::MemoryExtractor>,
     pub(crate) invoked_skill_ids: Vec<String>,
     pub(crate) read_skill_reference_paths: Vec<String>,
     pub(crate) last_chapter_written: Option<String>,

@@ -148,7 +148,7 @@ impl Tool for EditTool {
                 content.replacen(&old_string, &new_string, 1)
             };
 
-            blocking::write(full.clone(), updated.clone()).await?;
+            blocking::write_for_rel_path(&path, full.clone(), updated.clone()).await?;
 
             let mtime = tokio::fs::metadata(&full)
                 .await

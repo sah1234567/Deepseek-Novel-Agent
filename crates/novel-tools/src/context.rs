@@ -93,6 +93,8 @@ pub struct ToolContext {
     pub global_api_config_path: Option<PathBuf>,
     /// Optional hook when a path's cache entry changes (novel-core wires dirty-path tracking).
     pub on_read_cache_path_touched: Option<Arc<dyn Fn(PathBuf) + Send + Sync>>,
+    /// Memory-extraction fork: allow Write/Edit only under `memory/` (see `novel_memory::guard`).
+    pub memory_fork_mode: bool,
 }
 
 impl ToolContext {
@@ -118,6 +120,7 @@ impl ToolContext {
             skills_dir: None,
             global_api_config_path: None,
             on_read_cache_path_touched: None,
+            memory_fork_mode: false,
         }
     }
 
@@ -142,6 +145,7 @@ impl ToolContext {
             skills_dir: None,
             global_api_config_path: None,
             on_read_cache_path_touched: None,
+            memory_fork_mode: false,
         }
     }
 

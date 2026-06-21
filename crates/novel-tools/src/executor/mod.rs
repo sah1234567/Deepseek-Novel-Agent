@@ -50,7 +50,7 @@ impl ToolExecutor {
         tool.validate_input(&call.input)?;
         let mut ctx = ctx.clone();
         ctx.current_tool_call_id = Some(call.id.clone());
-        if let Some(reason) = crate::subagent_mutator_gate(&call.name, &ctx) {
+        if let Some(reason) = crate::subagent_mutator_gate(&call.name, &ctx, Some(&call.input)) {
             tracing::debug!(tool = %call.name, "subagent_mutator_denied");
             return Err(ToolError::PermissionDenied(reason));
         }

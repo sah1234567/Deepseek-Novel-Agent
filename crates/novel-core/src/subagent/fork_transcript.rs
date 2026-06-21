@@ -24,6 +24,9 @@ pub fn persist_fork_message(
     run_id: &str,
     msg: &ChatMessage,
 ) -> Result<(), AgentError> {
+    if run_id.is_empty() {
+        return Ok(());
+    }
     db.insert_fork_message(run_id, &msg.role, &chat_to_json(msg))
         .map_err(AgentError::State)?;
     Ok(())

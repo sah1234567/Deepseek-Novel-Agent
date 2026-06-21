@@ -14,7 +14,7 @@ use crate::message::{
     chat_slice_to_compaction, chat_to_compaction, compaction_slice_to_chat, to_llm_messages,
 };
 use crate::{AgentEngine, AgentError, CompactionAction, Event};
-use novel_deepseek::{LlmChatMessage, LlmError};
+use novel_deepseek::{ChatRequestOptions, LlmChatMessage, StreamOutcome};
 use novel_logging::LogEvent;
 use tokio::sync::mpsc;
 
@@ -67,10 +67,18 @@ impl AgentEngine {
 
         let cancel = Some(self.shared.abort_controller.cancel_flag());
         match llm
-            .complete_via_stream(&llm_msgs, &[], max_output_tokens, cancel)
+            .create_stream(
+                &llm_msgs,
+                &[],
+                max_output_tokens,
+                ChatRequestOptions::default(),
+                |_| {},
+                None::<fn(novel_deepseek::LlmToolCall)>,
+                cancel,
+            )
             .await
         {
-            Ok(completion) => {
+            Ok(StreamOutcome::Complete(completion)) => {
                 if let Some(u) = &completion.usage {
                     let snap = read_session_llm(&self.shared);
                     apply_session_usage(&self.shared, u, &snap, event_tx, false);
@@ -81,7 +89,7 @@ impl AgentEngine {
                     .map(|c| truncate_summary(&c, max_chars))
                     .unwrap_or_else(fallback)
             }
-            Err(LlmError::Cancelled) => fallback(),
+            Ok(StreamOutcome::Cancelled { .. }) => fallback(),
             Err(_) => fallback(),
         }
     }

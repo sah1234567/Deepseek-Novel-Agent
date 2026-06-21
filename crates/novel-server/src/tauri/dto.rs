@@ -210,6 +210,17 @@ pub fn stored_messages_to_ui(stored: &[StoredMessage]) -> Vec<UiMessage> {
     stored
         .iter()
         .filter(|m| m.role == "user" || m.role == "assistant" || m.role == "tool")
+        .filter(|m| {
+            // Defence-in-depth: memory attachment messages have display_content
+            // set to empty.  If one leaks through compaction, skip it so the
+            // frontend never renders raw memory content in a user bubble.
+            if m.role == "user" {
+                let display_text = novel_core::stored_message_display_text(&m.content_json);
+                !display_text.is_empty()
+            } else {
+                true
+            }
+        })
         .map(|m| {
             let fork_run_id = m
                 .content_json

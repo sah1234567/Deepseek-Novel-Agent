@@ -288,6 +288,7 @@ impl AgentEngine {
                 messages,
                 tools,
                 self.shared.settings.model.max_output_tokens,
+                novel_deepseek::ChatRequestOptions::default(),
                 move |ev: StreamEvent| {
                     if let Some(ref tx) = tx {
                         forward_main_stream_event(tx, audit.as_deref(), ev);

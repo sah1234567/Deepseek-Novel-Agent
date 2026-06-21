@@ -26,6 +26,16 @@ impl AgentEngine {
         self.sync_session_llm_from_llm();
     }
 
+    /// Initialize the memory selector (V4 Flash) client from global config.
+    /// No-op if already set. Uses the same API key source as the main LLM.
+    fn init_memory_selector(&mut self) {
+        if self.memory_selector.is_some() {
+            return;
+        }
+        self.memory_selector =
+            novel_memory::create_selector_from_config(&self.shared.global_config_path);
+    }
+
     // ── Main agent turn ───────────────────────────────────────
 
     pub async fn handle_message_with_events(
@@ -152,10 +162,110 @@ impl AgentEngine {
 
         self.init_llm();
 
+        // ── Memory prefetch (async, parallel to LLM streaming) ──
+        self.init_memory_selector();
+
+        // Guard 1: very short prompts lack enough context for meaningful
+        // memory selection.  Uses a CJK/ASCII-aware word-count estimator so
+        // "写第5章"(4) and "write ch 5"(3) both pass, while "好"(1) and
+        // "hello"(1) are skipped.
+        let word_count = novel_memory::estimated_word_count(&author_content);
+        let skip_short_prompt =
+            word_count < novel_memory::MemoryConstants::MEMORY_PREFETCH_MIN_WORDS;
+
+        // Guard 2: honour the per-session memory budget so long-running
+        // sessions don't keep piling on memory attachments.
+        let memory_dir = self.shared.session.project_root.join("memory");
+        let message_contents: Vec<&str> =
+            self.messages.iter().map(|m| m.content.as_str()).collect();
+        let surfaced_paths = novel_memory::MemoryPrefetch::collect_surfaced_paths(message_contents);
+        let surfaced_bytes =
+            novel_memory::MemoryPrefetch::count_surfaced_bytes(&surfaced_paths, &memory_dir);
+        let skip_budget_exceeded =
+            surfaced_bytes >= novel_memory::MemoryConstants::MAX_SESSION_BYTES;
+
+        if skip_short_prompt || skip_budget_exceeded {
+            tracing::debug!(
+                word_count,
+                surfaced_bytes,
+                skip_short_prompt,
+                skip_budget_exceeded,
+                "memory_prefetch_skipped"
+            );
+            self.memory_prefetch = None;
+        } else {
+            self.memory_prefetch = Some(novel_memory::MemoryPrefetch::start(
+                self.memory_selector.clone(),
+                author_content.clone(),
+                memory_dir,
+                surfaced_paths,
+            ));
+        }
+
         self.reset_tool_failure_circuit();
         let max_react = self.shared.settings.agent.max_react_loops;
         let mut turn_ctx = TurnContext::new(max_react);
         let reason = self.run_inner_turn_loop(&mut turn_ctx, event_tx).await?;
+
+        // ── Consume memory prefetch results ──
+        if let Some(prefetch) = self.memory_prefetch.take() {
+            let surfaced = prefetch.consume().await;
+            if !surfaced.is_empty() {
+                for memory in &surfaced {
+                    let attachment = novel_memory::MemoryPrefetch::format_attachment(memory);
+                    let meta_msg = ChatMessage {
+                        role: "user".into(),
+                        content: attachment,
+                        tool_call_id: None,
+                        tool_calls: None,
+                        reasoning_content: None,
+                        // display_content set to empty so the frontend never
+                        // renders raw memory content — this is a defense-in-depth
+                        // measure alongside compaction's is_user_turn_start exclusion.
+                        display_content: Some(String::new()),
+                    };
+                    self.messages.push(meta_msg);
+                }
+                tracing::debug!(count = surfaced.len(), "memory_prefetch_injected");
+            }
+        }
+
+        // ── Memory extraction: fire-and-forget background task ──
+        if reason == TerminalReason::Completed {
+            let cursor = self.memory_extractor.cursor();
+            let extraction_ctx = novel_memory::ExtractionContext {
+                message_count: self.messages.len(),
+                project_root: self.shared.session.project_root.clone(),
+                main_agent_wrote_memory: {
+                    let tool_calls: Vec<(&str, &serde_json::Value)> = self
+                        .messages
+                        .iter()
+                        .skip(cursor)
+                        .filter_map(|msg| msg.tool_calls.as_ref())
+                        .flat_map(|tcs| tcs.iter())
+                        .map(|tc| (tc.name.as_str(), &tc.arguments))
+                        .collect();
+                    novel_memory::has_memory_writes_since(tool_calls)
+                },
+            };
+            if let Some(prepared) = self
+                .memory_extractor
+                .try_prepare_extraction(&extraction_ctx)
+            {
+                self.sync_session_llm_from_llm();
+                let llm_snap = crate::engine::session_llm::read_session_llm(&self.shared);
+                let recent = self.messages[cursor..].to_vec();
+                let all_messages = Arc::new(self.messages.clone());
+                crate::subagent::spawn_memory_extraction(
+                    self.shared.clone(),
+                    Arc::clone(&self.memory_extractor),
+                    prepared,
+                    recent,
+                    llm_snap,
+                    all_messages,
+                );
+            }
+        }
 
         tracing::info!(turn = self.turn_number, ?reason, "turn_complete");
         tracing::debug!(

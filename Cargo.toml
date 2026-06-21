@@ -5,6 +5,7 @@ members = [
     "crates/novel-logging",
     "crates/novel-state",
     "crates/novel-knowledge",
+    "crates/novel-memory",
     "crates/novel-skills",
     "crates/novel-tools",
     "crates/novel-compaction",

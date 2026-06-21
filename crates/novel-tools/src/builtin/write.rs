@@ -72,7 +72,7 @@ impl Tool for WriteTool {
             if let Some(parent) = full.parent() {
                 blocking::create_dir_all(parent.to_path_buf()).await?;
             }
-            blocking::write(full.clone(), content.clone()).await?;
+            blocking::write_for_rel_path(&path, full.clone(), content.clone()).await?;
 
             let mtime = tokio::fs::metadata(&full)
                 .await

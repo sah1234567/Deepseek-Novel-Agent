@@ -40,9 +40,17 @@ mod tests {
             .join("knowledge/characters/_template.md")
             .exists());
         assert!(tmp.path().join("AGENTS.md").exists());
-        assert!(tmp.path().join("memory/MEMORY.md").exists());
-        assert!(tmp.path().join("memory/genre.md").exists());
-        assert!(tmp.path().join("memory/decisions.md").exists());
+        assert!(tmp.path().join("memory/style/_template.md").exists());
+        assert!(tmp
+            .path()
+            .join("memory/plot_decisions/_template.md")
+            .exists());
+        assert!(tmp
+            .path()
+            .join("memory/character_guardrails/_template.md")
+            .exists());
+        assert!(tmp.path().join("memory/feedback/_template.md").exists());
+        assert!(tmp.path().join("memory/references/_template.md").exists());
         assert!(tmp.path().join("knowledge/plot/大纲.md").exists());
         assert!(!tmp.path().join("plot").exists());
         assert!(!tmp.path().join("shared-systems").exists());

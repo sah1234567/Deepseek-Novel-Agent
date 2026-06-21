@@ -10,7 +10,8 @@
 use super::{AgentDefinition, AgentType};
 use novel_config::{
     CHAPTER_CRAFT_ANALYZER_MAX_REACT_LOOPS, GENERAL_PURPOSE_MAX_REACT_LOOPS,
-    KNOWLEDGE_AUDITOR_MAX_REACT_LOOPS_DEFAULT, PLAN_AUDITOR_MAX_REACT_LOOPS,
+    KNOWLEDGE_AUDITOR_MAX_REACT_LOOPS_DEFAULT, MEMORY_EXTRACTOR_MAX_REACT_LOOPS,
+    PLAN_AUDITOR_MAX_REACT_LOOPS,
 };
 
 /// One forkable sub-agent row in the catalog.
@@ -142,6 +143,21 @@ pub fn catalog_entry(agent_type: AgentType) -> &'static ForkAgentCatalogEntry {
         .unwrap_or_else(|| panic!("missing catalog entry for {agent_type:?}"))
 }
 
+/// Internal-only agent for background memory extraction (not in [`FORK_AGENT_CATALOG`]).
+pub fn memory_extractor_definition() -> AgentDefinition {
+    AgentDefinition {
+        agent_type: AgentType::MemoryExtractor,
+        name: "memory-extractor".into(),
+        when_to_use: "后台自动从近期对话提取作品记忆（内部）".into(),
+        system_prompt: String::new(), // prompt lives in prompt/memory/extraction-task.md
+        max_react_loops: MEMORY_EXTRACTOR_MAX_REACT_LOOPS,
+        tools: ["Read", "Grep", "Glob", "Write", "Edit"]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+    }
+}
+
 pub fn fallback_prompt(agent_type: AgentType) -> &'static str {
     catalog_entry(agent_type).fallback_prompt
 }
@@ -156,6 +172,7 @@ pub fn system_prompt(agent_type: AgentType) -> &'static str {
             include_str!("../../../../prompt/agents/chapter-craft-analyzer.md")
         }
         AgentType::GeneralPurpose => include_str!("../../../../prompt/agents/general_purpose.md"),
+        AgentType::MemoryExtractor => "", // prompt lives in prompt/memory/extraction-task.md
     }
 }
 

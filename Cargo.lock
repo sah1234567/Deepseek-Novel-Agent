@@ -2306,6 +2306,7 @@ dependencies = [
  "novel-deepseek",
  "novel-knowledge",
  "novel-logging",
+ "novel-memory",
  "novel-skills",
  "novel-state",
  "novel-tools",
@@ -2384,6 +2385,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "novel-memory"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "novel-config",
+ "novel-deepseek",
+ "rstest",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "novel-server"
 version = "0.1.0"
 dependencies = [
@@ -2449,6 +2466,7 @@ dependencies = [
  "novel-config",
  "novel-deepseek",
  "novel-knowledge",
+ "novel-memory",
  "novel-skills",
  "novel-state",
  "regex",

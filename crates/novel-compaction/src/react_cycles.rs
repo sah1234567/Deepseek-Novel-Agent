@@ -2,6 +2,11 @@ use crate::message_types::CompactionMessage;
 
 pub const CONTEXT_REFRESH_USER_PREFIX: &str = "[上下文刷新]";
 
+/// Prefix of memory attachment messages injected after prefetch (see
+/// `novel_memory::MemoryPrefetch::format_attachment`).  These must never
+/// start a user turn boundary, and must never be surfaced to the UI.
+pub const MEMORY_ATTACHMENT_PREFIX: &str = "Memory (记录于 ";
+
 /// System-injected user messages that must not start a user turn boundary.
 pub fn is_user_turn_start(msg: &CompactionMessage) -> bool {
     if msg.role != "user" {
@@ -12,6 +17,7 @@ pub fn is_user_turn_start(msg: &CompactionMessage) -> bool {
         || c.starts_with("[压缩]")
         || c.starts_with("[Request interrupted")
         || c.starts_with("[子 Agent")
+        || c.starts_with(MEMORY_ATTACHMENT_PREFIX)
     {
         return false;
     }

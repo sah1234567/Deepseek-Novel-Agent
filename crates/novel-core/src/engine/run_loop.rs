@@ -62,6 +62,7 @@ impl AgentEngine {
             on_read_cache_path_touched: Some(crate::read_cache::sync::read_cache_touch_callback(
                 &self.shared.read_cache_dirty_paths,
             )),
+            memory_fork_mode: false,
         }
     }
 

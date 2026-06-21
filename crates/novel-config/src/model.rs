@@ -24,6 +24,27 @@ fn default_thinking() -> bool {
     true
 }
 
+impl ModelConfig {
+    /// Memory relevance selector configuration.
+    ///
+    /// Uses V4 Flash (not V4 Pro) because:
+    /// - Classification task, not generation — no reasoning needed
+    /// - 256 token output limit — cost is negligible
+    /// - No thinking — latency <1s, hidden within main model's streaming delay
+    /// - 128K context window is far more than the ~2K tokens actually used
+    pub fn memory_selector() -> Self {
+        Self {
+            provider: Provider::Deepseek,
+            model: "deepseek-v4-flash".into(),
+            api_base: "https://api.deepseek.com/v1".into(),
+            context_window_size: 128_000,
+            compaction_threshold: 0.0, // never compact
+            max_output_tokens: 256,    // 256 tokens ≈ 5 filenames × 50 chars
+            thinking_enabled: false,   // classification doesn't need reasoning
+        }
+    }
+}
+
 impl Default for ModelConfig {
     fn default() -> Self {
         Self {

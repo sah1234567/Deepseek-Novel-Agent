@@ -7,7 +7,7 @@ use crate::interrupt::finalize::{
 };
 use crate::message::assistant_from_completion;
 use crate::subagent::helpers::fork_child_push;
-use crate::subagent::helpers::{forward_subagent_stream_event, subagent_fork_tool_context};
+use crate::subagent::helpers::{forward_subagent_stream_event, subagent_tool_context};
 use crate::subagent::overflow::{
     build_partial_report, task_preview_120, OVERFLOW_KIND_INPUT_REJECTED,
     OVERFLOW_KIND_OUTPUT_TRUNCATED,
@@ -15,8 +15,8 @@ use crate::subagent::overflow::{
 use crate::turn::StreamingToolDispatch;
 use crate::{AgentError, AgentType, ChatMessage, Event};
 use novel_deepseek::{
-    is_context_length_exceeded, is_output_truncated, ChatClient, LlmChatMessage, LlmCompletion,
-    LlmToolCall, StreamEvent, StreamOutcome,
+    is_context_length_exceeded, is_output_truncated, ChatClient, ChatRequestOptions,
+    LlmChatMessage, LlmCompletion, LlmToolCall, StreamEvent, StreamOutcome,
 };
 use std::sync::{Arc, Mutex};
 
@@ -44,7 +44,7 @@ pub(crate) async fn fetch_subagent_llm_completion(
     message_snapshot: &[ChatMessage],
     inner_turn: u32,
 ) -> Result<SubagentLlmFetch, AgentError> {
-    let fork_ctx = subagent_fork_tool_context(shared);
+    let fork_ctx = subagent_tool_context(shared, agent_type);
     if let Some(client) = llm {
         let cancel_flag = shared.abort_controller.cancel_flag();
         let (abort_tx, abort_rx) = novel_tools::abort_channel();
@@ -72,6 +72,7 @@ pub(crate) async fn fetch_subagent_llm_completion(
                 llm_msgs,
                 active_schemas,
                 shared.settings.model.max_output_tokens,
+                ChatRequestOptions::default(),
                 move |ev: StreamEvent| {
                     if let Some(ref tx) = event_tx_stream {
                         forward_subagent_stream_event(&subs_stream, tx, &fork_run_id_stream, ev);

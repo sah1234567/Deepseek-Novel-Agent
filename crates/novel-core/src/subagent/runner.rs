@@ -28,40 +28,58 @@ pub async fn run_subagent_job(
     llm_snap: SessionLlmSnapshot,
     event_tx: Option<mpsc::UnboundedSender<Event>>,
 ) -> Result<String, AgentError> {
+    run_subagent_job_with_child(shared, job, fork_run_id, llm_snap, event_tx, None).await
+}
+
+/// Like [`run_subagent_job`] but allows a pre-built child (e.g. memory extraction + recent messages).
+pub(crate) async fn run_subagent_job_with_child(
+    shared: crate::EngineShared,
+    job: SubagentJob,
+    fork_run_id: String,
+    llm_snap: SessionLlmSnapshot,
+    event_tx: Option<mpsc::UnboundedSender<Event>>,
+    prebuilt_child: Option<crate::ForkedAgentContext>,
+) -> Result<String, AgentError> {
     let agent_type = job.agent_type;
     let task = job.task;
+    let silent = matches!(job.kind, SubagentJobKind::MemoryExtraction);
     let parent_tool_call_id = match job.kind {
         SubagentJobKind::ToolFork {
             parent_tool_call_id,
         } => Some(parent_tool_call_id),
-        SubagentJobKind::HookAuditor => None,
+        SubagentJobKind::HookAuditor | SubagentJobKind::MemoryExtraction => None,
     };
     tracing::debug!(
         session_id = %shared.session.id,
         ?agent_type,
         task_len = task.len(),
+        silent,
         "subagent_job_start"
     );
     let mut llm = build_chat_client(&llm_snap, &shared.global_config_path);
-    let mut child = build_fork_child(&shared, agent_type, task.clone())?;
+    let mut child = match prebuilt_child {
+        Some(c) => c,
+        None => build_fork_child(&shared, agent_type, task.clone())?,
+    };
 
-    let task_preview = truncate_chars(&task, 80);
-    if let Some(tx) = event_tx.as_ref() {
-        let _ = tx.send(Event::SubAgentStarted {
-            fork_run_id: fork_run_id.clone(),
-            agent_id: agent_type.to_string(),
-            agent_type: agent_type.to_string(),
-            task_preview,
-            parent_tool_call_id: parent_tool_call_id.clone(),
-        });
+    if !silent {
+        let task_preview = truncate_chars(&task, 80);
+        if let Some(tx) = event_tx.as_ref() {
+            let _ = tx.send(Event::SubAgentStarted {
+                fork_run_id: fork_run_id.clone(),
+                agent_id: agent_type.to_string(),
+                agent_type: agent_type.to_string(),
+                task_preview,
+                parent_tool_call_id: parent_tool_call_id.clone(),
+            });
+        }
+        crate::subagent::fork_transcript::persist_fork_message(
+            &shared.session.db,
+            &fork_run_id,
+            &child.fork.task_message,
+        )?;
     }
-    crate::subagent::fork_transcript::persist_fork_message(
-        &shared.session.db,
-        &fork_run_id,
-        &child.fork.task_message,
-    )?;
 
-    // Same tool schemas as main agent (DeepSeek tools-prefix KV cache).
     let schemas = main_tool_schemas(&shared.registry);
     let max_react_loops = child.fork.max_react_loops;
 
@@ -75,7 +93,7 @@ pub async fn run_subagent_job(
         &schemas,
         &mut child,
         max_react_loops,
-        event_tx.as_ref(),
+        if silent { None } else { event_tx.as_ref() },
     )
     .await
 }
@@ -247,7 +265,7 @@ async fn subagent_apply_completion_tools(
         );
     }
 
-    let fork_ctx = crate::subagent::helpers::subagent_fork_tool_context(shared);
+    let fork_ctx = crate::subagent::helpers::subagent_tool_context(shared, agent_type);
     let results = execute_subagent_tool_batch(
         &shared.registry,
         &fork_ctx,
@@ -401,16 +419,18 @@ async fn subagent_run_react_loop(
         max_react_loops,
     );
 
-    // Decrement sub-agent count
+    // Decrement sub-agent count (paired with `sub_agent_inc` at spawn site).
     shared.sub_agent_dec();
 
-    if let Some(tx) = event_tx {
-        let _ = tx.send(Event::SubAgentComplete {
-            fork_run_id: fork_run_id.to_string(),
-            agent_id: agent_type.to_string(),
-            output: output.clone(),
-            cache_hit_rate: 0.0,
-        });
+    if agent_type != AgentType::MemoryExtractor {
+        if let Some(tx) = event_tx {
+            let _ = tx.send(Event::SubAgentComplete {
+                fork_run_id: fork_run_id.to_string(),
+                agent_id: agent_type.to_string(),
+                output: output.clone(),
+                cache_hit_rate: 0.0,
+            });
+        }
     }
 
     tracing::debug!(

@@ -69,6 +69,7 @@ async fn drain_after_interrupt_returns_three_class_tokens() {
             &messages,
             &[],
             512,
+            novel_deepseek::ChatRequestOptions::default(),
             |_: StreamEvent| {},                     // drop stream events
             None::<fn(novel_deepseek::LlmToolCall)>, // no tool callback
             Some(Arc::clone(&cancel)),
@@ -152,6 +153,7 @@ async fn drain_with_thinking_returns_three_class_tokens() {
             &messages,
             &[],
             256,
+            novel_deepseek::ChatRequestOptions::default(),
             |_: StreamEvent| {},
             None::<fn(novel_deepseek::LlmToolCall)>,
             Some(Arc::clone(&cancel)),
