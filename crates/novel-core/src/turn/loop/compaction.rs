@@ -71,11 +71,13 @@ impl AgentEngine {
             .create_stream(
                 &llm_msgs,
                 &[],
-                max_output_tokens,
-                ChatRequestOptions::default(),
+                novel_deepseek::ChatStreamConfig {
+                    max_tokens: max_output_tokens,
+                    options: ChatRequestOptions::default(),
+                    cancel,
+                },
                 |_| {},
                 None::<fn(novel_deepseek::LlmToolCall)>,
-                cancel,
             )
             .await
         {

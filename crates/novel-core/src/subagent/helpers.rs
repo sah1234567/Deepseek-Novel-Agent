@@ -3,10 +3,9 @@
 use crate::agent::merge_tool_always_allow;
 use crate::fork_stream_subs::{try_send_fork_overlay_event, ForkStreamSubscriptions};
 use crate::message::{parse_tool_call_input, tool_result_message};
-use crate::turn::TurnContext;
+use crate::subagent::params::SubagentToolResultsParams;
 use crate::turn::{format_tool, StreamingToolDispatch};
 use crate::{AgentError, AgentType, ChatMessage, Event};
-use novel_deepseek::LlmCompletion;
 use novel_deepseek::{LlmToolCall, StreamEvent};
 use novel_tools::{PermissionMode, StreamingToolExecutor, ToolCallSpec, ToolContext, ToolRegistry};
 use std::sync::{Arc, Mutex};
@@ -189,23 +188,23 @@ pub(crate) async fn execute_subagent_tool_batch(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn subagent_push_tool_results(
-    registry: &novel_tools::ToolRegistry,
-    db: &novel_state::Database,
-    fork_run_id: &str,
     child_messages: &mut Vec<ChatMessage>,
-    agent_type: AgentType,
-    turn_ctx: &TurnContext,
-    tool_calls: &[novel_deepseek::LlmToolCall],
-    completion: &LlmCompletion,
     results: Vec<(
         String,
         Result<novel_tools::ToolOutput, novel_tools::ToolError>,
     )>,
-    event_tx: Option<&mpsc::UnboundedSender<Event>>,
-    subs: &ForkStreamSubscriptions,
+    params: &SubagentToolResultsParams<'_>,
 ) -> Result<(), AgentError> {
+    let registry = params.registry;
+    let db = params.db;
+    let fork_run_id = params.fork_run_id;
+    let agent_type = params.agent_type;
+    let turn_ctx = params.turn_ctx;
+    let tool_calls = params.tool_calls;
+    let completion = params.completion;
+    let event_tx = params.event_tx;
+    let subs = params.subs;
     let result_ids: std::collections::HashSet<String> =
         results.iter().map(|(id, _)| id.clone()).collect();
     let missing: Vec<&str> = tool_calls
@@ -275,6 +274,7 @@ pub(crate) fn subagent_push_tool_results(
 mod tests {
     use super::*;
     use crate::fork_stream_subs::new_fork_stream_subscriptions;
+    use crate::turn::TurnContext;
     use novel_deepseek::{ContentBlockKind, LlmToolCall, StreamEvent};
     use novel_tools::{default_registry, PermissionMode};
     use std::sync::Arc;
@@ -401,14 +401,7 @@ mod tests {
         };
         let turn_ctx = TurnContext::new(8);
         subagent_push_tool_results(
-            &engine.shared.registry,
-            &engine.shared.session.db,
-            &fork_run_id,
             &mut child_messages,
-            AgentType::KnowledgeAuditor,
-            &turn_ctx,
-            std::slice::from_ref(&tc),
-            &completion,
             vec![(
                 "tr1".into(),
                 Ok(novel_tools::ToolOutput {
@@ -416,8 +409,17 @@ mod tests {
                     is_error: false,
                 }),
             )],
-            None,
-            &engine.shared.fork_stream_subs,
+            &SubagentToolResultsParams {
+                registry: &engine.shared.registry,
+                db: &engine.shared.session.db,
+                fork_run_id: &fork_run_id,
+                agent_type: AgentType::KnowledgeAuditor,
+                turn_ctx: &turn_ctx,
+                tool_calls: std::slice::from_ref(&tc),
+                completion: &completion,
+                event_tx: None,
+                subs: &engine.shared.fork_stream_subs,
+            },
         )
         .unwrap();
         assert!(child_messages.iter().any(|m| m.role == "tool"));

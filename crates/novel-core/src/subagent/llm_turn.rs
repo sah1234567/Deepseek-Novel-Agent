@@ -1,8 +1,6 @@
 //! Subagent LLM stream fetch (`subagent/runner::run_subagent_job` 抽出)。
 
-#![allow(clippy::too_many_arguments)]
-
-use crate::engine::session_llm::{apply_session_usage, SessionLlmSnapshot};
+use crate::engine::session_llm::apply_session_usage;
 use crate::fork_stream_subs::try_send_fork_overlay_event;
 use crate::interrupt::finalize::{
     finalize_stream_cancel, FinalizeStreamCancelParams, ForkTranscriptSink,
@@ -14,11 +12,12 @@ use crate::subagent::overflow::{
     build_partial_report, task_preview_120, OVERFLOW_KIND_INPUT_REJECTED,
     OVERFLOW_KIND_OUTPUT_TRUNCATED,
 };
+use crate::subagent::params::{SubagentCompletionParams, SubagentLlmFetchParams};
 use crate::turn::StreamingToolDispatch;
-use crate::{AgentError, AgentType, ChatMessage, Event};
+use crate::{AgentError, ChatMessage, Event};
 use novel_deepseek::{
     is_context_length_exceeded, is_output_truncated, ChatClient, ChatRequestOptions,
-    LlmChatMessage, LlmCompletion, LlmToolCall, StreamEvent, StreamOutcome,
+    ChatStreamConfig, LlmChatMessage, LlmCompletion, LlmToolCall, StreamEvent, StreamOutcome,
 };
 use std::sync::{Arc, Mutex};
 
@@ -40,36 +39,26 @@ fn subagent_offline_fetch(llm_msgs: &[LlmChatMessage]) -> SubagentLlmFetch {
 
 async fn subagent_handle_context_overflow(
     dispatch_arc: &Arc<Mutex<StreamingToolDispatch>>,
-    shared: &crate::EngineShared,
-    agent_type: AgentType,
-    task: &str,
+    params: &SubagentLlmFetchParams<'_>,
     child_messages: &mut Vec<ChatMessage>,
-    message_snapshot: &[ChatMessage],
 ) -> SubagentLlmFetch {
     if let Ok(mut d) = dispatch_arc.lock() {
         d.discard();
     }
     child_messages.clear();
-    child_messages.extend_from_slice(message_snapshot);
-    shared.sub_agent_dec();
+    child_messages.extend_from_slice(params.message_snapshot);
+    params.shared.sub_agent_dec();
     SubagentLlmFetch::ReturnReport(build_partial_report(
-        &agent_type.to_string(),
-        &task_preview_120(task),
+        &params.agent_type.to_string(),
+        &task_preview_120(params.task),
         OVERFLOW_KIND_INPUT_REJECTED,
     ))
 }
 
 async fn subagent_handle_stream_cancel(
     dispatch_arc: &Arc<Mutex<StreamingToolDispatch>>,
-    shared: &crate::EngineShared,
-    fork_run_id: &str,
-    agent_type: AgentType,
-    inner_turn: u32,
     child_messages: &mut Vec<ChatMessage>,
-    llm_msgs: &[LlmChatMessage],
-    active_schemas: &[(String, String, serde_json::Value)],
-    llm_snap: &SessionLlmSnapshot,
-    event_tx: Option<&tokio::sync::mpsc::UnboundedSender<Event>>,
+    params: &SubagentLlmFetchParams<'_>,
     partial: LlmCompletion,
     background_usage: novel_deepseek::BackgroundUsageRx,
 ) -> Result<SubagentLlmFetch, AgentError> {
@@ -77,50 +66,41 @@ async fn subagent_handle_stream_cancel(
         d.discard();
     }
     tracing::debug!(
-        session_id = %shared.session.id,
-        %fork_run_id,
-        ?agent_type,
-        inner_turn,
+        session_id = %params.shared.session.id,
+        fork_run_id = %params.fork_run_id,
+        ?params.agent_type,
+        inner_turn = params.inner_turn,
         message_count = child_messages.len(),
         partial_tool_call_count = partial.tool_calls.len(),
         "subagent_stream_cancelled"
     );
     let mut sink = ForkTranscriptSink {
-        db: &shared.session.db,
-        fork_run_id,
+        db: &params.shared.session.db,
+        fork_run_id: params.fork_run_id,
         child: child_messages,
     };
     finalize_stream_cancel(FinalizeStreamCancelParams {
         sink: &mut sink,
         partial,
-        llm_messages: llm_msgs.to_vec(),
-        tool_schemas: active_schemas.to_vec(),
+        llm_messages: params.llm_msgs.to_vec(),
+        tool_schemas: params.active_schemas.to_vec(),
         background_usage: Some(background_usage),
-        llm_snap: llm_snap.clone(),
-        shared: shared.clone(),
-        event_tx,
+        llm_snap: params.llm_snap.clone(),
+        shared: params.shared.clone(),
+        event_tx: params.event_tx,
         update_context_snapshot: false,
     })
     .await?;
     Ok(SubagentLlmFetch::LoopBreak)
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn subagent_run_live_stream(
     client: &mut ChatClient,
-    shared: &crate::EngineShared,
-    fork_ctx: novel_tools::ToolContext,
-    agent_type: AgentType,
-    task: &str,
-    fork_run_id: &str,
-    llm_msgs: &[LlmChatMessage],
-    active_schemas: &[(String, String, serde_json::Value)],
-    llm_snap: &SessionLlmSnapshot,
-    event_tx: Option<&tokio::sync::mpsc::UnboundedSender<Event>>,
     child_messages: &mut Vec<ChatMessage>,
-    message_snapshot: &[ChatMessage],
-    inner_turn: u32,
+    params: &SubagentLlmFetchParams<'_>,
 ) -> Result<SubagentLlmFetch, AgentError> {
+    let shared = params.shared;
+    let fork_ctx = subagent_tool_context(shared, params.agent_type);
     let cancel_flag = shared.abort_controller.cancel_flag();
     let (abort_tx, abort_rx) = novel_tools::abort_channel();
     let dispatch_arc = Arc::new(Mutex::new(StreamingToolDispatch::new(
@@ -139,22 +119,24 @@ async fn subagent_run_live_stream(
         }
     };
     let _ = abort_tx;
-    let fork_run_id_stream = fork_run_id.to_string();
-    let event_tx_stream = event_tx.cloned();
+    let fork_run_id_stream = params.fork_run_id.to_string();
+    let event_tx_stream = params.event_tx.cloned();
     let subs_stream = Arc::clone(&shared.fork_stream_subs);
     let result = client
         .create_stream(
-            llm_msgs,
-            active_schemas,
-            shared.settings.model.max_output_tokens,
-            ChatRequestOptions::default(),
+            params.llm_msgs,
+            params.active_schemas,
+            ChatStreamConfig {
+                max_tokens: shared.settings.model.max_output_tokens,
+                options: ChatRequestOptions::default(),
+                cancel: Some(cancel_flag),
+            },
             move |ev: StreamEvent| {
                 if let Some(ref tx) = event_tx_stream {
                     forward_subagent_stream_event(&subs_stream, tx, &fork_run_id_stream, ev);
                 }
             },
             Some(on_tool),
-            Some(cancel_flag),
         )
         .await;
     match result {
@@ -168,15 +150,8 @@ async fn subagent_run_live_stream(
         }) => {
             subagent_handle_stream_cancel(
                 &dispatch_arc,
-                shared,
-                fork_run_id,
-                agent_type,
-                inner_turn,
                 child_messages,
-                llm_msgs,
-                active_schemas,
-                llm_snap,
-                event_tx,
+                params,
                 partial,
                 background_usage,
             )
@@ -185,24 +160,16 @@ async fn subagent_run_live_stream(
         Err(e) if is_context_length_exceeded(&e) => {
             tracing::warn!(
                 session_id = %shared.session.id,
-                ?agent_type,
+                ?params.agent_type,
                 error = %e,
                 "subagent_context_length_exceeded"
             );
-            Ok(subagent_handle_context_overflow(
-                &dispatch_arc,
-                shared,
-                agent_type,
-                task,
-                child_messages,
-                message_snapshot,
-            )
-            .await)
+            Ok(subagent_handle_context_overflow(&dispatch_arc, params, child_messages).await)
         }
         Err(e) => {
             tracing::warn!(
                 session_id = %shared.session.id,
-                ?agent_type,
+                ?params.agent_type,
                 error = %e,
                 "subagent_llm_error"
             );
@@ -214,87 +181,54 @@ async fn subagent_run_live_stream(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) async fn fetch_subagent_llm_completion(
     llm: &mut Option<ChatClient>,
-    shared: &crate::EngineShared,
-    agent_type: AgentType,
-    task: &str,
-    fork_run_id: &str,
-    llm_msgs: &[LlmChatMessage],
-    active_schemas: &[(String, String, serde_json::Value)],
-    llm_snap: &SessionLlmSnapshot,
-    event_tx: Option<&tokio::sync::mpsc::UnboundedSender<Event>>,
     child_messages: &mut Vec<ChatMessage>,
-    message_snapshot: &[ChatMessage],
-    inner_turn: u32,
+    params: &SubagentLlmFetchParams<'_>,
 ) -> Result<SubagentLlmFetch, AgentError> {
-    let fork_ctx = subagent_tool_context(shared, agent_type);
     if let Some(client) = llm {
-        return subagent_run_live_stream(
-            client,
-            shared,
-            fork_ctx,
-            agent_type,
-            task,
-            fork_run_id,
-            llm_msgs,
-            active_schemas,
-            llm_snap,
-            event_tx,
-            child_messages,
-            message_snapshot,
-            inner_turn,
-        )
-        .await;
+        return subagent_run_live_stream(client, child_messages, params).await;
     }
-    Ok(subagent_offline_fetch(llm_msgs))
+    Ok(subagent_offline_fetch(params.llm_msgs))
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn subagent_after_completion(
-    shared: &crate::EngineShared,
-    agent_type: AgentType,
-    task: &str,
-    fork_run_id: &str,
     child_messages: &mut Vec<ChatMessage>,
     completion: &LlmCompletion,
-    llm_snap: &SessionLlmSnapshot,
-    event_tx: Option<&tokio::sync::mpsc::UnboundedSender<Event>>,
-    inner_turn: u32,
+    params: &SubagentCompletionParams<'_>,
 ) -> Result<Option<String>, AgentError> {
     if is_output_truncated(completion.stop_reason.as_deref()) {
         tracing::warn!(
-            session_id = %shared.session.id,
-            %fork_run_id,
-            ?agent_type,
-            inner_turn,
+            session_id = %params.shared.session.id,
+            fork_run_id = %params.fork_run_id,
+            ?params.agent_type,
+            inner_turn = params.inner_turn,
             tool_call_count = completion.tool_calls.len(),
             "subagent_output_truncated"
         );
         fork_child_push(
-            &shared.session.db,
-            fork_run_id,
+            &params.shared.session.db,
+            params.fork_run_id,
             child_messages,
             assistant_from_completion(completion),
         )?;
-        shared.sub_agent_dec();
+        params.shared.sub_agent_dec();
         return Ok(Some(build_partial_report(
-            &agent_type.to_string(),
-            &task_preview_120(task),
+            &params.agent_type.to_string(),
+            &task_preview_120(params.task),
             OVERFLOW_KIND_OUTPUT_TRUNCATED,
         )));
     }
     if let Some(u) = &completion.usage {
-        apply_session_usage(shared, u, llm_snap, event_tx, false);
+        apply_session_usage(params.shared, u, params.llm_snap, params.event_tx, false);
     }
-    if let Some(tx) = event_tx {
+    if let Some(tx) = params.event_tx {
         try_send_fork_overlay_event(
-            &shared.fork_stream_subs,
+            &params.shared.fork_stream_subs,
             tx,
             Event::AssistantSegmentComplete {
-                segment_index: inner_turn,
-                fork_run_id: Some(fork_run_id.to_string()),
+                segment_index: params.inner_turn,
+                fork_run_id: Some(params.fork_run_id.to_string()),
             },
         );
     }
@@ -305,6 +239,7 @@ pub(crate) fn subagent_after_completion(
 mod tests {
     use super::*;
     use crate::engine::session_llm::{build_chat_client, read_session_llm};
+    use crate::subagent::params::SubagentLlmFetchParams;
     use crate::test_env::StripDeepseekApiKey;
     use crate::EngineConfig;
     use novel_config::{save_agent_api_config, AgentApiConfig};
@@ -362,22 +297,22 @@ mod tests {
             reasoning_content: None,
             ..Default::default()
         }];
-        let fetch = fetch_subagent_llm_completion(
-            &mut llm,
-            &shared,
-            AgentType::KnowledgeAuditor,
-            "audit",
-            &fork_run_id,
-            &crate::message::to_llm_messages(&child_messages),
-            &[],
-            &snap,
-            None,
-            &mut child_messages,
-            &[],
-            1,
-        )
-        .await
-        .unwrap();
+        let llm_msgs = crate::message::to_llm_messages(&child_messages);
+        let params = SubagentLlmFetchParams {
+            shared: &shared,
+            agent_type: crate::AgentType::KnowledgeAuditor,
+            task: "audit",
+            fork_run_id: &fork_run_id,
+            llm_msgs: &llm_msgs,
+            active_schemas: &[],
+            llm_snap: &snap,
+            event_tx: None,
+            message_snapshot: &[],
+            inner_turn: 1,
+        };
+        let fetch = fetch_subagent_llm_completion(&mut llm, &mut child_messages, &params)
+            .await
+            .unwrap();
         assert!(matches!(
             fetch,
             SubagentLlmFetch::Completion {
@@ -445,22 +380,22 @@ mod tests {
             reasoning_content: None,
             ..Default::default()
         }];
-        let fetch = fetch_subagent_llm_completion(
-            &mut llm,
-            &shared,
-            AgentType::KnowledgeAuditor,
-            "audit",
-            &fork_run_id,
-            &crate::message::to_llm_messages(&child_messages),
-            &[],
-            &snap,
-            None,
-            &mut child_messages,
-            &[],
-            1,
-        )
-        .await
-        .unwrap();
+        let llm_msgs = crate::message::to_llm_messages(&child_messages);
+        let params = SubagentLlmFetchParams {
+            shared: &shared,
+            agent_type: crate::AgentType::KnowledgeAuditor,
+            task: "audit",
+            fork_run_id: &fork_run_id,
+            llm_msgs: &llm_msgs,
+            active_schemas: &[],
+            llm_snap: &snap,
+            event_tx: None,
+            message_snapshot: &[],
+            inner_turn: 1,
+        };
+        let fetch = fetch_subagent_llm_completion(&mut llm, &mut child_messages, &params)
+            .await
+            .unwrap();
         assert!(matches!(fetch, SubagentLlmFetch::Completion { .. }));
         std::env::remove_var("DEEPSEEK_API_BASE");
     }

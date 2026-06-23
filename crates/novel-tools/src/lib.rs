@@ -28,7 +28,8 @@ pub use abort::{abort_channel, AbortSignal, AbortWatch, InterruptBehavior, REJEC
 pub use blocking::{create_dir_all, read_to_string, run_blocking, write};
 pub use builtin::{AskQuestion, AskUserQuestionPayload};
 pub use context::{
-    PendingSubagentWork, PermissionMode, PermissionResult, SubagentWorkQueue, ToolContext,
+    EditCachePatch, PendingSubagentWork, PermissionMode, PermissionResult, SubagentWorkQueue,
+    ToolContext,
 };
 pub(crate) use error::require_str;
 pub use error::{ToolError, ValidationError};

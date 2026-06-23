@@ -1,7 +1,5 @@
 //! Per-job subagent ReAct runner (`run_subagent_job`).
 
-#![allow(clippy::too_many_arguments)]
-
 use crate::engine::session_llm::{build_chat_client, SessionLlmSnapshot};
 use crate::hooks::main_tool_schemas;
 use crate::message::{assistant_from_completion, to_llm_messages_traced, RepairTraceContext};
@@ -11,6 +9,7 @@ use crate::subagent::helpers::{
 use crate::subagent::llm_turn::{
     fetch_subagent_llm_completion, subagent_after_completion, SubagentLlmFetch,
 };
+use crate::subagent::params::{SubagentJobCtx, SubagentToolResultsParams};
 use crate::subagent::react::{
     react_limit_reminder_message, report_only_tool_rejection, SubagentLoopPhase,
 };
@@ -82,20 +81,18 @@ pub(crate) async fn run_subagent_job_with_child(
 
     let schemas = main_tool_schemas(&shared.registry);
     let max_react_loops = child.fork.max_react_loops;
-
-    subagent_run_react_loop(
-        &shared,
-        &mut llm,
-        &llm_snap,
+    let job_ctx = SubagentJobCtx {
+        shared: &shared,
         agent_type,
-        &task,
-        &fork_run_id,
-        &schemas,
-        &mut child,
+        task: &task,
+        fork_run_id: &fork_run_id,
+        schemas: &schemas,
+        llm_snap: &llm_snap,
+        event_tx: if silent { None } else { event_tx.as_ref() },
         max_react_loops,
-        if silent { None } else { event_tx.as_ref() },
-    )
-    .await
+    };
+
+    subagent_run_react_loop(&job_ctx, &mut llm, &mut child).await
 }
 
 fn subagent_finalize_output(
@@ -142,47 +139,31 @@ enum SubagentTurnOutcome {
 }
 
 async fn subagent_single_turn(
-    shared: &crate::EngineShared,
+    job: &SubagentJobCtx<'_>,
     llm: &mut Option<novel_deepseek::ChatClient>,
-    llm_snap: &SessionLlmSnapshot,
-    agent_type: AgentType,
-    task: &str,
-    fork_run_id: &str,
-    schemas: &[(String, String, serde_json::Value)],
     child: &mut crate::ForkedAgentContext,
     turn_ctx: &mut TurnContext,
     phase: SubagentLoopPhase,
-    max_react_loops: u32,
-    event_tx: Option<&mpsc::UnboundedSender<Event>>,
 ) -> Result<SubagentTurnOutcome, AgentError> {
     let llm_msgs = to_llm_messages_traced(
         &child.messages,
         Some(RepairTraceContext {
             label: "subagent_job",
-            fork_run_id: Some(fork_run_id),
+            fork_run_id: Some(job.fork_run_id),
             inner_turn: Some(turn_ctx.inner_turn),
-            session_id: Some(&shared.session.id),
+            session_id: Some(&job.shared.session.id),
         }),
     );
     let snapshot = child.messages.clone();
-    let active_schemas: &[(String, String, serde_json::Value)] =
-        if phase.is_report_only() { &[] } else { schemas };
+    let active_schemas: &[(String, String, serde_json::Value)] = if phase.is_report_only() {
+        &[]
+    } else {
+        job.schemas
+    };
 
-    let fetch = fetch_subagent_llm_completion(
-        llm,
-        shared,
-        agent_type,
-        task,
-        fork_run_id,
-        &llm_msgs,
-        active_schemas,
-        llm_snap,
-        event_tx,
-        &mut child.messages,
-        &snapshot,
-        turn_ctx.inner_turn,
-    )
-    .await?;
+    let fetch_params =
+        job.llm_fetch_params(&llm_msgs, active_schemas, &snapshot, turn_ctx.inner_turn);
+    let fetch = fetch_subagent_llm_completion(llm, &mut child.messages, &fetch_params).await?;
     let (completion, fork_dispatch) = match fetch {
         SubagentLlmFetch::LoopBreak => {
             return Ok(SubagentTurnOutcome::Break {
@@ -200,46 +181,29 @@ async fn subagent_single_turn(
     };
 
     if let Some(report) = subagent_after_completion(
-        shared,
-        agent_type,
-        task,
-        fork_run_id,
         &mut child.messages,
         &completion,
-        llm_snap,
-        event_tx,
-        turn_ctx.inner_turn,
+        &fetch_params.completion_params(),
     )? {
         return Ok(SubagentTurnOutcome::ReturnReport(report));
     }
 
-    subagent_apply_completion_tools(
-        shared,
-        agent_type,
-        fork_run_id,
-        child,
-        turn_ctx,
-        phase,
-        max_react_loops,
-        &completion,
-        fork_dispatch,
-        event_tx,
-    )
-    .await
+    subagent_apply_completion_tools(job, child, turn_ctx, phase, &completion, fork_dispatch).await
 }
 
 async fn subagent_apply_completion_tools(
-    shared: &crate::EngineShared,
-    agent_type: AgentType,
-    fork_run_id: &str,
+    job: &SubagentJobCtx<'_>,
     child: &mut crate::ForkedAgentContext,
     turn_ctx: &mut TurnContext,
     phase: SubagentLoopPhase,
-    max_react_loops: u32,
     completion: &novel_deepseek::LlmCompletion,
     fork_dispatch: Option<std::sync::Arc<std::sync::Mutex<crate::turn::StreamingToolDispatch>>>,
-    event_tx: Option<&mpsc::UnboundedSender<Event>>,
 ) -> Result<SubagentTurnOutcome, AgentError> {
+    let shared = job.shared;
+    let agent_type = job.agent_type;
+    let fork_run_id = job.fork_run_id;
+    let max_react_loops = job.max_react_loops;
+    let event_tx = job.event_tx;
     let tool_calls = completion.tool_calls.clone();
     if tool_calls.is_empty() {
         fork_child_push(
@@ -290,17 +254,19 @@ async fn subagent_apply_completion_tools(
     )
     .await?;
     subagent_push_tool_results(
-        &shared.registry,
-        &shared.session.db,
-        fork_run_id,
         &mut child.messages,
-        agent_type,
-        turn_ctx,
-        &tool_calls,
-        completion,
         results,
-        event_tx,
-        &shared.fork_stream_subs,
+        &SubagentToolResultsParams {
+            registry: &shared.registry,
+            db: &shared.session.db,
+            fork_run_id,
+            agent_type,
+            turn_ctx,
+            tool_calls: &tool_calls,
+            completion,
+            event_tx,
+            subs: &shared.fork_stream_subs,
+        },
     )?;
 
     if let Err(TerminalReason::MaxReactLoops(_)) = turn_ctx.increment_inner() {
@@ -319,17 +285,15 @@ async fn subagent_apply_completion_tools(
 }
 
 async fn subagent_run_react_loop(
-    shared: &crate::EngineShared,
+    job: &SubagentJobCtx<'_>,
     llm: &mut Option<novel_deepseek::ChatClient>,
-    llm_snap: &SessionLlmSnapshot,
-    agent_type: AgentType,
-    task: &str,
-    fork_run_id: &str,
-    schemas: &[(String, String, serde_json::Value)],
     child: &mut crate::ForkedAgentContext,
-    max_react_loops: u32,
-    event_tx: Option<&mpsc::UnboundedSender<Event>>,
 ) -> Result<String, AgentError> {
+    let shared = job.shared;
+    let agent_type = job.agent_type;
+    let fork_run_id = job.fork_run_id;
+    let max_react_loops = job.max_react_loops;
+    let event_tx = job.event_tx;
     let mut turn_ctx = TurnContext::new(max_react_loops);
     let mut phase = SubagentLoopPhase::Reacting;
     let was_interrupted;
@@ -360,22 +324,7 @@ async fn subagent_run_react_loop(
             phase = %if phase.is_report_only() { "report_only" } else { "reacting" },
             "subagent_inner_turn_start"
         );
-        match subagent_single_turn(
-            shared,
-            llm,
-            llm_snap,
-            agent_type,
-            task,
-            fork_run_id,
-            schemas,
-            child,
-            &mut turn_ctx,
-            phase,
-            max_react_loops,
-            event_tx,
-        )
-        .await?
-        {
+        match subagent_single_turn(job, llm, child, &mut turn_ctx, phase).await? {
             SubagentTurnOutcome::Break {
                 interrupted,
                 reason,
@@ -430,6 +379,7 @@ async fn subagent_run_react_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::session_llm::{read_session_llm, SessionLlmSnapshot};
     use crate::subagent::build_fork_child;
     use crate::EngineConfig;
     use novel_deepseek::LlmCompletion;
@@ -462,10 +412,30 @@ mod tests {
         (engine, fork_run_id, child)
     }
 
+    fn test_job_ctx<'a>(
+        engine: &'a crate::AgentEngine,
+        fork_run_id: &'a str,
+        llm_snap: &'a SessionLlmSnapshot,
+        max_react_loops: u32,
+    ) -> SubagentJobCtx<'a> {
+        SubagentJobCtx {
+            shared: &engine.shared,
+            agent_type: AgentType::KnowledgeAuditor,
+            task: "audit",
+            fork_run_id,
+            schemas: &[],
+            llm_snap,
+            event_tx: None,
+            max_react_loops,
+        }
+    }
+
     #[tokio::test]
     async fn empty_tools_breaks_subagent_turn() {
         let tmp = TempDir::new().unwrap();
         let (engine, fork_run_id, mut child) = fork_setup(&tmp);
+        let snap = read_session_llm(&engine.shared);
+        let job = test_job_ctx(&engine, &fork_run_id, &snap, 40);
         let mut turn_ctx = TurnContext::new(40);
         let completion = LlmCompletion {
             content: Some("report only text".into()),
@@ -475,15 +445,11 @@ mod tests {
             usage: None,
         };
         let out = subagent_apply_completion_tools(
-            &engine.shared,
-            AgentType::KnowledgeAuditor,
-            &fork_run_id,
+            &job,
             &mut child,
             &mut turn_ctx,
             SubagentLoopPhase::Reacting,
-            40,
             &completion,
-            None,
             None,
         )
         .await
@@ -502,6 +468,8 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         std::fs::write(tmp.path().join("sub.txt"), "fork body").unwrap();
         let (engine, fork_run_id, mut child) = fork_setup(&tmp);
+        let snap = read_session_llm(&engine.shared);
+        let job = test_job_ctx(&engine, &fork_run_id, &snap, 40);
         let mut turn_ctx = TurnContext::new(40);
         let completion = LlmCompletion {
             content: Some("reading".into()),
@@ -515,15 +483,11 @@ mod tests {
             usage: None,
         };
         let out = subagent_apply_completion_tools(
-            &engine.shared,
-            AgentType::KnowledgeAuditor,
-            &fork_run_id,
+            &job,
             &mut child,
             &mut turn_ctx,
             SubagentLoopPhase::Reacting,
-            40,
             &completion,
-            None,
             None,
         )
         .await
@@ -542,6 +506,8 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         std::fs::write(tmp.path().join("sub.txt"), "fork body").unwrap();
         let (engine, fork_run_id, mut child) = fork_setup(&tmp);
+        let snap = read_session_llm(&engine.shared);
+        let job = test_job_ctx(&engine, &fork_run_id, &snap, 1);
         let mut turn_ctx = TurnContext::new(1);
         let completion = LlmCompletion {
             content: None,
@@ -555,15 +521,11 @@ mod tests {
             usage: None,
         };
         let out = subagent_apply_completion_tools(
-            &engine.shared,
-            AgentType::KnowledgeAuditor,
-            &fork_run_id,
+            &job,
             &mut child,
             &mut turn_ctx,
             SubagentLoopPhase::Reacting,
-            1,
             &completion,
-            None,
             None,
         )
         .await
@@ -580,6 +542,8 @@ mod tests {
     async fn report_only_tools_enters_grace_phase() {
         let tmp = TempDir::new().unwrap();
         let (engine, fork_run_id, mut child) = fork_setup(&tmp);
+        let snap = read_session_llm(&engine.shared);
+        let job = test_job_ctx(&engine, &fork_run_id, &snap, 40);
         let phase = SubagentLoopPhase::ReportOnly { grace_left: 1 };
         let completion = LlmCompletion {
             content: Some("done".into()),
@@ -594,15 +558,11 @@ mod tests {
         };
         let mut turn_ctx = TurnContext::new(40);
         let out = subagent_apply_completion_tools(
-            &engine.shared,
-            AgentType::KnowledgeAuditor,
-            &fork_run_id,
+            &job,
             &mut child,
             &mut turn_ctx,
             phase,
-            40,
             &completion,
-            None,
             None,
         )
         .await

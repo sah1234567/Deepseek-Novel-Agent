@@ -1,4 +1,6 @@
 use serde::Serialize;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct LlmChatMessage {
@@ -136,6 +138,14 @@ impl ChatRequestOptions {
     pub(crate) fn resolve_thinking(&self, client: &crate::ChatClient) -> bool {
         self.thinking.unwrap_or(client.thinking_enabled)
     }
+}
+
+/// Stream transport options for [`crate::ChatClient::create_stream`].
+#[derive(Debug, Clone)]
+pub struct ChatStreamConfig {
+    pub max_tokens: u32,
+    pub options: ChatRequestOptions,
+    pub cancel: Option<Arc<AtomicBool>>,
 }
 
 /// A single web search result from DeepSeek's `web_search_20250305` server-side tool.

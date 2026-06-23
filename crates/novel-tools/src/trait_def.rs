@@ -40,12 +40,7 @@ pub trait Tool: Send + Sync {
     fn check_permissions(&self, input: &Value, ctx: &ToolContext) -> PermissionResult {
         crate::permission::evaluate_tool_permissions(
             self.name(),
-            self.is_read_only(),
-            self.blocks_nested_fork(),
-            self.is_always_allowed(),
-            self.can_write_outside_plan_dir(),
-            self.allowed_in_plan_mode(),
-            self.skips_normal_permission_ask(),
+            self.permission_caps(),
             &self.get_summary(input),
             input,
             ctx,
@@ -59,6 +54,17 @@ pub trait Tool: Send + Sync {
     }
 
     // -- Predicate methods (OCP: replace hardcoded tool-name matching) --
+
+    fn permission_caps(&self) -> crate::permission::ToolPermissionCaps {
+        crate::permission::ToolPermissionCaps {
+            is_read_only: self.is_read_only(),
+            blocks_nested_fork: self.blocks_nested_fork(),
+            is_always_allowed: self.is_always_allowed(),
+            can_write_outside_plan_dir: self.can_write_outside_plan_dir(),
+            allowed_in_plan_mode: self.allowed_in_plan_mode(),
+            skips_normal_permission_ask: self.skips_normal_permission_ask(),
+        }
+    }
 
     /// ForkSubAgent — reject when subagent is already running.
     fn blocks_nested_fork(&self) -> bool {

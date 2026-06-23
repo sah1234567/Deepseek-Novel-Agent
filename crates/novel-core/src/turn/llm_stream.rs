@@ -8,8 +8,8 @@ use crate::turn::StreamingToolDispatch;
 use crate::turn::TurnContext;
 use crate::{AgentEngine, AgentError, ContentBlockKind, Event, TerminalReason};
 use novel_deepseek::{
-    is_output_truncated, ChatClient, LlmChatMessage, LlmCompletion, LlmToolCall, StreamEvent,
-    StreamOutcome,
+    is_output_truncated, ChatClient, ChatStreamConfig, LlmChatMessage, LlmCompletion, LlmToolCall,
+    StreamEvent, StreamOutcome,
 };
 use novel_logging::LogEvent;
 use novel_tools::{AbortSignal, StreamingToolExecutor};
@@ -313,15 +313,17 @@ impl AgentEngine {
             .create_stream(
                 messages,
                 tools,
-                self.shared.settings.model.max_output_tokens,
-                novel_deepseek::ChatRequestOptions::default(),
+                ChatStreamConfig {
+                    max_tokens: self.shared.settings.model.max_output_tokens,
+                    options: novel_deepseek::ChatRequestOptions::default(),
+                    cancel: Some(cancel_flag),
+                },
                 move |ev: StreamEvent| {
                     if let Some(ref tx) = tx {
                         forward_main_stream_event(tx, audit.as_deref(), ev);
                     }
                 },
                 Some(on_tool),
-                Some(cancel_flag),
             )
             .await;
 

@@ -3,7 +3,7 @@
 use crate::paths::optional_file_path;
 use crate::read_cache::{file_mtime_secs, is_read_dedup_stub};
 use crate::read_cache_ingest::{ingest_read_or_tail_into_cache, is_tool_result_error};
-use crate::{ReadCacheEntry, ToolContext, ToolError, ToolRegistry};
+use crate::{EditCachePatch, ReadCacheEntry, ToolContext, ToolError, ToolRegistry};
 use dashmap::DashMap;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -71,12 +71,14 @@ pub(crate) fn replay_write_or_edit_from_disk(
                 };
                 ctx.patch_cache_after_edit(
                     full,
-                    &disk,
-                    mtime,
-                    old_string,
-                    new_string,
-                    replace_all,
-                    occ,
+                    &EditCachePatch {
+                        updated_disk: &disk,
+                        mtime_secs: mtime,
+                        old_string,
+                        new_string,
+                        replace_all,
+                        occurrences_replaced: occ,
+                    },
                 );
             } else {
                 ctx.refresh_cache_after_write(full, &disk, mtime);

@@ -6,6 +6,7 @@ mod helpers;
 mod llm_turn;
 mod memory_extractor;
 mod overflow;
+mod params;
 mod react;
 mod runner;
 

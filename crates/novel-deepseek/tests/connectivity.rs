@@ -3,8 +3,8 @@
 
 #![allow(clippy::unwrap_used)]
 use novel_deepseek::{
-    verify_endpoints, verify_web_search_endpoint, ChatClient, LlmChatMessage, StreamEvent,
-    StreamOutcome,
+    verify_endpoints, verify_web_search_endpoint, ChatClient, ChatStreamConfig, LlmChatMessage,
+    StreamEvent, StreamOutcome,
 };
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -68,11 +68,13 @@ async fn drain_after_interrupt_returns_three_class_tokens() {
         .create_stream(
             &messages,
             &[],
-            512,
-            novel_deepseek::ChatRequestOptions::default(),
-            |_: StreamEvent| {},                     // drop stream events
-            None::<fn(novel_deepseek::LlmToolCall)>, // no tool callback
-            Some(Arc::clone(&cancel)),
+            ChatStreamConfig {
+                max_tokens: 512,
+                options: novel_deepseek::ChatRequestOptions::default(),
+                cancel: Some(Arc::clone(&cancel)),
+            },
+            |_: StreamEvent| {},
+            None::<fn(novel_deepseek::LlmToolCall)>,
         )
         .await
         .expect("create_stream should not error");
@@ -152,11 +154,13 @@ async fn drain_with_thinking_returns_three_class_tokens() {
         .create_stream(
             &messages,
             &[],
-            256,
-            novel_deepseek::ChatRequestOptions::default(),
+            ChatStreamConfig {
+                max_tokens: 256,
+                options: novel_deepseek::ChatRequestOptions::default(),
+                cancel: Some(Arc::clone(&cancel)),
+            },
             |_: StreamEvent| {},
             None::<fn(novel_deepseek::LlmToolCall)>,
-            Some(Arc::clone(&cancel)),
         )
         .await
         .expect("create_stream should not error");

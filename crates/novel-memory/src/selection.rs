@@ -64,11 +64,13 @@ impl MemorySelector for ChatClient {
             .create_stream(
                 &messages,
                 &[],
-                max_tokens,
-                options,
+                novel_deepseek::ChatStreamConfig {
+                    max_tokens,
+                    options,
+                    cancel: None,
+                },
                 |_| {},
                 None::<fn(LlmToolCall)>,
-                None,
             )
             .await?;
         let completion = match outcome {

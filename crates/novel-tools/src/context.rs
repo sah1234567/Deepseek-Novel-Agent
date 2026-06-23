@@ -67,6 +67,16 @@ pub struct PendingSubagentWork {
 /// Queued subagent jobs from `ForkSubAgent` tool and hook enqueue paths.
 pub type SubagentWorkQueue = Arc<Mutex<Vec<PendingSubagentWork>>>;
 
+/// Arguments for [`ToolContext::patch_cache_after_edit`].
+pub struct EditCachePatch<'a> {
+    pub updated_disk: &'a str,
+    pub mtime_secs: u64,
+    pub old_string: &'a str,
+    pub new_string: &'a str,
+    pub replace_all: bool,
+    pub occurrences_replaced: usize,
+}
+
 #[derive(Clone)]
 pub struct ToolContext {
     pub permission_mode: PermissionMode,
@@ -415,28 +425,18 @@ impl ToolContext {
     }
 
     /// Patch session read cache after Edit (partial slice preserved).
-    #[allow(clippy::too_many_arguments)]
-    pub fn patch_cache_after_edit(
-        &self,
-        path: &Path,
-        updated_disk: &str,
-        mtime_secs: u64,
-        old_string: &str,
-        new_string: &str,
-        replace_all: bool,
-        occurrences_replaced: usize,
-    ) {
+    pub fn patch_cache_after_edit(&self, path: &Path, patch: &EditCachePatch<'_>) {
         let Some(mut entry) = self.read_cache_entry(&path.to_path_buf()) else {
             return;
         };
         patch_read_cache_after_edit(
             &mut entry,
-            updated_disk,
-            mtime_secs,
-            old_string,
-            new_string,
-            replace_all,
-            occurrences_replaced,
+            patch.updated_disk,
+            patch.mtime_secs,
+            patch.old_string,
+            patch.new_string,
+            patch.replace_all,
+            patch.occurrences_replaced,
         );
         self.store_read_cache_direct(path, entry);
     }

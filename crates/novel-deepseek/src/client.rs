@@ -3,7 +3,7 @@ use crate::config::chat_api_base;
 use crate::error::LlmError;
 use crate::tool_args::parse_tool_arguments;
 use crate::types::{
-    ChatRequestOptions, ContentBlockKind, LlmChatMessage, LlmCompletion, LlmToolCall, StreamEvent,
+    ChatStreamConfig, ContentBlockKind, LlmChatMessage, LlmCompletion, LlmToolCall, StreamEvent,
     StreamOutcome, TokenUsage, WebSearchResult,
 };
 use futures::StreamExt;
@@ -15,6 +15,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 // Web Search via DeepSeek's `web_search_20250305` server-side tool (Anthropic Messages API).
+
+struct DrainUsageRequest {
+    messages: Vec<Value>,
+    tools: Vec<Value>,
+    initial: Option<TokenUsage>,
+    tx: tokio::sync::oneshot::Sender<Option<TokenUsage>>,
+    timeout_secs: u64,
+    thinking_enabled: bool,
+    response_format: Option<serde_json::Value>,
+}
 
 #[derive(Clone)]
 pub struct ChatClient {
@@ -243,15 +253,15 @@ impl ChatClient {
         let oai = Self::to_openai_messages(messages);
         let tool_defs = Self::build_tools(tools);
         let (tx, rx) = tokio::sync::oneshot::channel();
-        self.drain_usage_background(
-            &oai,
-            &tool_defs,
+        self.drain_usage_background(DrainUsageRequest {
+            messages: oai,
+            tools: tool_defs,
             initial,
             tx,
-            1,
-            self.thinking_enabled,
-            None,
-        )
+            timeout_secs: 1,
+            thinking_enabled: self.thinking_enabled,
+            response_format: None,
+        })
         .await;
         rx.await.ok().flatten()
     }
@@ -300,21 +310,23 @@ impl ChatClient {
 
     // ── Streaming ─────────────────────────────────────────────
 
-    #[allow(clippy::too_many_arguments)]
     pub async fn create_stream<TF, EE>(
         &mut self,
         messages: &[LlmChatMessage],
         tools: &[(String, String, Value)],
-        max_tokens: u32,
-        options: ChatRequestOptions,
+        stream_config: ChatStreamConfig,
         mut on_event: EE,
         mut on_tool_call: Option<TF>,
-        cancel: Option<Arc<AtomicBool>>,
     ) -> Result<StreamOutcome, LlmError>
     where
         EE: FnMut(StreamEvent),
         TF: FnMut(LlmToolCall),
     {
+        let ChatStreamConfig {
+            max_tokens,
+            options,
+            cancel,
+        } = stream_config;
         let openai_msgs = Self::to_openai_messages(messages);
         let tool_defs = Self::build_tools(tools);
         let thinking = options.resolve_thinking(self);
@@ -498,7 +510,15 @@ impl ChatClient {
         let rf = response_format.cloned();
         tokio::spawn(async move {
             let _ = drain_self
-                .drain_usage_background(&msgs, &tools, usage_snapshot, tx, 30, thinking_enabled, rf)
+                .drain_usage_background(DrainUsageRequest {
+                    messages: msgs,
+                    tools,
+                    initial: usage_snapshot,
+                    tx,
+                    timeout_secs: 30,
+                    thinking_enabled,
+                    response_format: rf,
+                })
                 .await;
         });
         StreamOutcome::Cancelled {
@@ -559,17 +579,16 @@ impl ChatClient {
     /// session counter moves forward — the original turn's true breakdown is
     /// gone. Use the SSE `usage` chunk when available; drain is a last resort
     /// so interrupted turns record something rather than nothing.
-    #[allow(clippy::too_many_arguments)]
-    async fn drain_usage_background(
-        &self,
-        messages: &[Value],
-        tools: &[Value],
-        initial: Option<TokenUsage>,
-        tx: tokio::sync::oneshot::Sender<Option<TokenUsage>>,
-        timeout_secs: u64,
-        thinking_enabled: bool,
-        response_format: Option<serde_json::Value>,
-    ) {
+    async fn drain_usage_background(&self, req: DrainUsageRequest) {
+        let DrainUsageRequest {
+            messages,
+            tools,
+            initial,
+            tx,
+            timeout_secs,
+            thinking_enabled,
+            response_format,
+        } = req;
         // Build a minimal non-streaming body inline — drain is the only
         // path that doesn't go through `create_stream`.  `stream: false`
         // and `max_tokens: 1` minimise cost for this usage-only request.
@@ -586,7 +605,7 @@ impl ChatClient {
             body["response_format"] = fmt.clone();
         }
         if !tools.is_empty() {
-            body["tools"] = Value::Array(tools.to_vec());
+            body["tools"] = Value::Array(tools);
         }
         let drain = async {
             let resp = self.send_chat_request(&body, None).await.ok()?;
@@ -801,6 +820,7 @@ fn tool_to_json(name: &str, desc: &str, schema: &Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ChatRequestOptions;
     use serde_json::json;
 
     #[test]
@@ -1018,11 +1038,13 @@ mod tests {
             .create_stream(
                 &messages,
                 &[],
-                64,
-                ChatRequestOptions::default(),
+                ChatStreamConfig {
+                    max_tokens: 64,
+                    options: ChatRequestOptions::default(),
+                    cancel: None,
+                },
                 |_| {},
                 None::<fn(LlmToolCall)>,
-                None,
             )
             .await
             .expect("stream ok");
@@ -1078,13 +1100,15 @@ mod tests {
             .create_stream(
                 &messages,
                 &[],
-                32,
-                ChatRequestOptions::default(),
+                ChatStreamConfig {
+                    max_tokens: 32,
+                    options: ChatRequestOptions::default(),
+                    cancel: Some(cancel),
+                },
                 move |_| {
                     cancel_on_event.store(true, Ordering::SeqCst);
                 },
                 None::<fn(LlmToolCall)>,
-                Some(cancel),
             )
             .await
             .expect("cancelled stream");

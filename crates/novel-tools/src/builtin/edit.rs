@@ -5,8 +5,8 @@
 //! and the old_string exists on disk (byte-exact match).
 
 use super::super::{
-    blocking, extract_file_path, file_mtime_secs, require_str, Tool, ToolContext, ToolError,
-    ToolOutput, ValidationError,
+    blocking, extract_file_path, file_mtime_secs, require_str, EditCachePatch, Tool, ToolContext,
+    ToolError, ToolOutput, ValidationError,
 };
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -157,12 +157,14 @@ impl Tool for EditTool {
             let occ = if replace_all { matches } else { 1 };
             ctx.patch_cache_after_edit(
                 &full,
-                &updated,
-                mtime,
-                &old_string,
-                &new_string,
-                replace_all,
-                occ,
+                &EditCachePatch {
+                    updated_disk: &updated,
+                    mtime_secs: mtime,
+                    old_string: &old_string,
+                    new_string: &new_string,
+                    replace_all,
+                    occurrences_replaced: occ,
+                },
             );
 
             Ok(ToolOutput {
