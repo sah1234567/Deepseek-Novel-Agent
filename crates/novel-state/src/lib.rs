@@ -14,5 +14,8 @@ pub use error::StateError;
 pub use fork::ForkMessage;
 pub use message::StoredMessage;
 pub use session::{Session, SessionSummary};
-pub use todo::SessionTodo;
+pub use todo::{
+    partition_status_updates, project_todos_after_upsert, validate_todo_upsert, SessionTodo,
+    TodoValidationError,
+};
 pub use turn_bounds::TurnBounds;

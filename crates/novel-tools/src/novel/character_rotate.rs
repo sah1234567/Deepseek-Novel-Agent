@@ -17,7 +17,7 @@ struct CharacterRotation {
 }
 
 #[derive(Debug, Serialize)]
-struct CharacterRotateResult {
+pub(crate) struct CharacterRotateResult {
     per_character: Vec<CharacterRotation>,
     per_chapter_character_count: Vec<(String, u32)>,
     ensemble_warnings: Vec<String>,
@@ -66,6 +66,98 @@ fn avg_gap(chapters: &[u32]) -> f32 {
     gaps.iter().sum::<f32>() / gaps.len() as f32
 }
 
+fn default_frontmatter(name: &str) -> CharacterFrontmatter {
+    CharacterFrontmatter {
+        name: name.to_string(),
+        aliases: vec![],
+        category: novel_knowledge::CharacterCategory::Human,
+        first_appearance: String::new(),
+        last_update: String::new(),
+        status: novel_knowledge::CharacterStatus::Alive,
+        pov_character: false,
+    }
+}
+
+fn rotation_for_character(name: &str, content: &str) -> (CharacterRotation, HashMap<u32, u32>) {
+    let appearances = parse_appearance_chapters(content);
+    let last = appearances.last().copied().unwrap_or(0);
+    let mut chapter_counts = HashMap::new();
+    for ch in &appearances {
+        *chapter_counts.entry(*ch).or_insert(0) += 1;
+    }
+    let rotation = CharacterRotation {
+        name: name.to_string(),
+        last_chapter: if last > 0 {
+            format!("Ch{last}")
+        } else {
+            "—".into()
+        },
+        chapters_since_last: 0,
+        is_missing: false,
+        appearance_chapters: appearances.iter().map(|n| format!("Ch{n}")).collect(),
+        avg_gap: avg_gap(&appearances),
+    };
+    (rotation, chapter_counts)
+}
+
+fn finalize_rotations(per_character: &mut [CharacterRotation], max_chapter: u32, threshold: u32) {
+    for entry in per_character {
+        let last = parse_chapter_num(&entry.last_chapter);
+        entry.chapters_since_last = max_chapter.saturating_sub(last);
+        entry.is_missing = entry.chapters_since_last >= threshold;
+    }
+}
+
+pub(crate) fn build_character_rotate_result(
+    store: &KnowledgeStore,
+    project_root: &std::path::Path,
+    filter_name: Option<&str>,
+    threshold: u32,
+) -> CharacterRotateResult {
+    let names = list_character_names(store);
+    let mut per_character = Vec::new();
+    let mut chapter_counts: HashMap<u32, u32> = HashMap::new();
+    let mut max_chapter = 0u32;
+
+    for name in &names {
+        if filter_name.is_some_and(|f| f != name) {
+            continue;
+        }
+        let path = format!("knowledge/characters/{name}.md");
+        let Ok(content) = store.read_file(&path) else {
+            continue;
+        };
+        let (fm, _) = parse_frontmatter::<CharacterFrontmatter>(&content)
+            .unwrap_or_else(|_| (default_frontmatter(name), String::new()));
+        if filter_name.is_none() && !fm.pov_character {
+            continue;
+        }
+        let (rotation, counts) = rotation_for_character(name, &content);
+        max_chapter = max_chapter.max(parse_chapter_num(&rotation.last_chapter));
+        for (ch, count) in counts {
+            *chapter_counts.entry(ch).or_insert(0) += count;
+        }
+        per_character.push(rotation);
+    }
+
+    for (ch, _) in super::common::list_chapter_files(project_root) {
+        max_chapter = max_chapter.max(ch);
+    }
+    finalize_rotations(&mut per_character, max_chapter, threshold);
+
+    let mut per_chapter_character_count: Vec<(String, u32)> = chapter_counts
+        .into_iter()
+        .map(|(ch, count)| (format!("Ch{ch}"), count))
+        .collect();
+    per_chapter_character_count.sort_by_key(|a| parse_chapter_num(&a.0));
+
+    CharacterRotateResult {
+        per_character,
+        per_chapter_character_count,
+        ensemble_warnings: Vec::new(),
+    }
+}
+
 #[async_trait]
 impl Tool for CharacterRotateTool {
     fn name(&self) -> &str {
@@ -88,91 +180,15 @@ impl Tool for CharacterRotateTool {
     }
 
     async fn call(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
-        let filter_name = input
-            .get("character_name")
-            .and_then(|v| v.as_str())
-            .map(String::from);
+        let filter_name = input.get("character_name").and_then(|v| v.as_str());
         let threshold = input
             .get("inactivity_threshold")
             .and_then(|v| v.as_u64())
             .unwrap_or(10) as u32;
 
         let store = KnowledgeStore::new(&ctx.project_root);
-        let names = list_character_names(&store);
-        let mut per_character = Vec::new();
-        let mut chapter_counts: HashMap<u32, u32> = HashMap::new();
-        let mut max_chapter = 0u32;
-
-        for name in &names {
-            if let Some(ref f) = filter_name {
-                if f != name {
-                    continue;
-                }
-            }
-            let path = format!("knowledge/characters/{name}.md");
-            let content = match store.read_file(&path) {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-            let (fm, _): (CharacterFrontmatter, _) = parse_frontmatter(&content).unwrap_or((
-                CharacterFrontmatter {
-                    name: name.clone(),
-                    aliases: vec![],
-                    category: novel_knowledge::CharacterCategory::Human,
-                    first_appearance: String::new(),
-                    last_update: String::new(),
-                    status: novel_knowledge::CharacterStatus::Alive,
-                    pov_character: false,
-                },
-                String::new(),
-            ));
-            if filter_name.is_none() && !fm.pov_character {
-                continue;
-            }
-
-            let appearances = parse_appearance_chapters(&content);
-            let last = appearances.last().copied().unwrap_or(0);
-            if last > max_chapter {
-                max_chapter = last;
-            }
-            for ch in &appearances {
-                *chapter_counts.entry(*ch).or_insert(0) += 1;
-            }
-            let since = max_chapter.saturating_sub(last);
-            per_character.push(CharacterRotation {
-                name: name.clone(),
-                last_chapter: if last > 0 {
-                    format!("Ch{last}")
-                } else {
-                    "—".into()
-                },
-                chapters_since_last: since,
-                is_missing: since >= threshold,
-                appearance_chapters: appearances.iter().map(|n| format!("Ch{n}")).collect(),
-                avg_gap: avg_gap(&appearances),
-            });
-        }
-
-        for (ch, _) in super::common::list_chapter_files(&ctx.project_root) {
-            max_chapter = max_chapter.max(ch);
-        }
-        for entry in &mut per_character {
-            let last = parse_chapter_num(&entry.last_chapter);
-            entry.chapters_since_last = max_chapter.saturating_sub(last);
-            entry.is_missing = entry.chapters_since_last >= threshold;
-        }
-
-        let mut per_chapter_character_count: Vec<(String, u32)> = chapter_counts
-            .into_iter()
-            .map(|(ch, count)| (format!("Ch{ch}"), count))
-            .collect();
-        per_chapter_character_count.sort_by_key(|a| parse_chapter_num(&a.0));
-
-        let result = CharacterRotateResult {
-            per_character,
-            per_chapter_character_count,
-            ensemble_warnings: Vec::new(),
-        };
+        let result =
+            build_character_rotate_result(&store, &ctx.project_root, filter_name, threshold);
         Ok(ToolOutput {
             content: serde_json::to_string_pretty(&result)
                 .map_err(|e| ToolError::Execution(format!("json serialize: {e}")))?,
@@ -186,6 +202,12 @@ mod tests {
     use super::*;
     use crate::{PermissionMode, ToolContext};
     use tempfile::TempDir;
+
+    #[test]
+    fn parse_appearance_chapters_ignores_relation_table() {
+        let content = "## 出场记录日志\n| 章节 | x |\n|------|---|\n| Ch3 | a |\n\n## 关系演变日志\n| Ch99 | y |";
+        assert_eq!(parse_appearance_chapters(content), vec![3]);
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn character_rotate_detects_missing() {

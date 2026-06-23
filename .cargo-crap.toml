@@ -1,10 +1,11 @@
-threshold = 30
+threshold = 20
 missing = "pessimistic"
 
 # Thin Tauri IPC / spawn glue — business logic lives in session_api, event_payload, dto.
 # Test harness / build scripts: nextest runs them; coverage attributes to crates/*/src.
 exclude = [
   "**/src-tauri/**",
+  "**/tauri/commands/**",
   "**/tauri/engine_loop.rs",
   "**/tauri/events.rs",
   "**/tauri/mod.rs",

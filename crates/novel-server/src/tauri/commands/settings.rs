@@ -70,16 +70,15 @@ pub async fn update_session_todo(
     let Some(existing) = todos.iter().find(|t| t.id == todo_id) else {
         return Err(format!("todo not found: {todo_id}"));
     };
-    db.upsert_session_todos(
-        &session_id,
-        &[novel_state::SessionTodo {
-            id: todo_id,
-            content: existing.content.clone(),
-            status,
-        }],
-        true,
-    )
-    .map_err(|e| e.to_string())?;
+    let update = novel_state::SessionTodo {
+        id: todo_id,
+        content: existing.content.clone(),
+        status,
+    };
+    novel_state::validate_todo_upsert(&todos, std::slice::from_ref(&update), false)
+        .map_err(|e| e.to_string())?;
+    db.upsert_session_todos(&session_id, std::slice::from_ref(&update), false)
+        .map_err(|e| e.to_string())?;
     let updated = db
         .list_session_todos(&session_id)
         .map_err(|e| e.to_string())?;

@@ -109,6 +109,32 @@ pub(crate) fn forward_subagent_stream_event(
     try_send_fork_overlay_event(subs, tx, event);
 }
 
+pub(crate) fn emit_fork_tool_input_events(
+    tool_calls: &[LlmToolCall],
+    event_tx: &mpsc::UnboundedSender<Event>,
+    fork_run_id: &str,
+    subs: &ForkStreamSubscriptions,
+) {
+    for tc in tool_calls {
+        let input = parse_tool_call_input(&tc.arguments, &tc.id, &tc.name);
+        try_send_fork_overlay_event(
+            subs,
+            event_tx,
+            Event::SubAgentToolUpdate {
+                fork_run_id: fork_run_id.to_string(),
+                phase: "input_complete".into(),
+                tool_call_id: tc.id.clone(),
+                tool_name: Some(tc.name.clone()),
+                input: Some(input),
+                content: None,
+                needs_approval: None,
+                status: None,
+                description: None,
+            },
+        );
+    }
+}
+
 pub(crate) async fn execute_subagent_tool_batch(
     registry: &Arc<ToolRegistry>,
     fork_ctx: &ToolContext,
@@ -125,24 +151,7 @@ pub(crate) async fn execute_subagent_tool_batch(
     AgentError,
 > {
     if let Some(tx) = event_tx {
-        for tc in tool_calls {
-            let input = parse_tool_call_input(&tc.arguments, &tc.id, &tc.name);
-            try_send_fork_overlay_event(
-                subs,
-                tx,
-                Event::SubAgentToolUpdate {
-                    fork_run_id: fork_run_id.to_string(),
-                    phase: "input_complete".into(),
-                    tool_call_id: tc.id.clone(),
-                    tool_name: Some(tc.name.clone()),
-                    input: Some(input),
-                    content: None,
-                    needs_approval: None,
-                    status: None,
-                    description: None,
-                },
-            );
-        }
+        emit_fork_tool_input_events(tool_calls, tx, fork_run_id, subs);
     }
     if let Some(dispatch_arc) = fork_dispatch {
         let mut executor = {

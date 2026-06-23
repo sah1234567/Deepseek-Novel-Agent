@@ -255,14 +255,27 @@ async fn subagent_apply_completion_tools(
     }
 
     if phase.is_report_only() {
-        return subagent_apply_report_only_tools(
-            shared,
+        fork_child_push(
+            &shared.session.db,
             fork_run_id,
-            child,
-            completion,
-            &tool_calls,
-            phase,
-        );
+            &mut child.messages,
+            assistant_from_completion(completion),
+        )?;
+        for tc in &tool_calls {
+            fork_child_push(
+                &shared.session.db,
+                fork_run_id,
+                &mut child.messages,
+                report_only_tool_rejection(&tc.id),
+            )?;
+        }
+        if let Some(next) = phase.consume_grace() {
+            return Ok(SubagentTurnOutcome::Continue { phase: next });
+        }
+        return Ok(SubagentTurnOutcome::Break {
+            interrupted: true,
+            reason: "报告收尾失败",
+        });
     }
 
     let fork_ctx = crate::subagent::helpers::subagent_tool_context(shared, agent_type);
@@ -303,37 +316,6 @@ async fn subagent_apply_completion_tools(
         });
     }
     Ok(SubagentTurnOutcome::Continue { phase })
-}
-
-fn subagent_apply_report_only_tools(
-    shared: &crate::EngineShared,
-    fork_run_id: &str,
-    child: &mut crate::ForkedAgentContext,
-    completion: &novel_deepseek::LlmCompletion,
-    tool_calls: &[novel_deepseek::LlmToolCall],
-    phase: SubagentLoopPhase,
-) -> Result<SubagentTurnOutcome, AgentError> {
-    fork_child_push(
-        &shared.session.db,
-        fork_run_id,
-        &mut child.messages,
-        assistant_from_completion(completion),
-    )?;
-    for tc in tool_calls {
-        fork_child_push(
-            &shared.session.db,
-            fork_run_id,
-            &mut child.messages,
-            report_only_tool_rejection(&tc.id),
-        )?;
-    }
-    if let Some(next) = phase.consume_grace() {
-        return Ok(SubagentTurnOutcome::Continue { phase: next });
-    }
-    Ok(SubagentTurnOutcome::Break {
-        interrupted: true,
-        reason: "报告收尾失败",
-    })
 }
 
 async fn subagent_run_react_loop(
@@ -453,9 +435,7 @@ mod tests {
     use novel_deepseek::LlmCompletion;
     use tempfile::TempDir;
 
-    #[test]
-    fn report_only_tools_enters_grace_phase() {
-        let tmp = TempDir::new().unwrap();
+    fn fork_setup(tmp: &TempDir) -> (crate::AgentEngine, String, crate::ForkedAgentContext) {
         std::fs::create_dir_all(tmp.path().join("skills")).unwrap();
         let engine = crate::AgentEngine::new(EngineConfig {
             project_root: tmp.path().to_path_buf(),
@@ -477,8 +457,129 @@ mod tests {
                 "test",
             )
             .unwrap();
-        let mut child =
+        let child =
             build_fork_child(&engine.shared, AgentType::KnowledgeAuditor, "audit".into()).unwrap();
+        (engine, fork_run_id, child)
+    }
+
+    #[tokio::test]
+    async fn empty_tools_breaks_subagent_turn() {
+        let tmp = TempDir::new().unwrap();
+        let (engine, fork_run_id, mut child) = fork_setup(&tmp);
+        let mut turn_ctx = TurnContext::new(40);
+        let completion = LlmCompletion {
+            content: Some("report only text".into()),
+            reasoning_content: None,
+            tool_calls: vec![],
+            stop_reason: Some("stop".into()),
+            usage: None,
+        };
+        let out = subagent_apply_completion_tools(
+            &engine.shared,
+            AgentType::KnowledgeAuditor,
+            &fork_run_id,
+            &mut child,
+            &mut turn_ctx,
+            SubagentLoopPhase::Reacting,
+            40,
+            &completion,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            out,
+            SubagentTurnOutcome::Break {
+                interrupted: false,
+                reason: ""
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn react_tools_batch_continues() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("sub.txt"), "fork body").unwrap();
+        let (engine, fork_run_id, mut child) = fork_setup(&tmp);
+        let mut turn_ctx = TurnContext::new(40);
+        let completion = LlmCompletion {
+            content: Some("reading".into()),
+            reasoning_content: None,
+            tool_calls: vec![novel_deepseek::LlmToolCall {
+                id: "r1".into(),
+                name: "Read".into(),
+                arguments: r#"{"file_path":"sub.txt"}"#.into(),
+            }],
+            stop_reason: Some("tool_calls".into()),
+            usage: None,
+        };
+        let out = subagent_apply_completion_tools(
+            &engine.shared,
+            AgentType::KnowledgeAuditor,
+            &fork_run_id,
+            &mut child,
+            &mut turn_ctx,
+            SubagentLoopPhase::Reacting,
+            40,
+            &completion,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            out,
+            SubagentTurnOutcome::Continue {
+                phase: SubagentLoopPhase::Reacting
+            }
+        ));
+        assert!(child.messages.iter().any(|m| m.role == "tool"));
+    }
+
+    #[tokio::test]
+    async fn react_limit_enters_report_only_phase() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("sub.txt"), "fork body").unwrap();
+        let (engine, fork_run_id, mut child) = fork_setup(&tmp);
+        let mut turn_ctx = TurnContext::new(1);
+        let completion = LlmCompletion {
+            content: None,
+            reasoning_content: None,
+            tool_calls: vec![novel_deepseek::LlmToolCall {
+                id: "r1".into(),
+                name: "Read".into(),
+                arguments: r#"{"file_path":"sub.txt"}"#.into(),
+            }],
+            stop_reason: Some("tool_calls".into()),
+            usage: None,
+        };
+        let out = subagent_apply_completion_tools(
+            &engine.shared,
+            AgentType::KnowledgeAuditor,
+            &fork_run_id,
+            &mut child,
+            &mut turn_ctx,
+            SubagentLoopPhase::Reacting,
+            1,
+            &completion,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            out,
+            SubagentTurnOutcome::Continue {
+                phase: SubagentLoopPhase::ReportOnly { grace_left: 1 }
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn report_only_tools_enters_grace_phase() {
+        let tmp = TempDir::new().unwrap();
+        let (engine, fork_run_id, mut child) = fork_setup(&tmp);
         let phase = SubagentLoopPhase::ReportOnly { grace_left: 1 };
         let completion = LlmCompletion {
             content: Some("done".into()),
@@ -491,14 +592,20 @@ mod tests {
             stop_reason: Some("tool_calls".into()),
             usage: None,
         };
-        let out = subagent_apply_report_only_tools(
+        let mut turn_ctx = TurnContext::new(40);
+        let out = subagent_apply_completion_tools(
             &engine.shared,
+            AgentType::KnowledgeAuditor,
             &fork_run_id,
             &mut child,
-            &completion,
-            &completion.tool_calls,
+            &mut turn_ctx,
             phase,
+            40,
+            &completion,
+            None,
+            None,
         )
+        .await
         .unwrap();
         assert!(matches!(
             out,

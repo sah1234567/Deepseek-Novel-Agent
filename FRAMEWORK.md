@@ -77,7 +77,7 @@ novel-server (Tauri IPC)
 | **Turn 续跑预算** | 续跑时 inner turn 预算按**当前 turn 内**已消耗量计算，避免长会话因累计 assistant 消息数提前触及上限 |
 | **Segment 分段 UI** | 每次 LLM 响应结束为一个 segment；主聊天与子 Agent overlay 各自 finalize 独立气泡（CoT + 正文），通过 `fork_run_id` 区分归属 |
 | **聊天区布局** | 用户 / Agent / Subagent 为全宽 `message` 气泡；`AskUserQuestion` 为全宽卡片；普通工具为全宽 `message-tool` + 内嵌 `ToolUseCard`（虚线框）；`ForkSubAgent` 与 Agent 同构 `SubAgentForkCard`。长文本边界强制换行；当前 turn 锚点 `min-height` 折叠较早内容；上滚后 **Sticky 本轮用户提问** 可点回起点 |
-| **Session Todo UI** | `TodoWrite` → `session_todos`；**`session-todos-updated`** 事件即时刷新 StatusBar（turn 进行中即可，不经 `get_app_status`）；按钮常驻；有未完成项时高亮；下拉按 **进行中 / 未进行 / 已完成** 分组（已完成划掉）；全部完成时列表空态 |
+| **Session Todo UI** | `TodoWrite` → `session_todos`；**`session-todos-updated`** 即时刷新 StatusBar；按钮常驻；徽章仅计未完成；无未完成项时下拉空态；有未完成项时展示四类状态（样式区分）；`update_session_todo` 经校验后写入 |
 
 ### 1.5 前后端边界
 
@@ -194,7 +194,7 @@ Agent prompt 文件位于 `prompt/agents/*.md`，编译期嵌入（`agent/catalo
 | INDEX | `knowledge/INDEX.md`（≤2000 字） |
 | Skills | `skills/` 摘要 only（压缩时读盘刷新；正文经 InvokeSkill → `[上下文刷新]`） |
 | Memory | `memory/`（≤4KB） |
-| Progress | 章节数 + TodoWrite |
+| Progress | 章节数 + 未完成会话待办（`pending`/`in_progress`） |
 
 **Compaction 后（API 工作集）：** system（AGENTS/Workspace 冻结 + Index/Memory/Progress/Skills 摘要 读盘刷新 + 权限检查决定是否注入自主模式指令）→ `[上下文刷新]` user（Skill 全文 + 会话摘要）→ 最近 5 轮 ReAct。压缩摘要含两个新增字段：「上一章衔接锚点」（原文末3句+细纲摘要）和「活跃伏笔」（未来5章待回收伏笔ID），加速压缩后恢复。Memory / INDEX / Progress **仅在 system 对应节**，不在 `[上下文刷新]`。
 
@@ -228,7 +228,7 @@ Agent prompt 文件位于 `prompt/agents/*.md`，编译期嵌入（`agent/catalo
 | 作品 | `list_works`, `create_work`, `open_work` |
 | 会话 | `create_session`, `resume_session`, `list_sessions`, `get_session_transcript_layout`, `get_session_message_turns`, `get_session_archive_turns` |
 | 聊天 | `send_message`, `interrupt`, `approve_tool`, `deny_tool`, `answer_question` |
-| 待办 | `update_session_todo`（StatusBar 点击循环 `pending` ↔ `in_progress` ↔ `completed`；直写 DB 并 emit `session-todos-updated`） |
+| 待办 | `update_session_todo`（StatusBar 点击循环 `pending` → `in_progress` → `completed` → …；经 `validate_todo_upsert` 后 `replace=false` 写入并 emit `session-todos-updated`） |
 | 文件 | `list_project_files`, `read_project_file`（当前 active 作品） |
 | 配置 | `get_api_config`, `set_api_config`（全局 json） |
 | 脚手架 | `init_novel_project` |

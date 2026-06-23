@@ -16,6 +16,9 @@ pub struct ExtractionContext {
     pub project_root: PathBuf,
     /// True when the main agent already Write/Edit'd a file under `memory/` this turn.
     pub main_agent_wrote_memory: bool,
+    /// True when AskUserQuestion was called during this turn.  Overrides
+    /// `main_agent_wrote_memory` — user decisions must always be extracted.
+    pub had_ask_user_question: bool,
 }
 
 /// Prepared extraction job — pass to `novel-core` to spawn the fork subagent.
@@ -80,14 +83,15 @@ impl MemoryExtractor {
         &self,
         ctx: &ExtractionContext,
     ) -> Option<PreparedMemoryExtraction> {
-        // 1. Main agent already handled memory this turn — nothing to extract.
-        if ctx.main_agent_wrote_memory {
+        // 1. Main agent already handled memory this turn — skip unless
+        //    AskUserQuestion was called (user decisions must always be reviewed).
+        if ctx.main_agent_wrote_memory && !ctx.had_ask_user_question {
             self.advance_cursor_to(ctx.message_count);
             return None;
         }
 
-        // 2. Throttle gate: skip if below the extraction period.
-        if !self.pass_throttle_gate() {
+        // 2. Throttle gate — skipped when `had_ask_user_question` (user decisions must run).
+        if !ctx.had_ask_user_question && !self.pass_throttle_gate() {
             return None;
         }
 
@@ -170,6 +174,7 @@ impl MemoryExtractor {
         let headers = scan_memory_files_for_extraction(&memory_dir);
         let manifest = format_memory_manifest(&headers, true);
         let new_count = ctx.message_count.saturating_sub(self.cursor());
+        // Ask-user priority is in `prompt/memory/extraction-task.md` (static template).
         build_memory_extraction_prompt(new_count, &manifest, "memory")
     }
 
@@ -205,7 +210,21 @@ mod tests {
             message_count,
             project_root,
             main_agent_wrote_memory: false,
+            had_ask_user_question: false,
         }
+    }
+
+    #[test]
+    fn prepare_runs_when_main_agent_wrote_memory_but_ask_user_question_was_called() {
+        let extractor = MemoryExtractor::new();
+        let tmp = TempDir::new().unwrap();
+        let ctx = ExtractionContext {
+            message_count: 5,
+            project_root: tmp.path().to_path_buf(),
+            main_agent_wrote_memory: true,
+            had_ask_user_question: true,
+        };
+        assert!(extractor.try_prepare_extraction(&ctx).is_some());
     }
 
     #[test]

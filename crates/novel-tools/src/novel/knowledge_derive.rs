@@ -327,6 +327,14 @@ povCharacter: true
     }
 
     #[test]
+    fn stale_memory_check_empty_store() {
+        let tmp = TempDir::new().unwrap();
+        let store = KnowledgeStore::new(tmp.path());
+        let out = stale_memory_check_op(&store).unwrap();
+        assert!(out.content.contains("No plot_decision"));
+    }
+
+    #[test]
     fn foreshadow_categories_on_empty_store() {
         let tmp = TempDir::new().unwrap();
         std::fs::create_dir_all(tmp.path().join("knowledge/plot")).unwrap();

@@ -73,7 +73,7 @@ React (ui/) ──invoke/listen──► src-tauri/commands.rs
 }
 ```
 
-`status` 取值：`pending` | `in_progress` | `completed` | `cancelled`（与 TodoWrite schema 一致）。StatusBar：**有未完成项**时按前三类分组（`completed` 在「已完成」区划掉）；`cancelled` 不显示；**全部完成或列表为空**时下拉为「暂无待办事项」。
+`status` 取值：`pending` | `in_progress` | `completed` | `cancelled`（与 TodoWrite schema 一致）。StatusBar：四类状态样式区分（`cancelled` 灰色斜体删除线，`completed` 绿色删除线）。徽章仅计 `pending` + `in_progress`。无未完成项时（`incompleteCount === 0`）下拉为「暂无待办事项」；有未完成项时按 DB 顺序展示全部行（含终态历史项）。
 
 `projectInitialized`：`knowledge/` 或 `AGENTS.md` 存在；`activeWorkName` 来自当前 `AppConfig.active_project`。
 

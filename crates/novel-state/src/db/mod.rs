@@ -61,10 +61,10 @@ impl Database {
         &self,
         session_id: &str,
         todos: &[crate::SessionTodo],
-        merge: bool,
+        replace: bool,
     ) -> Result<(), StateError> {
         let conn = self.pool.get()?;
-        crate::todo::upsert_todos(&conn, session_id, todos, merge)
+        crate::todo::upsert_todos(&conn, session_id, todos, replace)
     }
 
     pub fn list_session_todos(

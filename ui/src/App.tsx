@@ -126,10 +126,15 @@ function AppShell({
             // error shown via ErrorBanner
           }
         }}
-        onCycleTodo={(todoId, nextStatus) => {
+        onCycleTodo={async (todoId, nextStatus) => {
           const sessionId = status?.sessionId;
           if (!sessionId) return;
-          void updateSessionTodo(todoId, nextStatus, sessionId);
+          try {
+            await updateSessionTodo(todoId, nextStatus, sessionId);
+          } catch (e) {
+            setStatusBarError(String(e));
+            setErrorDismissed(false);
+          }
         }}
         onSessionError={(message) => {
           setStatusBarError(message);

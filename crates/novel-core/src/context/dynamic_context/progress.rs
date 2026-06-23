@@ -141,9 +141,10 @@ pub fn load_progress(project_root: &Path, session_id: &str, db: &Database) -> St
     if !unit_context.is_empty() {
         lines.push(unit_context);
     }
-    let visible_todos: Vec<_> = todos.iter().filter(|t| t.status != "cancelled").collect();
-    if !visible_todos.is_empty() {
-        let summary: Vec<String> = visible_todos
+    let active_todos: Vec<_> = todos.iter().filter(|t| t.is_unfinished()).collect();
+    // LLM progress: unfinished only; StatusBar still shows terminal rows when any item is open.
+    if !active_todos.is_empty() {
+        let summary: Vec<String> = active_todos
             .iter()
             .map(|t| format!("[{}] id={} {}", t.status, t.id, t.content))
             .collect();
@@ -272,12 +273,42 @@ content
                     status: "pending".into(),
                 },
             ],
-            false,
+            true,
         )
         .expect("todos");
         let p = load_progress(tmp.path(), &sid, &db);
         assert!(p.contains("会话待办:"));
         assert!(p.contains("[in_progress] id=t1 写细纲"));
         assert!(p.contains("[pending] id=t2 写正文"));
+    }
+
+    #[test]
+    fn load_progress_omits_terminal_todos_from_session_summary() {
+        let tmp = TempDir::new().expect("tmp");
+        let db = Database::open(tmp.path().join("t.db")).expect("db");
+        let sid = db
+            .create_session(tmp.path().to_str().unwrap(), "m")
+            .expect("s");
+        db.upsert_session_todos(
+            &sid,
+            &[
+                novel_state::SessionTodo {
+                    id: "done".into(),
+                    content: "已完成".into(),
+                    status: "completed".into(),
+                },
+                novel_state::SessionTodo {
+                    id: "cancel".into(),
+                    content: "已取消".into(),
+                    status: "cancelled".into(),
+                },
+            ],
+            true,
+        )
+        .expect("todos");
+        let p = load_progress(tmp.path(), &sid, &db);
+        assert!(!p.contains("会话待办:"));
+        assert!(!p.contains("id=done"));
+        assert!(!p.contains("id=cancel"));
     }
 }

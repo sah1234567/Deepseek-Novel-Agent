@@ -1,12 +1,13 @@
 mod compaction;
+mod compaction_helpers;
 mod inner_turn;
+mod memory_prefetch_gate;
 mod persistence;
 #[cfg(test)]
 mod tests;
+mod turn_start;
 
-use crate::engine::session_llm::{
-    build_chat_client, read_session_llm, write_session_llm, SessionLlmSnapshot,
-};
+use crate::engine::session_llm::{build_chat_client, read_session_llm, write_session_llm};
 use crate::message::tool_result_message;
 use crate::turn::TurnContext;
 use crate::turn::MSG_SEQ_USER;
@@ -36,6 +37,61 @@ impl AgentEngine {
             novel_memory::create_selector_from_config(&self.shared.global_config_path);
     }
 
+    fn memory_extraction_context_since(&self, cursor: usize) -> novel_memory::ExtractionContext {
+        let tool_calls: Vec<(&str, &serde_json::Value)> = self
+            .messages
+            .iter()
+            .skip(cursor)
+            .filter_map(|msg| msg.tool_calls.as_ref())
+            .flat_map(|tcs| tcs.iter())
+            .map(|tc| (tc.name.as_str(), &tc.arguments))
+            .collect();
+        novel_memory::ExtractionContext {
+            message_count: self.messages.len(),
+            project_root: self.shared.session.project_root.clone(),
+            main_agent_wrote_memory: novel_memory::has_memory_writes_since(
+                tool_calls.iter().copied(),
+            ),
+            had_ask_user_question: tool_calls
+                .iter()
+                .any(|(name, _)| *name == "AskUserQuestion"),
+        }
+    }
+
+    /// Fire-and-forget memory fork when the turn truly finished (not paused for Q&A or approval).
+    fn maybe_spawn_memory_extraction(&mut self, reason: &TerminalReason) {
+        if *reason != TerminalReason::Completed {
+            return;
+        }
+        if self.pending_user_question.is_some() || !self.pending_tools.is_empty() {
+            tracing::debug!(
+                pending_question = self.pending_user_question.is_some(),
+                pending_tool_count = self.pending_tools.len(),
+                "memory_extraction_deferred_turn_paused"
+            );
+            return;
+        }
+        let cursor = self.memory_extractor.cursor();
+        let extraction_ctx = self.memory_extraction_context_since(cursor);
+        if let Some(prepared) = self
+            .memory_extractor
+            .try_prepare_extraction(&extraction_ctx)
+        {
+            self.sync_session_llm_from_llm();
+            let llm_snap = crate::engine::session_llm::read_session_llm(&self.shared);
+            let recent = self.messages[cursor..].to_vec();
+            let all_messages = Arc::new(self.messages.clone());
+            crate::subagent::spawn_memory_extraction(
+                self.shared.clone(),
+                Arc::clone(&self.memory_extractor),
+                prepared,
+                recent,
+                llm_snap,
+                all_messages,
+            );
+        }
+    }
+
     // ── Main agent turn ───────────────────────────────────────
 
     pub async fn handle_message_with_events(
@@ -44,19 +100,8 @@ impl AgentEngine {
         model_override: Option<&str>,
         event_tx: Option<&mpsc::UnboundedSender<Event>>,
     ) -> Result<TerminalReason, AgentError> {
-        if content.trim().is_empty() {
-            tracing::warn!("handle_message rejected: empty content");
-            return Err(AgentError::Validation("empty message".into()));
-        }
-        if self.pending_user_question.is_some() {
-            tracing::warn!(
-                session_id = %self.shared.session.id,
-                "handle_message rejected: pending user question"
-            );
-            return Err(AgentError::Validation(
-                "answer pending question before sending a new message".into(),
-            ));
-        }
+        let author_content =
+            turn_start::validate_turn_start(content, self.pending_user_question.is_some())?;
         self.clear_interrupt();
         self.turn_number += 1;
 
@@ -74,8 +119,6 @@ impl AgentEngine {
             );
         }
 
-        let author_content = content.trim().to_string();
-
         // Set session title from first user message (author text only, not injected prefix).
         if self.turn_number == 1 {
             let title: String = author_content.chars().take(50).collect();
@@ -92,19 +135,9 @@ impl AgentEngine {
                 );
             }
         }
-        // Per-turn model snapshot (StatusBar override; does not write settings.json).
-        let turn_snap = match model_override {
-            Some(m) if !m.is_empty() && m != self.shared.settings.model.model => {
-                SessionLlmSnapshot {
-                    model: m.to_string(),
-                    thinking_enabled: self.shared.settings.model.thinking_enabled,
-                }
-            }
-            _ => SessionLlmSnapshot::from_settings(&self.shared.settings),
-        };
+        let (turn_snap, per_turn_model_override) =
+            turn_start::resolve_turn_llm_snapshot(model_override, &self.shared.settings);
         write_session_llm(&self.shared, turn_snap.clone());
-        let per_turn_model_override =
-            model_override.is_some_and(|m| !m.is_empty() && m != self.shared.settings.model.model);
         // Must rebuild when override changes: `init_llm` skips if `self.llm` is already set.
         if per_turn_model_override {
             self.llm = build_chat_client(&turn_snap, &self.shared.global_config_path);
@@ -112,32 +145,14 @@ impl AgentEngine {
         }
 
         self.pending_tools.clear();
-        let merged_content = if let Some(prefix) = self.pending_permission_user_prefix.take() {
-            tracing::debug!(
-                prefix_len = prefix.len(),
-                has_display_content = true,
-                "permission_mode_prefix_prepended_to_user_message"
-            );
-            crate::permission::prepend_permission_notice(&prefix, &author_content)
-        } else {
-            author_content.clone()
-        };
-        let display_content = if crate::permission::is_permission_mode_notice(&merged_content) {
-            Some(author_content.as_str())
-        } else {
-            None
-        };
-        let user_msg = ChatMessage {
-            role: "user".into(),
-            content: merged_content,
-            tool_call_id: None,
-            tool_calls: None,
-            reasoning_content: None,
-            display_content: display_content.map(str::to_string),
-        };
+        let user_msg = turn_start::build_turn_user_message(
+            &author_content,
+            self.pending_permission_user_prefix.take(),
+        );
+        let display_content = user_msg.display_content.clone();
         self.messages.push(user_msg.clone());
         self.turn_message_seq = 0;
-        self.persist_message_at_seq(&user_msg, MSG_SEQ_USER, display_content)?;
+        self.persist_message_at_seq(&user_msg, MSG_SEQ_USER, display_content.as_deref())?;
 
         let session_id = self.shared.session.id.clone();
         let message_count = self.messages.len();
@@ -164,41 +179,31 @@ impl AgentEngine {
 
         // ── Memory prefetch (async, parallel to LLM streaming) ──
         self.init_memory_selector();
-
-        // Guard 1: very short prompts lack enough context for meaningful
-        // memory selection.  Uses a CJK/ASCII-aware word-count estimator so
-        // "写第5章"(4) and "write ch 5"(3) both pass, while "好"(1) and
-        // "hello"(1) are skipped.
-        let word_count = novel_memory::estimated_word_count(&author_content);
-        let skip_short_prompt =
-            word_count < novel_memory::MemoryConstants::MEMORY_PREFETCH_MIN_WORDS;
-
-        // Guard 2: honour the per-session memory budget so long-running
-        // sessions don't keep piling on memory attachments.
-        let memory_dir = self.shared.session.project_root.join("memory");
-        let message_contents: Vec<&str> =
-            self.messages.iter().map(|m| m.content.as_str()).collect();
-        let surfaced_paths = novel_memory::MemoryPrefetch::collect_surfaced_paths(message_contents);
-        let surfaced_bytes =
-            novel_memory::MemoryPrefetch::count_surfaced_bytes(&surfaced_paths, &memory_dir);
-        let skip_budget_exceeded =
-            surfaced_bytes >= novel_memory::MemoryConstants::MAX_SESSION_BYTES;
-
-        if skip_short_prompt || skip_budget_exceeded {
+        let gate = memory_prefetch_gate::evaluate_memory_prefetch_gate(
+            &author_content,
+            &self.shared.session.project_root,
+            &self
+                .messages
+                .iter()
+                .map(|m| m.content.as_str())
+                .collect::<Vec<_>>(),
+        );
+        if gate.should_skip() {
             tracing::debug!(
-                word_count,
-                surfaced_bytes,
-                skip_short_prompt,
-                skip_budget_exceeded,
+                word_count = gate.word_count,
+                surfaced_bytes = gate.surfaced_bytes,
+                skip_short_prompt = gate.skip_short_prompt,
+                skip_budget_exceeded = gate.skip_budget_exceeded,
                 "memory_prefetch_skipped"
             );
             self.memory_prefetch = None;
         } else {
+            let memory_dir = self.shared.session.project_root.join("memory");
             self.memory_prefetch = Some(novel_memory::MemoryPrefetch::start(
                 self.memory_selector.clone(),
                 author_content.clone(),
                 memory_dir,
-                surfaced_paths,
+                gate.surfaced_paths,
             ));
         }
 
@@ -216,13 +221,8 @@ impl AgentEngine {
                     let meta_msg = ChatMessage {
                         role: "user".into(),
                         content: attachment,
-                        tool_call_id: None,
-                        tool_calls: None,
-                        reasoning_content: None,
-                        // display_content set to empty so the frontend never
-                        // renders raw memory content — this is a defense-in-depth
-                        // measure alongside compaction's is_user_turn_start exclusion.
                         display_content: Some(String::new()),
+                        ..Default::default()
                     };
                     self.messages.push(meta_msg);
                 }
@@ -231,41 +231,7 @@ impl AgentEngine {
         }
 
         // ── Memory extraction: fire-and-forget background task ──
-        if reason == TerminalReason::Completed {
-            let cursor = self.memory_extractor.cursor();
-            let extraction_ctx = novel_memory::ExtractionContext {
-                message_count: self.messages.len(),
-                project_root: self.shared.session.project_root.clone(),
-                main_agent_wrote_memory: {
-                    let tool_calls: Vec<(&str, &serde_json::Value)> = self
-                        .messages
-                        .iter()
-                        .skip(cursor)
-                        .filter_map(|msg| msg.tool_calls.as_ref())
-                        .flat_map(|tcs| tcs.iter())
-                        .map(|tc| (tc.name.as_str(), &tc.arguments))
-                        .collect();
-                    novel_memory::has_memory_writes_since(tool_calls)
-                },
-            };
-            if let Some(prepared) = self
-                .memory_extractor
-                .try_prepare_extraction(&extraction_ctx)
-            {
-                self.sync_session_llm_from_llm();
-                let llm_snap = crate::engine::session_llm::read_session_llm(&self.shared);
-                let recent = self.messages[cursor..].to_vec();
-                let all_messages = Arc::new(self.messages.clone());
-                crate::subagent::spawn_memory_extraction(
-                    self.shared.clone(),
-                    Arc::clone(&self.memory_extractor),
-                    prepared,
-                    recent,
-                    llm_snap,
-                    all_messages,
-                );
-            }
-        }
+        self.maybe_spawn_memory_extraction(&reason);
 
         tracing::info!(turn = self.turn_number, ?reason, "turn_complete");
         tracing::debug!(
@@ -553,6 +519,7 @@ impl AgentEngine {
                 "turn_continue_paused"
             );
         }
+        self.maybe_spawn_memory_extraction(&reason);
         self.emit_turn_finished(&reason, event_tx);
         Ok(reason)
     }

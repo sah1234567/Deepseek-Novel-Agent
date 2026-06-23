@@ -56,7 +56,7 @@ mod tests {
                 content: "plan chapter".into(),
                 status: "in_progress".into(),
             }],
-            false,
+            true, // replace: seed test data
         )
         .unwrap();
 

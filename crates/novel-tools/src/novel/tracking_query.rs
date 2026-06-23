@@ -128,21 +128,77 @@ impl Tool for TrackingQueryTool {
     }
 }
 
+fn tracking_table_heading(file: &str) -> Result<&'static str, ToolError> {
+    match file {
+        "scene" => Ok("场景演变日志"),
+        "prop" => Ok("道具演变日志"),
+        "faction" => Ok("势力演变日志"),
+        "timeline" => Ok("时间线演变日志"),
+        "power" => Ok("战力演变日志"),
+        "ability" => Ok("功法演变日志"),
+        _ => Err(ToolError::Execution(format!("unknown file: {file}"))),
+    }
+}
+
+fn format_tracking_block(file: &str, title: &str, header: &str, body: &str) -> String {
+    if header.is_empty() {
+        format!("## {file} -- {title}\n\n{body}")
+    } else {
+        format!("## {file} -- {title}\n\n{header}\n{body}")
+    }
+}
+
+fn tracking_query_current(file: &str, header: &str, rows: &[String]) -> String {
+    let last = rows.last().cloned().unwrap_or_default();
+    format_tracking_block(file, "current", header, &last)
+}
+
+fn tracking_query_range(
+    file: &str,
+    header: &str,
+    rows: &[String],
+    input: &Value,
+) -> Result<String, ToolError> {
+    let range = parse_chapter_range(input)
+        .ok_or_else(|| ToolError::Execution("chapter_range required for range operation".into()))?;
+    let filtered = filter_by_chapter_range(rows, range);
+    if filtered.is_empty() {
+        return Ok(format!("({file} Ch{}-Ch{} 无记录)", range.0, range.1));
+    }
+    Ok(format_tracking_block(
+        file,
+        &format!("Ch{}-Ch{}", range.0, range.1),
+        header,
+        &filtered.join("\n"),
+    ))
+}
+
+fn tracking_query_search(
+    file: &str,
+    header: &str,
+    rows: &[String],
+    input: &Value,
+) -> Result<String, ToolError> {
+    let keyword = require_str(input, "keyword")?;
+    let filtered = search_rows(rows, &keyword);
+    if filtered.is_empty() {
+        return Ok(format!("({file} search \"{keyword}\" 无结果)"));
+    }
+    Ok(format_tracking_block(
+        file,
+        &format!("search \"{keyword}\""),
+        header,
+        &filtered.join("\n"),
+    ))
+}
+
 pub(crate) fn run_tracking_query(
     file: &str,
     operation: &str,
     content: &str,
     input: &Value,
 ) -> Result<ToolOutput, ToolError> {
-    let table_heading = match file {
-        "scene" => "场景演变日志",
-        "prop" => "道具演变日志",
-        "faction" => "势力演变日志",
-        "timeline" => "时间线演变日志",
-        "power" => "战力演变日志",
-        "ability" => "功法演变日志",
-        _ => return Err(ToolError::Execution(format!("unknown file: {file}"))),
-    };
+    let table_heading = tracking_table_heading(file)?;
 
     let (header, rows) = parse_table_with_header(content, table_heading);
     if rows.is_empty() {
@@ -153,54 +209,9 @@ pub(crate) fn run_tracking_query(
     }
 
     let result = match operation {
-        "current" => {
-            let last = rows.last().cloned().unwrap_or_default();
-            if header.is_empty() {
-                format!("## {file} -- current\n\n{last}")
-            } else {
-                format!("## {file} -- current\n\n{header}\n{last}")
-            }
-        }
-        "range" => {
-            let range = parse_chapter_range(input).ok_or_else(|| {
-                ToolError::Execution("chapter_range required for range operation".into())
-            })?;
-            let filtered = filter_by_chapter_range(&rows, range);
-            if filtered.is_empty() {
-                format!("({file} Ch{}-Ch{} 无记录)", range.0, range.1)
-            } else if header.is_empty() {
-                format!(
-                    "## {file} -- Ch{}-Ch{}\n\n{}",
-                    range.0,
-                    range.1,
-                    filtered.join("\n")
-                )
-            } else {
-                format!(
-                    "## {file} -- Ch{}-Ch{}\n\n{header}\n{}",
-                    range.0,
-                    range.1,
-                    filtered.join("\n")
-                )
-            }
-        }
-        "search" => {
-            let keyword = require_str(input, "keyword")?;
-            let filtered = search_rows(&rows, &keyword);
-            if filtered.is_empty() {
-                format!("({file} search \"{keyword}\" 无结果)")
-            } else if header.is_empty() {
-                format!(
-                    "## {file} -- search \"{keyword}\"\n\n{}",
-                    filtered.join("\n")
-                )
-            } else {
-                format!(
-                    "## {file} -- search \"{keyword}\"\n\n{header}\n{}",
-                    filtered.join("\n")
-                )
-            }
-        }
+        "current" => tracking_query_current(file, &header, &rows),
+        "range" => tracking_query_range(file, &header, &rows, input)?,
+        "search" => tracking_query_search(file, &header, &rows, input)?,
         _ => {
             return Err(ToolError::Execution(format!(
                 "unknown operation: {operation}"
@@ -322,6 +333,11 @@ mod tests {
         assert!(out.content.contains("背叛"));
         assert!(!out.content.contains("血月教"));
         assert!(!out.content.starts_with('{'));
+    }
+
+    #[test]
+    fn tracking_table_heading_unknown_file() {
+        assert!(tracking_table_heading("nope").is_err());
     }
 
     #[test]

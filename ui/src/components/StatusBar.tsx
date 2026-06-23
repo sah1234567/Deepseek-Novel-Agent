@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AppStatus, SessionSummary, SessionTodo, WorkSummary } from "../hooks/useAppStatus";
-import { countIncompleteTodos, visibleTodosForDisplay } from "../utils/todoDisplay";
+import { countIncompleteTodos } from "../utils/todoDisplay";
 import "./StatusBar.css";
 
 interface StatusBarProps {
@@ -54,8 +54,7 @@ function TodoDropdown({
   onCycle: (id: string, next: string) => void;
 }) {
   const incompleteCount = countIncompleteTodos(todos);
-  const visibleTodos = visibleTodosForDisplay(todos);
-  const showEmpty = visibleTodos.length === 0;
+  const showEmpty = incompleteCount === 0;
 
   return (
     <div className="todo-dropdown-wrapper">
@@ -74,7 +73,7 @@ function TodoDropdown({
             <p className="todo-dropdown-empty">暂无待办事项</p>
           ) : (
             <ul className="todo-dropdown-list">
-              {visibleTodos.map((todo) => (
+              {todos.map((todo) => (
                 <li
                   key={todo.id}
                   className={`todo-dropdown-item todo-dropdown-${todo.status}`}

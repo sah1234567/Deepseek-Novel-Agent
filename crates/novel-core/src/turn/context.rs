@@ -18,6 +18,7 @@ pub struct TurnContext {
     /// Budget uses `inner_turn - inner_turn_at_start` so long sessions do not exhaust the cap.
     pub inner_turn_at_start: u32,
     pub max_inner_turns: u32,
+    pub todo_nudge_count: u32,
 }
 
 impl TurnContext {
@@ -26,6 +27,7 @@ impl TurnContext {
             inner_turn: 0,
             inner_turn_at_start: 0,
             max_inner_turns,
+            todo_nudge_count: 0,
         }
     }
 

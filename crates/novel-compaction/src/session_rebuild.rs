@@ -69,13 +69,47 @@ pub struct SessionBudgetRebuildInput<'a> {
     pub compaction_threshold: f32,
 }
 
-/// Rebuild session messages; drop oldest retained turns until estimated tokens are under budget.
-///
 /// Budget ratio is `compaction_threshold * 0.5` (e.g. default 0.8 → stop trimming below 40% of window).
+pub(crate) fn tokens_under_compaction_budget(
+    tokens: usize,
+    window: usize,
+    compaction_threshold: f32,
+) -> bool {
+    let budget_ratio = compaction_threshold * 0.5;
+    (tokens as f32 / window as f32) < budget_ratio
+}
+
+fn shrink_retain_tail(
+    retain: &mut Vec<CompactionMessage>,
+    turns: &mut usize,
+    _retain_policy: &RetainPolicy,
+) {
+    if *turns == 0 {
+        retain.clear();
+        return;
+    }
+    let ranges = crate::react_cycles::user_turn_ranges(retain);
+    if ranges.is_empty() {
+        retain.clear();
+        return;
+    }
+    if ranges.len() <= *turns {
+        let drop_to = ranges.first().map(|r| r.0).unwrap_or(0);
+        if drop_to >= retain.len() {
+            retain.clear();
+        } else {
+            *retain = retain.split_off(drop_to);
+        }
+        return;
+    }
+    let drop_to = ranges[ranges.len() - *turns].0;
+    *retain = retain.split_off(drop_to);
+}
+
+/// Rebuild session messages; drop oldest retained turns until estimated tokens are under budget.
 pub fn rebuild_session_under_budget(
     input: SessionBudgetRebuildInput<'_>,
 ) -> Result<Vec<CompactionMessage>, CompactionError> {
-    let budget_ratio = input.compaction_threshold * 0.5;
     let mut retain = input.retain;
     let mut turns = input.retain_policy.recent_react_turns;
     loop {
@@ -90,7 +124,7 @@ pub fn rebuild_session_under_budget(
         };
         let rebuilt = rebuild_session_messages(rebuild);
         let tokens: usize = rebuilt.iter().map(|m| estimate_tokens(&m.content)).sum();
-        if (tokens as f32 / input.window as f32) < budget_ratio {
+        if tokens_under_compaction_budget(tokens, input.window, input.compaction_threshold) {
             if tokens > input.window {
                 return Err(CompactionError::ContextTooLarge {
                     tokens,
@@ -109,22 +143,7 @@ pub fn rebuild_session_under_budget(
             return Ok(rebuilt);
         }
         turns -= 1;
-        let ranges = crate::react_cycles::user_turn_ranges(&retain);
-        if ranges.is_empty() {
-            retain.clear();
-            continue;
-        }
-        if ranges.len() <= turns {
-            let drop_to = ranges.first().map(|r| r.0).unwrap_or(0);
-            if drop_to >= retain.len() {
-                retain.clear();
-            } else {
-                retain = retain.split_off(drop_to);
-            }
-            continue;
-        }
-        let drop_to = ranges[ranges.len() - turns].0;
-        retain = retain.split_off(drop_to);
+        shrink_retain_tail(&mut retain, &mut turns, input.retain_policy);
     }
 }
 
@@ -204,5 +223,42 @@ mod tests {
         assert!(out[1].content.starts_with(CONTEXT_REFRESH_USER_PREFIX));
         assert!(!out[1].content.contains("## 激活 Skill"));
         assert!(out[1].content.contains("## 会话历史摘要"));
+    }
+
+    #[test]
+    fn tokens_under_compaction_budget_ratio() {
+        assert!(tokens_under_compaction_budget(100, 1000, 0.8));
+        assert!(!tokens_under_compaction_budget(500, 1000, 0.8));
+    }
+
+    #[test]
+    fn rebuild_session_under_budget_trims_when_over_ratio() {
+        let system = CompactionMessage {
+            role: "system".into(),
+            content: "sys".into(),
+            ..Default::default()
+        };
+        let retain: Vec<CompactionMessage> = (0..6)
+            .map(|i| CompactionMessage {
+                role: if i % 2 == 0 { "user" } else { "assistant" }.into(),
+                content: "x".repeat(200),
+                ..Default::default()
+            })
+            .collect();
+        let out = rebuild_session_under_budget(SessionBudgetRebuildInput {
+            system,
+            summary_text: "sum",
+            retain,
+            skill_bodies: "",
+            invoked_skill_ids: &[],
+            retain_policy: &RetainPolicy {
+                recent_react_turns: 1,
+                ..RetainPolicy::default()
+            },
+            window: 1000,
+            compaction_threshold: 0.8,
+        })
+        .expect("rebuild");
+        assert!(out.len() >= 2);
     }
 }

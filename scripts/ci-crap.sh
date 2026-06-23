@@ -15,7 +15,7 @@ fi
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-THRESHOLD="${CRAP_THRESHOLD:-30}"
+THRESHOLD="${CRAP_THRESHOLD:-20}"
 LCOV_PATH="${LCOV_PATH:-lcov.info}"
 
 exec cargo crap --lcov "$LCOV_PATH" --workspace --fail-above --threshold "$THRESHOLD" "$@"

@@ -32,7 +32,7 @@ fn test_db() -> TestDb {
 }
 
 #[test]
-fn upsert_session_todos_replace_and_merge() {
+fn upsert_session_todos_replace_and_status_update_only() {
     let db = test_db();
     let sid = db.create_session("/tmp/proj", "deepseek-chat").unwrap();
     let t1 = crate::SessionTodo {
@@ -40,18 +40,26 @@ fn upsert_session_todos_replace_and_merge() {
         content: "a".into(),
         status: "pending".into(),
     };
-    db.upsert_session_todos(&sid, std::slice::from_ref(&t1), false)
+    db.upsert_session_todos(&sid, std::slice::from_ref(&t1), true) // replace: seed
         .unwrap();
     assert_eq!(db.list_session_todos(&sid).unwrap().len(), 1);
-    let t2 = crate::SessionTodo {
+    let t1_done = crate::SessionTodo {
+        id: "1".into(),
+        content: "a".into(),
+        status: "completed".into(),
+    };
+    db.upsert_session_todos(&sid, std::slice::from_ref(&t1_done), false)
+        .unwrap(); // status update only
+    assert_eq!(db.list_session_todos(&sid).unwrap()[0].status, "completed");
+    let unknown = crate::SessionTodo {
         id: "2".into(),
         content: "b".into(),
-        status: "done".into(),
+        status: "pending".into(),
     };
-    db.upsert_session_todos(&sid, &[t2], true).unwrap();
-    let listed = db.list_session_todos(&sid).unwrap();
-    assert_eq!(listed.len(), 2);
-    db.upsert_session_todos(&sid, &[], false).unwrap();
+    db.upsert_session_todos(&sid, std::slice::from_ref(&unknown), false)
+        .unwrap(); // unknown id skipped — no insert
+    assert_eq!(db.list_session_todos(&sid).unwrap().len(), 1);
+    db.upsert_session_todos(&sid, &[], true).unwrap(); // replace: clear all
     assert!(db.list_session_todos(&sid).unwrap().is_empty());
 }
 
@@ -78,7 +86,7 @@ fn session_todos_keep_creation_order_when_status_changes() {
                 status: "pending".into(),
             },
         ],
-        false,
+        true, // replace: seed initial list
     )
     .unwrap();
     db.upsert_session_todos(
@@ -88,7 +96,7 @@ fn session_todos_keep_creation_order_when_status_changes() {
             content: "second".into(),
             status: "in_progress".into(),
         }],
-        true,
+        false, // upsert: update status, keep others
     )
     .unwrap();
     let listed = db.list_session_todos(&sid).unwrap();

@@ -128,4 +128,23 @@ mod tests {
             .expect("post_json should succeed");
         assert_eq!(text, r#"{"ok":true}"#);
     }
+
+    #[tokio::test]
+    async fn verify_web_search_endpoint_accepts_tool_result() {
+        let mock_server = MockServer::start().await;
+        std::env::set_var(
+            "DEEPSEEK_WEB_SEARCH_MESSAGES_URL",
+            format!("{}/v1/messages", mock_server.uri()),
+        );
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"content":[{"type":"web_search_tool_result","tool_use_id":"t1"}]}"#,
+            ))
+            .mount(&mock_server)
+            .await;
+        verify_web_search_endpoint("test-key", "deepseek-chat")
+            .await
+            .expect("web search verify");
+        std::env::remove_var("DEEPSEEK_WEB_SEARCH_MESSAGES_URL");
+    }
 }

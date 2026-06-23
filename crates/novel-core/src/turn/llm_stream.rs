@@ -12,7 +12,7 @@ use novel_deepseek::{
     StreamOutcome,
 };
 use novel_logging::LogEvent;
-use novel_tools::AbortSignal;
+use novel_tools::{AbortSignal, StreamingToolExecutor};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -55,7 +55,134 @@ pub(crate) enum LlmCallOutcome {
     Aborted(TerminalReason),
 }
 
+pub(crate) struct StreamDispatchBatch {
+    pub executed_specs: Vec<novel_tools::ToolCallSpec>,
+    pub skip_result_events: std::collections::HashSet<String>,
+    pub denied_specs: std::collections::HashMap<String, (novel_tools::ToolCallSpec, String)>,
+    pub executor: StreamingToolExecutor,
+}
+
+pub(crate) fn merge_denied_stream_results(
+    results: &mut Vec<(
+        String,
+        Result<novel_tools::ToolOutput, novel_tools::ToolError>,
+    )>,
+    denied_specs: std::collections::HashMap<String, (novel_tools::ToolCallSpec, String)>,
+) {
+    for (id, (_, reason)) in denied_specs {
+        results.push((id, Err(novel_tools::ToolError::PermissionDenied(reason))));
+    }
+}
+
 impl AgentEngine {
+    fn drain_live_stream_dispatch(
+        &mut self,
+        dispatch_arc: &Arc<Mutex<StreamingToolDispatch>>,
+        ctx: &novel_tools::ToolContext,
+        completion: &LlmCompletion,
+        event_tx: Option<&mpsc::UnboundedSender<Event>>,
+    ) -> Result<StreamDispatchBatch, AgentError> {
+        let mut dispatch = dispatch_arc
+            .lock()
+            .map_err(|_| AgentError::Validation("streaming tool dispatch lock poisoned".into()))?;
+        for tc in &completion.tool_calls {
+            if !dispatch.handled_ids.contains(&tc.id) {
+                dispatch.handle_ready(&self.shared.registry, ctx, event_tx, tc.clone(), true);
+            } else if let Some(tx) = event_tx {
+                let input = parse_tool_call_input(&tc.arguments, &tc.id, &tc.name);
+                let needs_approval = self.pending_tools.contains_key(&tc.id)
+                    || dispatch.pending_specs.contains_key(&tc.id);
+                if needs_approval {
+                    let _ = tx.send(Event::ToolCallRequest {
+                        tool_call_id: tc.id.clone(),
+                        name: tc.name.clone(),
+                        input,
+                        needs_approval,
+                    });
+                }
+            }
+        }
+        for (_, spec) in dispatch.pending_specs.drain() {
+            self.pending_tools.insert(spec.id.clone(), spec);
+        }
+        self.set_interruptible_tool_in_progress(
+            dispatch
+                .executor_mut()
+                .is_some_and(|e| e.has_interruptible_tool_in_progress()),
+            event_tx,
+        );
+        dispatch.poll_ui_results(
+            &self.shared.registry,
+            event_tx,
+            Some((&self.shared.session.id, &self.shared.session.db)),
+        );
+        let executor = dispatch.take_executor().ok_or_else(|| {
+            AgentError::Validation("streaming tool executor already taken".into())
+        })?;
+        Ok(StreamDispatchBatch {
+            executed_specs: std::mem::take(&mut dispatch.executed_specs),
+            skip_result_events: std::mem::take(&mut dispatch.ui_result_emitted),
+            denied_specs: std::mem::take(&mut dispatch.denied_specs),
+            executor,
+        })
+    }
+
+    async fn finish_live_stream_tool_batch(
+        &mut self,
+        dispatch_arc: Arc<Mutex<StreamingToolDispatch>>,
+        ctx: &novel_tools::ToolContext,
+        completion: &LlmCompletion,
+        event_tx: Option<&mpsc::UnboundedSender<Event>>,
+        persist_tool_messages: bool,
+    ) -> Result<LlmCallOutcome, AgentError> {
+        let mut batch =
+            self.drain_live_stream_dispatch(&dispatch_arc, ctx, completion, event_tx)?;
+
+        let mut results = batch.executor.get_remaining_results().await;
+        merge_denied_stream_results(&mut results, batch.denied_specs);
+        self.set_interruptible_tool_in_progress(false, event_tx);
+        for spec in &batch.executed_specs {
+            self.pending_tools.remove(&spec.id);
+        }
+
+        let assistant = assistant_from_completion(completion);
+        self.persist_message_alloc(&assistant)?;
+        self.messages.push(assistant);
+
+        let tool_call_order: Vec<String> = completion
+            .tool_calls
+            .iter()
+            .map(|tc| tc.id.clone())
+            .collect();
+
+        if self.interrupt_requested() {
+            let _ = self
+                .execute_stream_results(
+                    results,
+                    &batch.executed_specs,
+                    &tool_call_order,
+                    event_tx,
+                    persist_tool_messages,
+                    &batch.skip_result_events,
+                )
+                .await?;
+            return Ok(LlmCallOutcome::Aborted(TerminalReason::AbortedTools));
+        }
+
+        let _ = self
+            .execute_stream_results(
+                results,
+                &batch.executed_specs,
+                &tool_call_order,
+                event_tx,
+                persist_tool_messages,
+                &batch.skip_result_events,
+            )
+            .await?;
+
+        Ok(LlmCallOutcome::Continue(completion.clone()))
+    }
+
     // ── LLM call + streaming tool execution (unified path) ────
 
     pub(crate) async fn call_llm_and_execute(
@@ -79,107 +206,6 @@ impl AgentEngine {
             self.run_offline_llm_turn(messages, turn_ctx, event_tx)
                 .await
         }
-    }
-
-    async fn finish_live_stream_tool_batch(
-        &mut self,
-        dispatch_arc: Arc<Mutex<StreamingToolDispatch>>,
-        ctx: &novel_tools::ToolContext,
-        completion: &LlmCompletion,
-        event_tx: Option<&mpsc::UnboundedSender<Event>>,
-        persist_tool_messages: bool,
-    ) -> Result<LlmCallOutcome, AgentError> {
-        let (executed_specs, skip_result_events, denied_specs, mut executor) = {
-            let mut dispatch = dispatch_arc.lock().map_err(|_| {
-                AgentError::Validation("streaming tool dispatch lock poisoned".into())
-            })?;
-            for tc in &completion.tool_calls {
-                if !dispatch.handled_ids.contains(&tc.id) {
-                    dispatch.handle_ready(&self.shared.registry, ctx, event_tx, tc.clone(), true);
-                } else if let Some(tx) = event_tx {
-                    let input = parse_tool_call_input(&tc.arguments, &tc.id, &tc.name);
-                    let needs_approval = self.pending_tools.contains_key(&tc.id)
-                        || dispatch.pending_specs.contains_key(&tc.id);
-                    // Already handled during stream: only re-notify UI for pending approval.
-                    // A bare ToolCallRequest maps to input_complete and would clobber done status.
-                    if needs_approval {
-                        let _ = tx.send(Event::ToolCallRequest {
-                            tool_call_id: tc.id.clone(),
-                            name: tc.name.clone(),
-                            input,
-                            needs_approval,
-                        });
-                    }
-                }
-            }
-            for (_, spec) in dispatch.pending_specs.drain() {
-                self.pending_tools.insert(spec.id.clone(), spec);
-            }
-            self.set_interruptible_tool_in_progress(
-                dispatch
-                    .executor_mut()
-                    .is_some_and(|e| e.has_interruptible_tool_in_progress()),
-                event_tx,
-            );
-            dispatch.poll_ui_results(
-                &self.shared.registry,
-                event_tx,
-                Some((&self.shared.session.id, &self.shared.session.db)),
-            );
-            let executor = dispatch.take_executor().ok_or_else(|| {
-                AgentError::Validation("streaming tool executor already taken".into())
-            })?;
-            let executed_specs = std::mem::take(&mut dispatch.executed_specs);
-            let skip_result_events = std::mem::take(&mut dispatch.ui_result_emitted);
-            let denied_specs = std::mem::take(&mut dispatch.denied_specs);
-            (executed_specs, skip_result_events, denied_specs, executor)
-        };
-
-        let mut results = executor.get_remaining_results().await;
-        for (id, (_, reason)) in denied_specs {
-            results.push((id, Err(novel_tools::ToolError::PermissionDenied(reason))));
-        }
-        self.set_interruptible_tool_in_progress(false, event_tx);
-        for spec in &executed_specs {
-            self.pending_tools.remove(&spec.id);
-        }
-
-        let assistant = assistant_from_completion(completion);
-        self.persist_message_alloc(&assistant)?;
-        self.messages.push(assistant);
-
-        let tool_call_order: Vec<String> = completion
-            .tool_calls
-            .iter()
-            .map(|tc| tc.id.clone())
-            .collect();
-
-        if self.interrupt_requested() {
-            let _ = self
-                .execute_stream_results(
-                    results,
-                    &executed_specs,
-                    &tool_call_order,
-                    event_tx,
-                    persist_tool_messages,
-                    &skip_result_events,
-                )
-                .await?;
-            return Ok(LlmCallOutcome::Aborted(TerminalReason::AbortedTools));
-        }
-
-        let _ = self
-            .execute_stream_results(
-                results,
-                &executed_specs,
-                &tool_call_order,
-                event_tx,
-                persist_tool_messages,
-                &skip_result_events,
-            )
-            .await?;
-
-        Ok(LlmCallOutcome::Continue(completion.clone()))
     }
 
     async fn run_offline_llm_turn(

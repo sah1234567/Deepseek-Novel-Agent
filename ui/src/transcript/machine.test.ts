@@ -293,6 +293,24 @@ describe("dispatchTranscriptEvent", () => {
     expect(m.context.turns[0].pauseAfterSegmentId).toBeUndefined();
   });
 
+  it("STREAM_CHUNK flows after ANSWER_QUESTION (not while paused)", () => {
+    let m = createInitialMachine();
+    m = dispatchTranscriptEvent(m, { type: "BEGIN_TURN", user: userMsg("u1") });
+    m = dispatchTranscriptEvent(m, { type: "ASK_USER_QUESTION" });
+    m = dispatchTranscriptEvent(m, { type: "ANSWER_QUESTION" });
+    m = dispatchTranscriptEvent(m, {
+      type: "STREAM_CHUNK",
+      messageId: "a1",
+      delta: "continued",
+      kind: "text",
+    });
+    expect(m.phase).toBe("segmentStreaming");
+    expect(m.context.openSegment?.assistant.contentBlocks[0]).toMatchObject({
+      kind: "text",
+      text: "continued",
+    });
+  });
+
   it("segmentCommitted + TOOL start opens new segment", () => {
     let m = createInitialMachine();
     m = dispatchTranscriptEvent(m, { type: "BEGIN_TURN", user: userMsg("u1") });

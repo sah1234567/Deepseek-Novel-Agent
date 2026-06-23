@@ -5,13 +5,14 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::context::dynamic_context::{
-    filter_loadable_reference_paths, filter_loadable_skill_ids, format_activated_skill_block,
-};
 use crate::engine::session_llm::{apply_session_usage, read_session_llm};
 use crate::interrupt::ERROR_MESSAGE_USER_ABORT;
 use crate::message::{
     chat_slice_to_compaction, chat_to_compaction, compaction_slice_to_chat, to_llm_messages,
+};
+use crate::turn::r#loop::compaction_helpers::{
+    compaction_retained_turn_bounds, compaction_skill_snapshot, emit_compaction_circuit_breaker,
+    overlay_compaction_display_content,
 };
 use crate::{AgentEngine, AgentError, CompactionAction, Event};
 use novel_deepseek::{ChatRequestOptions, LlmChatMessage, StreamOutcome};
@@ -107,13 +108,7 @@ impl AgentEngine {
                 fail_count = self.compaction_fail_count,
                 "compaction_skipped_circuit_breaker"
             );
-            if let Some(tx) = event_tx {
-                let reason = "连续压缩失败已达上限，已暂停自动压缩；请缩短对话或新建会话".into();
-                let _ = tx.send(Event::CompactionProgress {
-                    attempt: self.compaction_fail_count,
-                    action: CompactionAction::Failed { reason },
-                });
-            }
+            emit_compaction_circuit_breaker(self.compaction_fail_count, event_tx);
             self.audit_error(
                 "compaction circuit breaker open: context may exceed token budget",
                 true,
@@ -185,25 +180,7 @@ impl AgentEngine {
             .archive_session_messages(&self.shared.session.id, epoch)
             .map_err(AgentError::from)?;
 
-        self.refresh_system_dynamic_sections()?;
-
-        let skill_ids = filter_loadable_skill_ids(
-            &self.shared.session.project_root,
-            &self.shared.agent_skills_dir,
-            &self.invoked_skill_ids,
-        );
-        let ref_paths = filter_loadable_reference_paths(
-            &self.shared.session.project_root,
-            &self.shared.agent_skills_dir,
-            &self.read_skill_reference_paths,
-            &skill_ids,
-        );
-        let skill_bodies = format_activated_skill_block(
-            &self.shared.session.project_root,
-            &self.shared.agent_skills_dir,
-            &skill_ids,
-            &ref_paths,
-        );
+        let skills = compaction_skill_snapshot(self)?;
 
         let system = chat_to_compaction(
             self.messages
@@ -223,34 +200,19 @@ impl AgentEngine {
             system,
             summary_text: &summary_text,
             retain: to_retain,
-            skill_bodies: &skill_bodies,
-            invoked_skill_ids: &skill_ids,
+            skill_bodies: &skills.skill_bodies,
+            invoked_skill_ids: &skills.skill_ids,
             retain_policy: &retain,
             window,
             compaction_threshold,
         })?;
 
-        let retained_bounds = {
-            use crate::message::turn_rows::retained_turn_bounds_from_index;
-            use novel_compaction::user_turn_ranges;
-
-            let kept_turns = if final_msgs.len() > 2 {
-                user_turn_ranges(&final_msgs[2..]).len()
-            } else {
-                0
-            };
-            if kept_turns == 0 {
-                None
-            } else {
-                let ranges = user_turn_ranges(&compacted);
-                let start_index = if ranges.len() >= kept_turns {
-                    ranges[ranges.len() - kept_turns].0
-                } else {
-                    partition.retain_from
-                };
-                retained_turn_bounds_from_index(&self.messages, start_index)
-            }
-        };
+        let retained_bounds = compaction_retained_turn_bounds(
+            &final_msgs,
+            &compacted,
+            partition.retain_from,
+            &self.messages,
+        );
         if let Some((min, max)) = retained_bounds {
             self.shared
                 .session
@@ -259,17 +221,17 @@ impl AgentEngine {
                 .map_err(AgentError::from)?;
         }
 
-        self.invoked_skill_ids = skill_ids.clone();
+        self.invoked_skill_ids = skills.skill_ids.clone();
         self.shared
             .session
             .db
-            .set_invoked_skill_ids(&self.shared.session.id, &skill_ids)
+            .set_invoked_skill_ids(&self.shared.session.id, &skills.skill_ids)
             .map_err(AgentError::from)?;
-        self.read_skill_reference_paths = ref_paths.clone();
+        self.read_skill_reference_paths = skills.ref_paths.clone();
         self.shared
             .session
             .db
-            .set_read_skill_reference_paths(&self.shared.session.id, &ref_paths)
+            .set_read_skill_reference_paths(&self.shared.session.id, &skills.ref_paths)
             .map_err(AgentError::from)?;
 
         let tokens_before = self.last_context_tokens;
@@ -291,18 +253,13 @@ impl AgentEngine {
         let retained_in_final = final_msgs.len().saturating_sub(2);
         let mut new_messages = compaction_slice_to_chat(&final_msgs);
         let prefix_len = new_messages.len().saturating_sub(retained_in_final);
-        for offset in 0..retained_in_final {
-            let new_idx = prefix_len + offset;
-            let Some(msg) = new_messages.get_mut(new_idx) else {
-                break;
-            };
-            if msg.display_content.is_none() {
-                let orig_idx = partition.retain_from + offset;
-                if let Some(display) = display_snapshot.get(&orig_idx) {
-                    msg.display_content = Some(display.clone());
-                }
-            }
-        }
+        overlay_compaction_display_content(
+            &mut new_messages,
+            partition.retain_from,
+            &display_snapshot,
+            retained_in_final,
+            prefix_len,
+        );
         self.commit_message_slice(new_messages)?;
         let stored = self
             .shared

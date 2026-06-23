@@ -85,6 +85,43 @@ mod tests {
     }
 
     #[test]
+    fn chat_to_json_roundtrips_empty_display_content_for_frontend_shielding() {
+        let msg = ChatMessage {
+            role: "user".into(),
+            content: "你还有 2 个未完成的任务：\n- [待处理] 写第5章".into(),
+            display_content: Some(String::new()),
+            ..Default::default()
+        };
+        let json = chat_to_json(&msg);
+        assert_eq!(
+            json["content"],
+            "你还有 2 个未完成的任务：\n- [待处理] 写第5章"
+        );
+        assert_eq!(json["display_content"], "");
+        assert_eq!(stored_message_display_text(&json), "");
+        let stored = novel_state::StoredMessage {
+            id: "nudge-1".into(),
+            session_id: "s".into(),
+            turn_number: 2,
+            sequence: 3,
+            role: "user".into(),
+            content_json: json,
+            cache_hit_tokens: 0,
+            cache_miss_tokens: 0,
+            completion_tokens: 0,
+            estimated_tokens: None,
+            created_at: chrono::Utc::now(),
+        };
+        let chat = stored_to_chat(&[stored]).unwrap();
+        assert_eq!(chat.len(), 1);
+        assert_eq!(
+            chat[0].content,
+            "你还有 2 个未完成的任务：\n- [待处理] 写第5章"
+        );
+        assert_eq!(chat[0].display_content, None);
+    }
+
+    #[test]
     fn stored_to_chat_rejects_corrupt_tool_calls() {
         let stored = novel_state::StoredMessage {
             id: "m-bad".into(),

@@ -36,7 +36,7 @@
 
 **fork_runs / fork_messages：** 子 Agent transcript（与 parent `messages` 分离）
 
-**session_todos：** 会话级待办（TodoWrite 工具）
+**session_todos：** 会话级待办（TodoWrite / StatusBar）。`replace=true` 删后写整批；`replace=false` 仅 UPDATE 已有 `todo_id`（未知 id 跳过，不 INSERT）。`validate_todo_upsert` / `partition_status_updates` 在 `todo.rs`，crate 根 re-export 供 `novel-tools` / `novel-server`。
 
 **Legacy cleanup：** 打开 DB 时自动 `DROP` 旧版 `checkpoints` / `sub_agent_runs` / `daily_token_stats`。
 
@@ -63,7 +63,7 @@
 
 **Resume 校验：** 会话 metadata 异常时可运行 `reset-work-databases` 后新建 session。
 
-**Todos：** `list_todos` / `upsert_todos` 仅在 `db::todo` 模块与 `Database` 方法暴露；**不再**从 `novel-state` crate 根 re-export（调用方经 `db` 或 `novel-server` IPC）。
+**Todos API：** `Database::list_session_todos` / `upsert_session_todos`；底层 `todo::list_todos` / `upsert_todos`。校验与投影见 crate 根 `validate_todo_upsert`、`partition_status_updates`。
 
 **Fork transcript：** 同前。
 

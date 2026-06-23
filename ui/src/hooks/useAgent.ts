@@ -199,19 +199,23 @@ export function useAgent(onTurnComplete?: (prefetched?: AppStatus) => void) {
       const pq = pendingQuestionRef.current;
       if (!pq) return;
       setQuestionError(null);
+      // Exit pausedForQuestion *before* invoke: answer_question blocks until the turn
+      // continuation finishes, and the FSM drops STREAM_CHUNK/TOOL while paused.
+      dispatchMain({ type: "ANSWER_QUESTION" });
+      setPendingQuestion(null);
+      setQuestionSelections({});
+      setQuestionCustomText({});
       setIsStreaming(true);
       try {
         await invoke(IPC_COMMANDS.answerQuestion, {
           toolCallId: pq.toolCallId,
           answers: { selections, customText },
         });
-        dispatchMain({ type: "ANSWER_QUESTION" });
-        setPendingQuestion(null);
-        setQuestionSelections({});
-        setQuestionCustomText({});
       } catch (e) {
         setQuestionError(String(e));
         setIsStreaming(false);
+        dispatchMain({ type: "ASK_USER_QUESTION" });
+        setPendingQuestion(pq);
       }
     },
     [dispatchMain],

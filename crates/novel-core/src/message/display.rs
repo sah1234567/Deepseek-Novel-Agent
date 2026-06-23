@@ -1,6 +1,8 @@
 use crate::ChatMessage;
 use serde_json::Value;
 
+/// Serialize a ChatMessage to JSON for SQLite.  display_content: ""
+/// hides the message from the frontend while keeping content for the LLM.
 pub fn chat_to_json(msg: &ChatMessage) -> Value {
     let mut obj = serde_json::json!({ "content": msg.content });
     if let Some(id) = &msg.tool_call_id {
@@ -17,6 +19,9 @@ pub fn chat_to_json(msg: &ChatMessage) -> Value {
             obj["reasoning_content"] = Value::String(rc.clone());
         }
     }
+    if let Some(dc) = &msg.display_content {
+        obj["display_content"] = Value::String(dc.clone());
+    }
     obj
 }
 
@@ -30,6 +35,9 @@ pub fn chat_to_json_for_persist(msg: &ChatMessage, display_content: Option<&str>
                 Value::String(display.to_string()),
             );
         }
+    }
+    if let Some(dc) = &msg.display_content {
+        obj["display_content"] = Value::String(dc.clone());
     }
     obj
 }

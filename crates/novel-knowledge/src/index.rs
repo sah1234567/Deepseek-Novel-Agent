@@ -105,6 +105,81 @@ fn append_plot_and_shared_links(store: &KnowledgeStore, lines: &mut Vec<String>)
     }
 }
 
+fn world_character_status(store: &KnowledgeStore, rel: &str) -> (String, String) {
+    match store.read_file(rel) {
+        Ok(content) => match parse_frontmatter::<CharacterFrontmatter>(&content) {
+            Ok((fm, _)) => (format!("{:?}", fm.status).to_lowercase(), fm.last_update),
+            Err(_) => ("unknown".into(), "—".into()),
+        },
+        Err(_) => ("unknown".into(), "—".into()),
+    }
+}
+
+fn append_world_characters_table(
+    store: &KnowledgeStore,
+    lines: &mut Vec<String>,
+    world_name: &str,
+    wchars_dir: &std::path::Path,
+) {
+    lines.push(String::new());
+    lines.push(format!("### 角色 ({world_name})"));
+    lines.push("| 人物 | 状态 | 最后更新 |".into());
+    lines.push("|------|------|---------|".into());
+    let Ok(wc_entries) = std::fs::read_dir(wchars_dir) else {
+        return;
+    };
+    for wc in wc_entries.flatten() {
+        let name = wc.file_name().to_string_lossy().to_string();
+        if !name.ends_with(".md") || name.starts_with('_') {
+            continue;
+        }
+        let display = name.trim_end_matches(".md");
+        let rel = format!("knowledge/worlds/{world_name}/characters/{name}");
+        let (status, last_update) = world_character_status(store, &rel);
+        lines.push(format!(
+            "| [{display}](worlds/{world_name}/characters/{name}) | {status} | {last_update} |"
+        ));
+    }
+}
+
+fn append_world_index_excerpt(lines: &mut Vec<String>, windex_path: &std::path::Path) {
+    let Ok(windex) = std::fs::read_to_string(windex_path) else {
+        return;
+    };
+    let body = if let Some(end) = windex.find("\n---") {
+        &windex[end + 4..]
+    } else {
+        &windex
+    };
+    let excerpt: String = body
+        .lines()
+        .filter(|l| !l.starts_with("---") && !l.trim().is_empty())
+        .take(3)
+        .fold(String::new(), |a, l| a + l + "\n");
+    if !excerpt.trim().is_empty() {
+        lines.push(String::new());
+        lines.push(excerpt.trim().to_string());
+    }
+}
+
+fn append_single_world_section(
+    store: &KnowledgeStore,
+    lines: &mut Vec<String>,
+    world_name: &str,
+    world_dir: &std::path::Path,
+) {
+    lines.push(String::new());
+    lines.push(format!("## 世界: {world_name}"));
+    let wchars_dir = world_dir.join("characters");
+    if wchars_dir.is_dir() {
+        append_world_characters_table(store, lines, world_name, &wchars_dir);
+    }
+    let windex_path = world_dir.join("INDEX.md");
+    if windex_path.exists() {
+        append_world_index_excerpt(lines, &windex_path);
+    }
+}
+
 fn append_worlds_section(store: &KnowledgeStore, lines: &mut Vec<String>) {
     let worlds_dir = store.root.join("knowledge/worlds");
     if !worlds_dir.is_dir() {
@@ -125,56 +200,7 @@ fn append_worlds_section(store: &KnowledgeStore, lines: &mut Vec<String>) {
             continue;
         }
         let world_dir = worlds_dir.join(&world_name);
-        lines.push(String::new());
-        lines.push(format!("## 世界: {world_name}"));
-        let wchars_dir = world_dir.join("characters");
-        if wchars_dir.is_dir() {
-            lines.push(String::new());
-            lines.push(format!("### 角色 ({world_name})"));
-            lines.push("| 人物 | 状态 | 最后更新 |".into());
-            lines.push("|------|------|---------|".into());
-            if let Ok(wc_entries) = std::fs::read_dir(&wchars_dir) {
-                for wc in wc_entries.flatten() {
-                    let name = wc.file_name().to_string_lossy().to_string();
-                    if !name.ends_with(".md") || name.starts_with('_') {
-                        continue;
-                    }
-                    let display = name.trim_end_matches(".md");
-                    let rel = format!("knowledge/worlds/{world_name}/characters/{name}");
-                    let (status, last_update) = match store.read_file(&rel) {
-                        Ok(content) => match parse_frontmatter::<CharacterFrontmatter>(&content) {
-                            Ok((fm, _)) => {
-                                (format!("{:?}", fm.status).to_lowercase(), fm.last_update)
-                            }
-                            Err(_) => ("unknown".into(), "—".into()),
-                        },
-                        Err(_) => ("unknown".into(), "—".into()),
-                    };
-                    lines.push(format!(
-                        "| [{display}](worlds/{world_name}/characters/{name}) | {status} | {last_update} |"
-                    ));
-                }
-            }
-        }
-        let windex_path = world_dir.join("INDEX.md");
-        if windex_path.exists() {
-            if let Ok(windex) = std::fs::read_to_string(&windex_path) {
-                let body = if let Some(end) = windex.find("\n---") {
-                    &windex[end + 4..]
-                } else {
-                    &windex
-                };
-                let excerpt: String = body
-                    .lines()
-                    .filter(|l| !l.starts_with("---") && !l.trim().is_empty())
-                    .take(3)
-                    .fold(String::new(), |a, l| a + l + "\n");
-                if !excerpt.trim().is_empty() {
-                    lines.push(String::new());
-                    lines.push(excerpt.trim().to_string());
-                }
-            }
-        }
+        append_single_world_section(store, lines, &world_name, &world_dir);
     }
 }
 

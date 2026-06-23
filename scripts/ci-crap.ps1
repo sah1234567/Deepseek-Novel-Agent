@@ -6,7 +6,7 @@
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot\..
 
-$threshold = if ($env:CRAP_THRESHOLD) { $env:CRAP_THRESHOLD } else { "30" }
+$threshold = if ($env:CRAP_THRESHOLD) { $env:CRAP_THRESHOLD } else { "20" }
 $lcovPath = if ($env:LCOV_PATH) { $env:LCOV_PATH } else { "lcov.info" }
 
 $prevEap = $ErrorActionPreference

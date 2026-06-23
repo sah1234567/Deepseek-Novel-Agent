@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { countIncompleteTodos, visibleTodosForDisplay } from "../../utils/todoDisplay";
+import { countIncompleteTodos, isIncompleteTodo } from "../../utils/todoDisplay";
 import type { SessionTodo } from "../../hooks/useAppStatus";
 
 const todos: SessionTodo[] = [
@@ -10,19 +10,14 @@ const todos: SessionTodo[] = [
 ];
 
 describe("todoDisplay", () => {
-  it("keeps backend order and hides cancelled todos", () => {
-    const visible = visibleTodosForDisplay(todos);
-    expect(visible.map((t) => t.id)).toEqual(["1", "2", "3"]);
-    expect(visible.map((t) => t.content)).toEqual(["写细纲", "写第一章", "建人物卡"]);
+  it("matches novel-state is_unfinished for all statuses", () => {
+    expect(isIncompleteTodo({ id: "1", content: "x", status: "pending" })).toBe(true);
+    expect(isIncompleteTodo({ id: "2", content: "x", status: "in_progress" })).toBe(true);
+    expect(isIncompleteTodo({ id: "3", content: "x", status: "completed" })).toBe(false);
+    expect(isIncompleteTodo({ id: "4", content: "x", status: "cancelled" })).toBe(false);
   });
 
-  it("still shows completed todos in place", () => {
-    const visible = visibleTodosForDisplay([{ id: "x", content: "done", status: "completed" }]);
-    expect(visible).toHaveLength(1);
-    expect(visible[0].status).toBe("completed");
-  });
-
-  it("counts incomplete todos for StatusBar badge and empty state", () => {
+  it("counts incomplete todos for StatusBar badge (cancelled is terminal)", () => {
     expect(countIncompleteTodos(todos)).toBe(2);
     expect(countIncompleteTodos([{ id: "x", content: "done", status: "completed" }])).toBe(0);
     expect(countIncompleteTodos([{ id: "x", content: "x", status: "cancelled" }])).toBe(0);

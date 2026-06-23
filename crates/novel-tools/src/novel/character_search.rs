@@ -21,7 +21,7 @@ struct CharacterProfile {
 }
 
 #[derive(Debug, Serialize)]
-struct CharacterSearchResult {
+pub(crate) struct CharacterSearchResult {
     query: String,
     field: String,
     matches: Vec<MatchHit>,
@@ -85,6 +85,102 @@ fn searchable_text(content: &str, field: Option<&str>) -> String {
     content.to_string()
 }
 
+fn find_line_matches(
+    re: &Regex,
+    file_name: &str,
+    content: &str,
+    search_in: &str,
+    context_lines: usize,
+) -> Vec<MatchHit> {
+    let content_offset = content.find(search_in).unwrap_or(0);
+    let lines_before: u32 = content[..content_offset]
+        .lines()
+        .count()
+        .try_into()
+        .unwrap_or(0);
+    let lines: Vec<&str> = search_in.lines().collect();
+    let mut file_matches = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        if re.is_match(line) {
+            let start = i.saturating_sub(context_lines);
+            let end = (i + context_lines + 1).min(lines.len());
+            file_matches.push(MatchHit {
+                file: file_name.to_string(),
+                line: lines_before + (i as u32) + 1,
+                snippet: lines[start..end].join("\n"),
+            });
+        }
+    }
+    file_matches
+}
+
+fn profile_from_matches(content: &str, file_matches: Vec<MatchHit>) -> Option<CharacterProfile> {
+    if file_matches.is_empty() {
+        return None;
+    }
+    let (fm, _) = parse_frontmatter::<CharacterFrontmatter>(content).ok()?;
+    Some(CharacterProfile {
+        name: fm.name.clone(),
+        frontmatter: fm,
+        matches: file_matches,
+    })
+}
+
+pub(crate) fn search_characters_in_dir(
+    chars_dir: &std::path::Path,
+    field: &str,
+    query: &str,
+    context_lines: usize,
+) -> Result<CharacterSearchResult, ToolError> {
+    let re = Regex::new(&regex::escape(query))
+        .map_err(|e| ToolError::Execution(format!("invalid query regex: {e}")))?;
+    let mut all_matches = Vec::new();
+    let mut profiles = Vec::new();
+
+    if !chars_dir.exists() {
+        return Ok(CharacterSearchResult {
+            query: query.to_string(),
+            field: field.into(),
+            matches: vec![],
+            profiles: vec![],
+        });
+    }
+
+    for entry in WalkDir::new(chars_dir)
+        .max_depth(1)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("md") {
+            continue;
+        }
+        if path.file_name().and_then(|s| s.to_str()) == Some("_template.md") {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let file_name = path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let search_in = searchable_text(&content, if field == "all" { None } else { Some(field) });
+        let file_matches = find_line_matches(&re, &file_name, &content, &search_in, context_lines);
+        all_matches.extend(file_matches.iter().cloned());
+        if let Some(profile) = profile_from_matches(&content, file_matches) {
+            profiles.push(profile);
+        }
+    }
+
+    Ok(CharacterSearchResult {
+        query: query.to_string(),
+        field: field.into(),
+        matches: all_matches,
+        profiles,
+    })
+}
+
 pub struct CharacterSearchTool;
 
 #[async_trait]
@@ -127,87 +223,7 @@ impl Tool for CharacterSearchTool {
         let field = input.get("field").and_then(|v| v.as_str()).unwrap_or("all");
         let context_lines = input.get("context").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
         let chars_dir = ctx.project_root.join("knowledge/characters");
-        let re = Regex::new(&regex::escape(&query))
-            .map_err(|e| ToolError::Execution(format!("invalid query regex: {e}")))?;
-
-        let mut all_matches = Vec::new();
-        let mut profiles = Vec::new();
-
-        if !chars_dir.exists() {
-            let empty = CharacterSearchResult {
-                query: query.clone(),
-                field: field.into(),
-                matches: vec![],
-                profiles: vec![],
-            };
-            return Ok(ToolOutput {
-                content: serde_json::to_string_pretty(&empty)
-                    .map_err(|e| ToolError::Internal(e.to_string()))?,
-                is_error: false,
-            });
-        }
-
-        for entry in WalkDir::new(&chars_dir)
-            .max_depth(1)
-            .into_iter()
-            .filter_map(|e| e.ok())
-        {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("md") {
-                continue;
-            }
-            if path.file_name().and_then(|s| s.to_str()) == Some("_template.md") {
-                continue;
-            }
-            let Ok(content) = crate::blocking::read_to_string(path.to_path_buf()).await else {
-                continue;
-            };
-            let file_name = path
-                .file_name()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_default();
-            let search_in =
-                searchable_text(&content, if field == "all" { None } else { Some(field) });
-            // Compute absolute line offset: count lines in content up to search_in.
-            let content_offset = content.find(&search_in).unwrap_or(0);
-            let lines_before: u32 = content[..content_offset]
-                .lines()
-                .count()
-                .try_into()
-                .unwrap_or(0);
-            let lines: Vec<&str> = search_in.lines().collect();
-            let mut file_matches = Vec::new();
-            for (i, line) in lines.iter().enumerate() {
-                if re.is_match(line) {
-                    let start = i.saturating_sub(context_lines);
-                    let end = (i + context_lines + 1).min(lines.len());
-                    let snippet = lines[start..end].join("\n");
-                    let hit = MatchHit {
-                        file: file_name.clone(),
-                        line: lines_before + (i as u32) + 1,
-                        snippet,
-                    };
-                    all_matches.push(hit.clone());
-                    file_matches.push(hit);
-                }
-            }
-            if !file_matches.is_empty() {
-                if let Ok((fm, _)) = parse_frontmatter::<CharacterFrontmatter>(&content) {
-                    profiles.push(CharacterProfile {
-                        name: fm.name.clone(),
-                        frontmatter: fm,
-                        matches: file_matches,
-                    });
-                }
-            }
-        }
-
-        let result = CharacterSearchResult {
-            query,
-            field: field.into(),
-            matches: all_matches,
-            profiles,
-        };
+        let result = search_characters_in_dir(&chars_dir, field, &query, context_lines)?;
         Ok(ToolOutput {
             content: serde_json::to_string_pretty(&result)
                 .map_err(|e| ToolError::Internal(e.to_string()))?,
@@ -221,6 +237,21 @@ mod tests {
     use super::*;
     use crate::{PermissionMode, ToolContext};
     use tempfile::TempDir;
+
+    #[test]
+    fn extract_sections_finds_heading_block() {
+        let text = "## 性格演变日志\n| Ch1 | 天真 |\n\n## 其他\nx";
+        let out = extract_sections(text, &["性格演变日志"]);
+        assert!(out.contains("天真"));
+    }
+
+    #[test]
+    fn search_characters_in_dir_empty_when_missing() {
+        let tmp = TempDir::new().unwrap();
+        let out = search_characters_in_dir(&tmp.path().join("knowledge/characters"), "all", "x", 2)
+            .unwrap();
+        assert!(out.matches.is_empty());
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn json_output_with_profiles() {

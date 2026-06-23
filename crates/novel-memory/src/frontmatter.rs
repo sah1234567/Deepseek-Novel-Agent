@@ -82,6 +82,26 @@ mod tests {
     }
 
     #[test]
+    fn frontmatter_error_display_messages() {
+        assert_eq!(
+            FrontmatterError::MissingFrontmatter.to_string(),
+            "missing YAML frontmatter (---)"
+        );
+        assert_eq!(
+            FrontmatterError::MalformedFrontmatter.to_string(),
+            "malformed frontmatter delimiters"
+        );
+        assert_eq!(
+            FrontmatterError::ParseError {
+                message: "bad".into(),
+                line: 2,
+            }
+            .to_string(),
+            "YAML parse error at line ~2: bad"
+        );
+    }
+
+    #[test]
     fn missing_frontmatter_errors() {
         let result = parse_frontmatter::<TestFm>("no frontmatter here");
         assert!(matches!(result, Err(FrontmatterError::MissingFrontmatter)));

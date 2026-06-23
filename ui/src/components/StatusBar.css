@@ -326,6 +326,16 @@
   text-decoration: line-through;
 }
 
+.todo-dropdown-cancelled .todo-dropdown-status {
+  color: #8b949e;
+}
+
+.todo-dropdown-cancelled .todo-dropdown-content {
+  color: #484f58;
+  text-decoration: line-through;
+  font-style: italic;
+}
+
 .todo-dropdown-status:hover {
   text-decoration: underline;
 }
@@ -349,11 +359,6 @@
 
 .todo-dropdown-in_progress .todo-dropdown-content {
   color: #e6edf3;
-}
-
-.todo-dropdown-cancelled .todo-dropdown-content {
-  color: #6e7681;
-  text-decoration: line-through;
 }
 
 .todo-dropdown-content {

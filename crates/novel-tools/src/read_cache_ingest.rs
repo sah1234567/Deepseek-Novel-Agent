@@ -39,6 +39,126 @@ fn tail_window(total_lines: usize, lines_n: usize) -> (usize, usize, usize) {
     (start_line, take, start_idx)
 }
 
+fn store_read_cache_entry(
+    ctx: &ToolContext,
+    full_path: &Path,
+    entry: ReadCacheEntry,
+    disk_full: Option<&str>,
+) -> Result<(), ToolError> {
+    ctx.store_read_cache(full_path, entry, disk_full, None)
+}
+
+fn ingest_empty_file_cache(
+    ctx: &ToolContext,
+    full_path: &Path,
+    mtime: u64,
+    source: ReadCacheSource,
+) -> Result<(), ToolError> {
+    store_read_cache_entry(
+        ctx,
+        full_path,
+        ReadCacheEntry {
+            mtime_secs: mtime,
+            raw_content: String::new(),
+            offset: None,
+            limit: None,
+            total_lines: 0,
+            source,
+            transcript_committed: false,
+            committed_spans: Vec::new(),
+            committed_offset: None,
+            committed_limit: None,
+        },
+        None,
+    )
+}
+
+fn ingest_read_tool_cache(
+    ctx: &ToolContext,
+    full_path: &Path,
+    input: &Value,
+    mtime: u64,
+    file_len: u64,
+    source: ReadCacheSource,
+) -> Result<(), ToolError> {
+    let offset = input.get("offset").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
+    let limit = input
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .map(|l| l as usize);
+    let line_offset = if offset == 0 {
+        0
+    } else {
+        offset.saturating_sub(1)
+    };
+    let (raw, _lc, total_lines, disk_full) = read_disk_slice(full_path, line_offset, limit)?;
+    let (cache_off, cache_lim) = read_range_key(
+        if limit.is_some() || offset > 1 {
+            Some(offset)
+        } else {
+            None
+        },
+        limit,
+    );
+    let disk_opt = if file_len < FAST_PATH_MAX_SIZE {
+        Some(disk_full)
+    } else {
+        None
+    };
+    store_read_cache_entry(
+        ctx,
+        full_path,
+        ReadCacheEntry {
+            mtime_secs: mtime,
+            raw_content: raw,
+            offset: cache_off,
+            limit: cache_lim,
+            total_lines,
+            source,
+            transcript_committed: false,
+            committed_spans: Vec::new(),
+            committed_offset: None,
+            committed_limit: None,
+        },
+        disk_opt.as_deref(),
+    )
+}
+
+fn ingest_tail_tool_cache(
+    ctx: &ToolContext,
+    full_path: &Path,
+    input: &Value,
+    mtime: u64,
+    source: ReadCacheSource,
+) -> Result<(), ToolError> {
+    let lines_n = input.get("lines").and_then(|v| v.as_u64()).unwrap_or(100) as usize;
+    let disk_full = std::fs::read_to_string(full_path).map_err(ToolError::Io)?;
+    let total_lines = disk_full.lines().count();
+    let (start_line, take, start_idx) = tail_window(total_lines, lines_n);
+    let raw = disk_full
+        .lines()
+        .skip(start_idx)
+        .collect::<Vec<_>>()
+        .join("\n");
+    store_read_cache_entry(
+        ctx,
+        full_path,
+        ReadCacheEntry {
+            mtime_secs: mtime,
+            raw_content: raw,
+            offset: Some(start_line),
+            limit: Some(take),
+            total_lines,
+            source,
+            transcript_committed: false,
+            committed_spans: Vec::new(),
+            committed_offset: None,
+            committed_limit: None,
+        },
+        Some(&disk_full),
+    )
+}
+
 /// Read disk and store a Read/Tail cache entry (merge when `disk_full` supplied).
 pub(crate) fn ingest_read_or_tail_into_cache(
     ctx: &ToolContext,
@@ -58,106 +178,16 @@ pub(crate) fn ingest_read_or_tail_into_cache(
     let mtime = file_mtime_secs(&metadata);
 
     if metadata.len() == 0 {
-        ctx.store_read_cache(
-            full_path,
-            ReadCacheEntry {
-                mtime_secs: mtime,
-                raw_content: String::new(),
-                offset: None,
-                limit: None,
-                total_lines: 0,
-                source,
-                transcript_committed: false,
-                committed_spans: Vec::new(),
-                committed_offset: None,
-                committed_limit: None,
-            },
-            None,
-            None,
-        )?;
-        return Ok(());
+        return ingest_empty_file_cache(ctx, full_path, mtime, source);
     }
 
     match tool_name {
-        "Read" => {
-            let offset = input.get("offset").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
-            let limit = input
-                .get("limit")
-                .and_then(|v| v.as_u64())
-                .map(|l| l as usize);
-            let line_offset = if offset == 0 {
-                0
-            } else {
-                offset.saturating_sub(1)
-            };
-            let (raw, _lc, total_lines, disk_full) =
-                read_disk_slice(full_path, line_offset, limit)?;
-            let (cache_off, cache_lim) = read_range_key(
-                if limit.is_some() || offset > 1 {
-                    Some(offset)
-                } else {
-                    None
-                },
-                limit,
-            );
-            let disk_opt = if metadata.len() < FAST_PATH_MAX_SIZE {
-                Some(disk_full)
-            } else {
-                None
-            };
-            ctx.store_read_cache(
-                full_path,
-                ReadCacheEntry {
-                    mtime_secs: mtime,
-                    raw_content: raw,
-                    offset: cache_off,
-                    limit: cache_lim,
-                    total_lines,
-                    source,
-                    transcript_committed: false,
-                    committed_spans: Vec::new(),
-                    committed_offset: None,
-                    committed_limit: None,
-                },
-                disk_opt.as_deref(),
-                None,
-            )?;
-        }
-        "Tail" => {
-            let lines_n = input.get("lines").and_then(|v| v.as_u64()).unwrap_or(100) as usize;
-            let disk_full = std::fs::read_to_string(full_path).map_err(ToolError::Io)?;
-            let total_lines = disk_full.lines().count();
-            let (start_line, take, start_idx) = tail_window(total_lines, lines_n);
-            let raw = disk_full
-                .lines()
-                .skip(start_idx)
-                .collect::<Vec<_>>()
-                .join("\n");
-            ctx.store_read_cache(
-                full_path,
-                ReadCacheEntry {
-                    mtime_secs: mtime,
-                    raw_content: raw,
-                    offset: Some(start_line),
-                    limit: Some(take),
-                    total_lines,
-                    source,
-                    transcript_committed: false,
-                    committed_spans: Vec::new(),
-                    committed_offset: None,
-                    committed_limit: None,
-                },
-                Some(&disk_full),
-                None,
-            )?;
-        }
-        other => {
-            return Err(ToolError::Execution(format!(
-                "ingest_read_or_tail_into_cache: unsupported tool {other}"
-            )));
-        }
+        "Read" => ingest_read_tool_cache(ctx, full_path, input, mtime, metadata.len(), source),
+        "Tail" => ingest_tail_tool_cache(ctx, full_path, input, mtime, source),
+        other => Err(ToolError::Execution(format!(
+            "ingest_read_or_tail_into_cache: unsupported tool {other}"
+        ))),
     }
-    Ok(())
 }
 
 pub(crate) fn is_tool_result_error(content: &str) -> bool {
@@ -167,6 +197,12 @@ pub(crate) fn is_tool_result_error(content: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tail_window_from_end() {
+        let (start, take, idx) = tail_window(10, 3);
+        assert_eq!((start, take, idx), (8, 3, 7));
+    }
 
     #[test]
     fn detects_tool_error_prefix() {

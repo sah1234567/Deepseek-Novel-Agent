@@ -373,6 +373,22 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
+    fn audit_kind_labels() {
+        assert_eq!(AuditKind::PlanAuditor.label(), "细纲PA");
+        assert_eq!(AuditKind::KnowledgeAuditor.label(), "正文KA");
+        assert_eq!(AuditKind::ChapterCraftAnalyzer.label(), "文笔CCA");
+    }
+
+    #[test]
+    fn audit_kind_from_agent_name() {
+        assert_eq!(
+            AuditKind::from_agent_name("PlanAuditor"),
+            Some(AuditKind::PlanAuditor)
+        );
+        assert_eq!(AuditKind::from_agent_name("Unknown"), None);
+    }
+
+    #[test]
     fn parse_chapter_numbers_variants() {
         let nums = parse_chapter_numbers("审计 chapter-005 与 Ch3 和第12章");
         assert_eq!(nums, vec![3, 5, 12]);

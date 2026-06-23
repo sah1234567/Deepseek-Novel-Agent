@@ -25,52 +25,65 @@ fn hint_for_execution(
     _tool_input: Option<&Value>,
 ) -> Option<&'static str> {
     if msg.contains("Read economy:") {
-        if tool_name == "Grep" {
-            return Some("Narrow the pattern, add a glob filter by filename, or use head_limit/offset for pagination (e.g. head_limit=50 then offset=50 for next page).");
-        }
-        return Some("Use Grep to locate line numbers, then Read with offset+limit or Tail for file-end segments.");
+        return hint_for_read_economy(tool_name);
     }
     if tool_name == "Edit" || tool_name == "Write" {
-        if msg.contains("before editing") || msg.contains("before overwriting") {
-            return Some("Read or Tail the target file (or the lines containing your edit) before Write/Edit.");
-        }
-        if msg.contains("modified since last read") {
-            return Some("Read or Tail the file again, then retry Edit.");
-        }
-        if msg.contains("was not applied") && msg.contains("not yet in the conversation") {
-            return Some(
-                "The Read/Tail in this turn will appear in tool_result before your next reply — retry Edit then (no re-Read if unchanged).",
-            );
-        }
-        if msg.contains("not found on disk") || msg.contains("not a read-cache staleness") {
-            return Some(
-                "Grep a distinctive phrase (not the audit summary), Read ±3 lines around the match, copy exact bytes into old_string (strip line-number tabs). Do not retry identical Read params.",
-            );
-        }
-        if msg.contains("only read a portion")
-            || msg.contains("editable lines (seen in conversation)")
-        {
-            return Some(
-                "Re-Read with offset/limit covering old_string (Grep first for line numbers).",
-            );
-        }
-        if msg.contains("line number prefix") {
-            return Some("Remove \"{n}\\t\" prefixes from old_string; match raw file text only.");
-        }
-        if msg.contains("not found in") {
-            return Some("Grep to locate text, Read ±3 lines around the match, copy exact whitespace into old_string.");
-        }
-        if msg.contains("matches of old_string") || msg.contains("replace_all") {
-            return Some("Set replace_all:true OR expand old_string with 2–4 surrounding lines for uniqueness.");
-        }
-        if msg.contains("identical") {
-            return Some(
-                "Target may already match (audit said keep/skip) — verify with Grep; if change needed, ensure new_string differs.",
-            );
-        }
+        return hint_for_edit_write(msg);
     }
     if tool_name == "Tail" && msg.contains("exceeds max") {
         return Some("Reduce lines parameter or use Read offset/limit for middle segments.");
+    }
+    None
+}
+
+fn hint_for_read_economy(tool_name: &str) -> Option<&'static str> {
+    if tool_name == "Grep" {
+        Some("Narrow the pattern, add a glob filter by filename, or use head_limit/offset for pagination (e.g. head_limit=50 then offset=50 for next page).")
+    } else {
+        Some("Use Grep to locate line numbers, then Read with offset+limit or Tail for file-end segments.")
+    }
+}
+
+fn hint_for_edit_write(msg: &str) -> Option<&'static str> {
+    if msg.contains("before editing") || msg.contains("before overwriting") {
+        return Some(
+            "Read or Tail the target file (or the lines containing your edit) before Write/Edit.",
+        );
+    }
+    if msg.contains("modified since last read") {
+        return Some("Read or Tail the file again, then retry Edit.");
+    }
+    if msg.contains("was not applied") && msg.contains("not yet in the conversation") {
+        return Some(
+            "The Read/Tail in this turn will appear in tool_result before your next reply — retry Edit then (no re-Read if unchanged).",
+        );
+    }
+    if msg.contains("not found on disk") || msg.contains("not a read-cache staleness") {
+        return Some(
+            "Grep a distinctive phrase (not the audit summary), Read ±3 lines around the match, copy exact bytes into old_string (strip line-number tabs). Do not retry identical Read params.",
+        );
+    }
+    if msg.contains("only read a portion") || msg.contains("editable lines (seen in conversation)")
+    {
+        return Some(
+            "Re-Read with offset/limit covering old_string (Grep first for line numbers).",
+        );
+    }
+    if msg.contains("line number prefix") {
+        return Some("Remove \"{n}\\t\" prefixes from old_string; match raw file text only.");
+    }
+    if msg.contains("not found in") {
+        return Some("Grep to locate text, Read ±3 lines around the match, copy exact whitespace into old_string.");
+    }
+    if msg.contains("matches of old_string") || msg.contains("replace_all") {
+        return Some(
+            "Set replace_all:true OR expand old_string with 2–4 surrounding lines for uniqueness.",
+        );
+    }
+    if msg.contains("identical") {
+        return Some(
+            "Target may already match (audit said keep/skip) — verify with Grep; if change needed, ensure new_string differs.",
+        );
     }
     None
 }

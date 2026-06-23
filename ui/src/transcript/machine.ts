@@ -208,6 +208,8 @@ function handleToolEvent(machine: TranscriptMachine, event: Extract<TranscriptEv
     return machine;
   }
 
+  // While paused, block live tool events. useAgent must dispatch ANSWER_QUESTION
+  // before awaiting answer_question — invoke blocks until turn continuation ends.
   if (machine.phase === "pausedForQuestion") {
     return machine;
   }

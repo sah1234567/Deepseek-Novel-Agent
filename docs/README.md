@@ -67,7 +67,7 @@ Skill 文件夹格式：`skills/<id>/SKILL.md` + 可选 `references/`。
 |------|------|
 | StatusBar 作品 | `list_works` 下拉 + 新建作品；切换作品会 **新建 session**（不自动恢复上次会话） |
 | StatusBar 会话 | `list_sessions` 下拉 + `resume_session` 切换；`+` → `create_session`；标签显示 **对话轮数** + **最后 LLM 活跃时间**；流式中（`isStreaming`）禁用切换 |
-| StatusBar Todo | **按钮常驻**（StatusBar 最左）；`TodoWrite` → DB → **`session-todos-updated`** → `useAppStatus.todos`（turn 进行中即时，不经 `get_app_status`）；下拉按 **进行中 / 未进行 / 已完成** 分组（已完成划掉）；**仍有未完成项**时列表可见；**全部完成或空列表**为「暂无待办事项」；`update_session_todo({ sessionId, todoId, status })` 点击循环状态并 emit 同事件；未完成数 **0→>0** 自动展开、**>0→0** 自动收起 |
+| StatusBar Todo | **按钮常驻**（StatusBar 最左）；`TodoWrite` → DB → **`session-todos-updated`** → `useAppStatus.todos`（turn 进行中即时）；四类状态样式区分；徽章仅计未完成；**无未完成项**时下拉「暂无待办事项」；有未完成项时展示全部行；`update_session_todo` 点击循环状态（经 `validate_todo_upsert`）；未完成数 **0→>0** 自动展开、**>0→0** 自动收起 |
 | StatusBar Token | 会话累计三分类 + 当前上下文；**`session-tokens-updated` 事件驱动**（主/SubAgent 每次 LLM 调用后推送）；初始与切 session 经 `get_app_status`；30s 轮询与 `turn-complete` / `permission-mode-changed` refresh 兜底 turn 标志等非 token 字段 |
 | 设置 · 会话列表 | 同 `list_sessions`；元数据含 **对话 N 轮 · API M 次** |
 | 权限 / 模型 | ChatPanel 底栏：normal / plan / auto / unattended；flash/pro；**turn 进行中禁用** |

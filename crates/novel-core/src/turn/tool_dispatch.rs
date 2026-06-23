@@ -347,6 +347,16 @@ mod tests {
             subagent_queue: Some(queue),
             ..ToolContext::new(tmp.path().to_path_buf())
         };
+        db.upsert_session_todos(
+            &sid,
+            &[novel_state::SessionTodo {
+                id: "a".into(),
+                content: "write ch1".into(),
+                status: "pending".into(),
+            }],
+            true,
+        )
+        .unwrap();
         let (abort_tx, abort_rx) = novel_tools::abort_channel();
         let _ = abort_tx;
         let mut dispatch = StreamingToolDispatch::new(reg.clone(), ctx.clone(), 4, abort_rx);

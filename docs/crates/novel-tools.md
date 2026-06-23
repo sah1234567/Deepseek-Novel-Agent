@@ -88,7 +88,7 @@ SSE 流开始前创建，Allow 权限的工具在 arguments JSON 完整时即可
 | Grep | ripgrep 生态；`search_root` 可选（默认作品根）；默认 ≤80 匹配，`head_limit`/`offset` 分页（`head_limit=0` 无限）；20K 字符硬限 |
 | Glob | 通配符搜路径（`*`/`**`/`?`；带 `/` 的前缀 pattern；无 `/` 则任意深度；`dir/*` 等价 `dir/**`）；`search_root` 可选；输出统一 `/` |
 | Bash | Shell 命令 |
-| TodoWrite | SQLite `session_todos`，merge 模式；Normal 模式直接 Allow |
+| TodoWrite | SQLite `session_todos`；`replace=false` 仅更新已有 id；未知 id 跳过并在结果中 `warning`；`replace=true` 新建一批并覆盖旧表；至多一项 `in_progress`；Normal 模式直接 Allow |
 | CharacterSearch | 人物档案 + 演变日志末行；tool_result 输出 ≤80 行（`KNOWLEDGE_MAX_LINES`） |
 | PlotGraph | 因果图 BFS |
 | WebSearch | 通用网页搜索（DeepSeek `web_search_20250305`），API Key 与主对话相同：`DEEPSEEK_API_KEY` env 优先，否则 `{agent_root}/.novel-agent/api_config.json`（经 `ToolContext.global_api_config_path` → `novel_config::resolve_agent_api_key`）；失败返回 `ToolError` 而非空成功。原始结果缓存 `{project}/.websearch/`（非 `knowledge/` 正典）。支持 research/similar-works/reader-feedback/trope-reference/fact-check/writing-tips/trending/short-drama 等搜索角度 |

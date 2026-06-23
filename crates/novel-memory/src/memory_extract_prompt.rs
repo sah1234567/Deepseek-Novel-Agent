@@ -41,6 +41,7 @@ mod tests {
         let prompt = build_memory_extraction_prompt(15, "", "memory");
         assert!(prompt.contains("15"));
         assert!(prompt.contains("尚无 memory 文件"));
+        assert!(prompt.contains("AskUserQuestion"));
         assert!(prompt.contains("style"));
         assert!(prompt.contains("plot_decision"));
         assert!(prompt.contains("不要保存"));

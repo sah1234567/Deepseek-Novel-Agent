@@ -220,6 +220,190 @@ mod permission_tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn todo_write_skips_unknown_ids_with_warning() {
+        let tmp = TempDir::new().unwrap();
+        let db = novel_state::Database::open(tmp.path().join("td1.db")).unwrap();
+        let sid = db.create_session("/tmp/proj", "m").unwrap();
+        db.upsert_session_todos(
+            &sid,
+            &[novel_state::SessionTodo {
+                id: "1".into(),
+                content: "wip".into(),
+                status: "in_progress".into(),
+            }],
+            true,
+        )
+        .unwrap();
+        let ex = ToolExecutor::new(Arc::new(default_registry()));
+        let ctx = ToolContext {
+            permission_mode: PermissionMode::Auto,
+            project_root: tmp.path().to_path_buf(),
+            session_id: sid.clone(),
+            db: Some(Arc::new(db.clone())),
+            subagent_queue: Some(Arc::new(std::sync::Mutex::new(Vec::new()))),
+            ..ToolContext::new(tmp.path().to_path_buf())
+        };
+        let out = ex
+            .execute_one(
+                &crate::ToolCallSpec {
+                    id: "tw1".into(),
+                    name: "TodoWrite".into(),
+                    input: json!({"todos": [{"id": "2", "content": "new", "status": "pending"}]}),
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_str(&out.content).unwrap();
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["count"], 0);
+        assert!(body["warning"].as_str().unwrap().contains("2"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn todo_write_applies_known_and_warns_on_unknown() {
+        let tmp = TempDir::new().unwrap();
+        let db = novel_state::Database::open(tmp.path().join("td2.db")).unwrap();
+        let sid = db.create_session("/tmp/proj", "m").unwrap();
+        db.upsert_session_todos(
+            &sid,
+            &[novel_state::SessionTodo {
+                id: "1".into(),
+                content: "work".into(),
+                status: "in_progress".into(),
+            }],
+            true,
+        )
+        .unwrap();
+        let ex = ToolExecutor::new(Arc::new(default_registry()));
+        let ctx = ToolContext {
+            permission_mode: PermissionMode::Auto,
+            project_root: tmp.path().to_path_buf(),
+            session_id: sid.clone(),
+            db: Some(Arc::new(db.clone())),
+            subagent_queue: Some(Arc::new(std::sync::Mutex::new(Vec::new()))),
+            ..ToolContext::new(tmp.path().to_path_buf())
+        };
+        let out = ex.execute_one(&crate::ToolCallSpec { id: "tw1".into(), name: "TodoWrite".into(), input: json!({"todos": [{"id": "1", "content": "work", "status": "completed"}, {"id": "9", "content": "phantom", "status": "pending"}]}) }, &ctx).await.unwrap();
+        let body: serde_json::Value = serde_json::from_str(&out.content).unwrap();
+        assert_eq!(body["count"], 1);
+        assert!(body["warning"].as_str().unwrap().contains("9"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn todo_write_allows_status_update_on_existing() {
+        let tmp = TempDir::new().unwrap();
+        let db = novel_state::Database::open(tmp.path().join("td3.db")).unwrap();
+        let sid = db.create_session("/tmp/proj", "m").unwrap();
+        db.upsert_session_todos(
+            &sid,
+            &[novel_state::SessionTodo {
+                id: "1".into(),
+                content: "work".into(),
+                status: "in_progress".into(),
+            }],
+            true,
+        )
+        .unwrap();
+        let ex = ToolExecutor::new(Arc::new(default_registry()));
+        let ctx = ToolContext {
+            permission_mode: PermissionMode::Auto,
+            project_root: tmp.path().to_path_buf(),
+            session_id: sid.clone(),
+            db: Some(Arc::new(db.clone())),
+            subagent_queue: Some(Arc::new(std::sync::Mutex::new(Vec::new()))),
+            ..ToolContext::new(tmp.path().to_path_buf())
+        };
+        ex.execute_one(
+            &crate::ToolCallSpec {
+                id: "tw1".into(),
+                name: "TodoWrite".into(),
+                input: json!({"todos": [{"id": "1", "content": "work", "status": "completed"}]}),
+            },
+            &ctx,
+        )
+        .await
+        .unwrap();
+        assert_eq!(db.list_session_todos(&sid).unwrap()[0].status, "completed");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn todo_write_replace_true_replaces_entire_list() {
+        let tmp = TempDir::new().unwrap();
+        let db = novel_state::Database::open(tmp.path().join("td4.db")).unwrap();
+        let sid = db.create_session("/tmp/proj", "m").unwrap();
+        db.upsert_session_todos(
+            &sid,
+            &[novel_state::SessionTodo {
+                id: "old".into(),
+                content: "old".into(),
+                status: "in_progress".into(),
+            }],
+            true,
+        )
+        .unwrap();
+        let ex = ToolExecutor::new(Arc::new(default_registry()));
+        let ctx = ToolContext {
+            permission_mode: PermissionMode::Auto,
+            project_root: tmp.path().to_path_buf(),
+            session_id: sid.clone(),
+            db: Some(Arc::new(db.clone())),
+            subagent_queue: Some(Arc::new(std::sync::Mutex::new(Vec::new()))),
+            ..ToolContext::new(tmp.path().to_path_buf())
+        };
+        let out = ex.execute_one(&crate::ToolCallSpec { id: "tw1".into(), name: "TodoWrite".into(), input: json!({"replace": true, "todos": [{"id": "a", "content": "first", "status": "pending"}, {"id": "b", "content": "second", "status": "in_progress"}]}) }, &ctx).await.unwrap();
+        let body: serde_json::Value = serde_json::from_str(&out.content).unwrap();
+        assert_eq!(body["count"], 2);
+        let todos = db.list_session_todos(&sid).unwrap();
+        assert_eq!(todos.len(), 2);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn todo_write_rejects_second_in_progress_via_status_update() {
+        let tmp = TempDir::new().unwrap();
+        let db = novel_state::Database::open(tmp.path().join("td5.db")).unwrap();
+        let sid = db.create_session("/tmp/proj", "m").unwrap();
+        db.upsert_session_todos(
+            &sid,
+            &[
+                novel_state::SessionTodo {
+                    id: "1".into(),
+                    content: "a".into(),
+                    status: "in_progress".into(),
+                },
+                novel_state::SessionTodo {
+                    id: "2".into(),
+                    content: "b".into(),
+                    status: "pending".into(),
+                },
+            ],
+            true,
+        )
+        .unwrap();
+        let ex = ToolExecutor::new(Arc::new(default_registry()));
+        let ctx = ToolContext {
+            permission_mode: PermissionMode::Auto,
+            project_root: tmp.path().to_path_buf(),
+            session_id: sid.clone(),
+            db: Some(Arc::new(db.clone())),
+            subagent_queue: Some(Arc::new(std::sync::Mutex::new(Vec::new()))),
+            ..ToolContext::new(tmp.path().to_path_buf())
+        };
+        let err = ex
+            .execute_one(
+                &crate::ToolCallSpec {
+                    id: "tw1".into(),
+                    name: "TodoWrite".into(),
+                    input: json!({"todos": [{"id": "2", "content": "b", "status": "in_progress"}]}),
+                },
+                &ctx,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, crate::ToolError::Validation(_)));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn user_approved_write_bypasses_normal_mode_ask() {
         let tmp = TempDir::new().unwrap();
         let reg = Arc::new(default_registry());
