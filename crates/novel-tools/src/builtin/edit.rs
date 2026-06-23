@@ -128,12 +128,6 @@ impl Tool for EditTool {
                 entry.check_fresh_for_disk(file_mtime_secs(&meta), &content, "editing")?;
             }
 
-            if !content.contains(&old_string) {
-                return Err(crate::read_cache::edit_old_string_not_on_disk_error(
-                    &old_string,
-                ));
-            }
-
             let matches = content.matches(&old_string).count();
             if matches > 1 && !replace_all {
                 return Err(ToolError::Execution(format!(

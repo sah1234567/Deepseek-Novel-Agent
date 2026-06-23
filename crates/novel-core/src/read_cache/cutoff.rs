@@ -1,4 +1,8 @@
 //! Read-cache replay cutoff for compaction and resume.
+//!
+//! Replay starts after the last `[上下文刷新]` user message. Partial-read merge unions
+//! built from Read pairs before that cutoff are not reconstructed — only pairs in the
+//! retained transcript slice are replayed from disk.
 
 use crate::message::chat_slice_to_compaction;
 use crate::ChatMessage;

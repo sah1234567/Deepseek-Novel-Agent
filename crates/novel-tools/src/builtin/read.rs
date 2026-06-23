@@ -12,6 +12,7 @@ pub struct ReadTool;
 
 const MAX_OUTPUT_BYTES: usize = 256 * 1024; // 256 KB
 use crate::read_cache::FAST_PATH_MAX_SIZE;
+use crate::read_cache_ingest::IngestDiskPayload;
 
 fn format_file_size(bytes: usize) -> String {
     if bytes < 1024 {
@@ -130,10 +131,7 @@ impl Tool for ReadTool {
     }
 
     fn extract_read_span(&self, input: &Value, total_lines: usize) -> Option<(usize, usize)> {
-        let offset = input.get("offset").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
-        let limit = input.get("limit").and_then(|v| v.as_u64())? as usize;
-        let end = offset.saturating_add(limit).saturating_sub(1);
-        Some((offset, end.min(total_lines.max(offset))))
+        crate::read_cache::line_span_from_read_input(input, total_lines)
     }
 
     fn supports_read_dedup_hint(&self) -> bool {
@@ -240,22 +238,33 @@ impl Tool for ReadTool {
             let metadata = fs::metadata(&full).await.map_err(ToolError::Io)?;
             let fast = metadata.len() < FAST_PATH_MAX_SIZE;
 
-            let (content, _line_count, _total_lines, _disk_full): (
+            let (content, _line_count, _total_lines, ingest_payload): (
                 String,
                 usize,
                 usize,
-                Option<String>,
+                Option<IngestDiskPayload>,
             ) = if fast {
                 let (c, lc, tl, disk) = read_fast(&full, line_offset, limit).await?;
-                (c, lc, tl, Some(disk))
+                let mtime = file_mtime_secs(&metadata);
+                let payload = IngestDiskPayload {
+                    mtime_secs: mtime,
+                    file_len: metadata.len(),
+                    disk_full: disk,
+                    raw_slice: c.clone(),
+                    total_lines: tl,
+                };
+                (c, lc, tl, Some(payload))
             } else {
                 let (c, lc, tl) = read_streaming(&full, line_offset, limit).await?;
-                let disk = if ctx.read_cache_entry(&full).is_some() {
-                    Some(fs::read_to_string(&full).await.map_err(ToolError::Io)?)
-                } else {
-                    None
+                let mtime = file_mtime_secs(&metadata);
+                let payload = IngestDiskPayload {
+                    mtime_secs: mtime,
+                    file_len: metadata.len(),
+                    disk_full: String::new(),
+                    raw_slice: c.clone(),
+                    total_lines: tl,
                 };
-                (c, lc, tl, disk)
+                (c, lc, tl, Some(payload))
             };
 
             crate::read_economy::read_pre_check(&path, limit, _total_lines)?;
@@ -278,20 +287,22 @@ impl Tool for ReadTool {
                 )));
             }
 
+            if let Some(ref payload) = ingest_payload {
+                crate::read_cache_ingest::ingest_read_or_tail_into_cache(
+                    ctx,
+                    "Read",
+                    &full,
+                    &input,
+                    ReadCacheSource::Read,
+                    Some(payload),
+                )?;
+            }
+
             let formatted = if content.is_empty() {
                 String::new()
             } else {
                 add_line_numbers(&content, offset.max(1))
             };
-
-            crate::read_cache_ingest::ingest_read_or_tail_into_cache(
-                ctx,
-                &crate::default_registry(),
-                "Read",
-                &full,
-                &input,
-                ReadCacheSource::Read,
-            )?;
 
             Ok(ToolOutput {
                 content: formatted,

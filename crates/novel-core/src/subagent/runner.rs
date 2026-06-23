@@ -284,6 +284,24 @@ async fn subagent_apply_completion_tools(
     Ok(SubagentTurnOutcome::Continue { phase })
 }
 
+fn emit_subagent_complete_event(
+    event_tx: Option<&mpsc::UnboundedSender<Event>>,
+    fork_run_id: &str,
+    agent_type: AgentType,
+    output: &str,
+) {
+    if agent_type != AgentType::MemoryExtractor {
+        if let Some(tx) = event_tx {
+            let _ = tx.send(Event::SubAgentComplete {
+                fork_run_id: fork_run_id.to_string(),
+                agent_id: agent_type.to_string(),
+                output: output.to_string(),
+                cache_hit_rate: 0.0,
+            });
+        }
+    }
+}
+
 async fn subagent_run_react_loop(
     job: &SubagentJobCtx<'_>,
     llm: &mut Option<novel_deepseek::ChatClient>,
@@ -353,16 +371,7 @@ async fn subagent_run_react_loop(
     // Decrement sub-agent count (paired with `sub_agent_inc` at spawn site).
     shared.sub_agent_dec();
 
-    if agent_type != AgentType::MemoryExtractor {
-        if let Some(tx) = event_tx {
-            let _ = tx.send(Event::SubAgentComplete {
-                fork_run_id: fork_run_id.to_string(),
-                agent_id: agent_type.to_string(),
-                output: output.clone(),
-                cache_hit_rate: 0.0,
-            });
-        }
-    }
+    emit_subagent_complete_event(event_tx, fork_run_id, agent_type, &output);
 
     tracing::debug!(
         session_id = %shared.session.id,
@@ -573,5 +582,37 @@ mod tests {
                 phase: SubagentLoopPhase::ReportOnly { grace_left: 0 }
             }
         ));
+    }
+
+    #[test]
+    fn emit_subagent_complete_skips_memory_extractor() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        emit_subagent_complete_event(Some(&tx), "fork1", AgentType::MemoryExtractor, "output");
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn emit_subagent_complete_sends_for_knowledge_auditor() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        emit_subagent_complete_event(Some(&tx), "fork2", AgentType::KnowledgeAuditor, "report");
+        let event = rx.try_recv().unwrap();
+        match event {
+            Event::SubAgentComplete {
+                fork_run_id,
+                agent_id,
+                output,
+                ..
+            } => {
+                assert_eq!(fork_run_id, "fork2");
+                assert_eq!(agent_id, "KnowledgeAuditor");
+                assert_eq!(output, "report");
+            }
+            _ => panic!("expected SubAgentComplete"),
+        }
+    }
+
+    #[test]
+    fn emit_subagent_complete_noop_without_event_tx() {
+        emit_subagent_complete_event(None, "fork3", AgentType::KnowledgeAuditor, "report");
     }
 }

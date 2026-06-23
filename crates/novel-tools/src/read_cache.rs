@@ -1,6 +1,10 @@
 //! Session read cache: dedup, Edit read-before-write, partial/stale checks.
 //! Cached span (merge union) may be wider than transcript visibility; Edit R1 uses `committed_spans` only.
 //! `replace_all` with session cache skips R1; post-edit cache becomes full file.
+//!
+//! Dual track: merged cache window (R0) vs transcript-committed spans (R1).
+//! Compaction replay from cutoff may drop early partial-merge unions
+//! when pre-cutoff Read pairs are not replayed.
 
 use crate::paths::{normalize_rel_path, optional_file_path};
 use crate::ToolError;
@@ -114,10 +118,33 @@ impl ReadCacheEntry {
         if self.is_full_read() && self.raw_content == disk_content {
             return Ok(());
         }
+        if cached_window_matches_disk(self, disk_content) {
+            tracing::debug!(
+                action,
+                "read_cache freshness: mtime advanced but cached window unchanged on disk"
+            );
+            return Ok(());
+        }
         Err(ToolError::Execution(format!(
             "File modified since last read. Read again before {action}."
         )))
     }
+}
+
+/// True when the on-disk lines in the cache window still match `raw_content`.
+fn cached_window_matches_disk(entry: &ReadCacheEntry, disk_content: &str) -> bool {
+    let Some((start, end)) = entry.cached_line_span() else {
+        return false;
+    };
+    let lines: Vec<&str> = disk_content.lines().collect();
+    if start > lines.len() {
+        return entry.raw_content.is_empty();
+    }
+    let end_idx = end.min(lines.len());
+    if start > end_idx {
+        return entry.raw_content.is_empty();
+    }
+    lines[(start - 1)..end_idx].join("\n") == entry.raw_content
 }
 
 fn line_span_from(
@@ -200,6 +227,32 @@ fn shift_committed_spans_for_edit(
     coalesce_committed_spans(spans);
 }
 
+/// Inclusive 1-indexed span from Read tool input (`limit` absent = through EOF).
+pub(crate) fn line_span_from_read_input(
+    input: &Value,
+    total_lines: usize,
+) -> Option<(usize, usize)> {
+    let offset = input.get("offset").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
+    let limit = input
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .map(|l| l as usize);
+    let (cache_off, cache_lim) = read_range_key(
+        if limit.is_some() || offset > 1 {
+            Some(offset)
+        } else {
+            None
+        },
+        limit,
+    );
+    line_span_from(
+        cache_off,
+        cache_lim,
+        total_lines,
+        cache_off.is_none() && cache_lim.is_none(),
+    )
+}
+
 /// Inclusive line span for a persisted Read/Tail tool_result from tool input.
 pub(crate) fn span_from_tool_input(
     registry: &crate::ToolRegistry,
@@ -207,6 +260,9 @@ pub(crate) fn span_from_tool_input(
     input: &Value,
     total_lines: usize,
 ) -> Option<(usize, usize)> {
+    if tool_name == "Read" {
+        return line_span_from_read_input(input, total_lines);
+    }
     registry
         .get(tool_name)?
         .extract_read_span(input, total_lines)
@@ -1132,6 +1188,71 @@ mod tests {
         let tail =
             span_from_tool_input(&registry, "Tail", &serde_json::json!({"lines": 10}), 30).unwrap();
         assert_eq!(tail, (21, 30));
+    }
+
+    #[test]
+    fn line_span_from_read_input_offset_only_through_eof() {
+        let span = line_span_from_read_input(&serde_json::json!({"offset": 5}), 50).unwrap();
+        assert_eq!(span, (5, 50));
+    }
+
+    #[test]
+    fn promote_offset_only_read_commits_through_eof() {
+        use crate::ToolContext;
+        use std::sync::Arc;
+
+        let registry = crate::default_registry();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("ch.md");
+        let body = (1..=50)
+            .map(|n| format!("line {n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&path, &body).unwrap();
+        let cache = Arc::new(dashmap::DashMap::new());
+        let ctx = ToolContext::for_cache_rebuild(tmp.path().to_path_buf(), Arc::clone(&cache));
+        let input = serde_json::json!({"file_path": "ch.md", "offset": 33});
+        crate::read_cache_ingest::ingest_read_or_tail_into_cache(
+            &ctx,
+            "Read",
+            &path,
+            &input,
+            ReadCacheSource::Read,
+            None,
+        )
+        .unwrap();
+        ctx.promote_read_cache_committed(&registry, &path, "Read", &input);
+        let entry = cache.get(&path).unwrap();
+        assert!(entry.transcript_committed);
+        assert_eq!(entry.committed_spans, vec![(33, 50)]);
+    }
+
+    #[test]
+    fn partial_read_fresh_when_edit_outside_cached_window() {
+        let disk = (1..=100)
+            .map(|n| format!("line {n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let entry = ReadCacheEntry {
+            mtime_secs: 1,
+            raw_content: (10..=20)
+                .map(|n| format!("line {n}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            offset: Some(10),
+            limit: Some(11),
+            total_lines: 100,
+            source: ReadCacheSource::Read,
+            transcript_committed: true,
+            committed_spans: vec![(10, 20)],
+            committed_offset: Some(10),
+            committed_limit: Some(11),
+        };
+        let mut disk_modified = disk.clone();
+        disk_modified.push_str("\nline 101");
+        assert!(entry
+            .check_fresh_for_disk(2, &disk_modified, "editing")
+            .is_ok());
     }
 
     // -- shift_committed_spans_for_edit tests --

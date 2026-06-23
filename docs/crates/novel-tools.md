@@ -64,7 +64,10 @@ Normal 模式下 Write/Edit 要求目标 path 已在 `read_file_cache` 中（本
 | R0 窗口并集 | 同 mtime 的 partial Read/Tail 合并 cached span（例 80–100 + 50–90 → 50–100），从磁盘重切 `raw_content`；读盘经济上限仅约束**单次** tool_result，不限制 merge 后 cache 累计行数 |
 | R1 Edit 行域 | **单次替换**须首匹配行在 **committed** span 内；`replace_all` 有 session cache 时跳过 R1（盘上字节匹配即可） |
 | R2 Edit patch | 单次替换 partial cache 增量 patch；`replace_all` 后 cache **升为整文件**；Write 仍整文件 `WriteRefresh` |
-| R3 Compaction | 压缩后清空 cache |
+| R3 Compaction | 压缩后从 cutoff 重放 cache；cutoff 前的 partial merge union 不恢复 |
+| Read span | `Read { offset, limit? }`：`limit` 缺省 = 读到 EOF；promote 用 tool input span（与 `line_span_from_read_input` 一致） |
+| Edit gate | `has_edit_context`：`transcript_committed` 或 `WriteRefresh`（ingest-only 条目不足） |
+| Freshness | mtime 前进时：full read 比对全文；partial 比对缓存窗口切片（窗口外变更仍可 Edit） |
 
 **Pipeline 分层：** `format_tool_result_for_llm` 仅追加 LLM 文案（`enhance_tool_error_for_llm` / `[fact]` / `[read-dedup]`），不读写 cache。
 

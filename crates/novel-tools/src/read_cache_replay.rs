@@ -1,4 +1,7 @@
 //! Rebuild session read cache by replaying Read/Tail/Write/Edit tool pairs from transcript.
+//!
+//! Compaction replay uses `messages_replay_cutoff` — partial merge unions from Reads before the
+//! cutoff are not reconstructed; only tool pairs in the retained slice are replayed from disk.
 
 use crate::paths::optional_file_path;
 use crate::read_cache::{file_mtime_secs, is_read_dedup_stub};
@@ -109,7 +112,7 @@ fn replay_read_or_tail_from_disk(
     } else {
         crate::ReadCacheSource::Tail
     };
-    ingest_read_or_tail_into_cache(ctx, registry, tool_name, full, input, source)
+    ingest_read_or_tail_into_cache(ctx, tool_name, full, input, source, None)
         .map_err(|_| ReadTailReplaySkip::ErrorResult)?;
     ctx.promote_read_cache_committed(registry, full, tool_name, input);
     Ok(())

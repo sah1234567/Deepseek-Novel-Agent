@@ -57,11 +57,14 @@ pub fn build_dynamic_context(
         memory: novel_memory::load_memory(project_root, 4096),
         progress: progress::load_progress(project_root, session_id, db),
         skill_summaries,
-        workspace_path: project_root
-            .canonicalize()
-            .unwrap_or_else(|_| project_root.to_path_buf())
-            .display()
-            .to_string(),
+        workspace_path: {
+            let abs = project_root
+                .canonicalize()
+                .unwrap_or_else(|_| project_root.to_path_buf());
+            // Strip Windows verbatim prefix so the LLM never sees \\?\ paths.
+            let s = abs.to_string_lossy();
+            s.strip_prefix(r"\\?\").unwrap_or(&s).to_string()
+        },
     }
 }
 #[cfg(test)]

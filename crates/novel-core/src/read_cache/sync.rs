@@ -52,10 +52,22 @@ fn pairs_from_messages(messages: &[ChatMessage], replay_from: usize) -> Vec<Read
         .collect()
 }
 
-fn rel_path_for_cache_key(project_root: &Path, full: &Path) -> String {
-    full.strip_prefix(project_root)
+/// Strip Windows `\\?\` verbatim prefix if present, so canonicalized paths
+/// (from `std::fs::canonicalize`) can still match a non-canonicalized `project_root`.
+fn strip_verbatim_prefix(path: &Path) -> std::borrow::Cow<'_, Path> {
+    let s = path.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\") {
+        return std::borrow::Cow::Owned(PathBuf::from(rest));
+    }
+    std::borrow::Cow::Borrowed(path)
+}
+
+fn rel_path_for_cache_key(project_root: &Path, full: &Path) -> Option<String> {
+    let full = strip_verbatim_prefix(full);
+    let root = strip_verbatim_prefix(project_root);
+    full.strip_prefix(root.as_ref())
+        .ok()
         .map(|p| normalize_rel_path(&p.to_string_lossy()))
-        .expect("read cache path must be under project_root")
 }
 
 fn session_compaction_count(shared: &EngineShared) -> Result<i32, AgentError> {
@@ -72,12 +84,15 @@ fn upsert_read_cache_entry(
     project_root: &Path,
     full: &Path,
     entry: &ReadCacheEntry,
-) -> Result<String, AgentError> {
-    let rel = rel_path_for_cache_key(project_root, full);
+) -> Result<Option<String>, AgentError> {
+    let Some(rel) = rel_path_for_cache_key(project_root, full) else {
+        tracing::warn!(path = %full.display(), "read_cache upsert: path outside project_root, skipping");
+        return Ok(None);
+    };
     let json = read_cache_entry_to_json(entry).map_err(AgentError::from)?;
     db.upsert_session_read_cache_entry(session_id, &rel, &json)
         .map_err(AgentError::from)?;
-    Ok(rel)
+    Ok(Some(rel))
 }
 
 fn persist_read_cache_anchor(
@@ -177,8 +192,11 @@ pub(crate) fn reconcile_session_read_cache(
 
     let mut keep_paths = Vec::new();
     for item in shared.read_file_cache.iter() {
-        let rel = upsert_read_cache_entry(db, session_id, project_root, item.key(), item.value())?;
-        keep_paths.push(rel);
+        if let Some(rel) =
+            upsert_read_cache_entry(db, session_id, project_root, item.key(), item.value())?
+        {
+            keep_paths.push(rel);
+        }
     }
     db.delete_session_read_cache_paths_not_in(session_id, &keep_paths)
         .map_err(AgentError::from)?;

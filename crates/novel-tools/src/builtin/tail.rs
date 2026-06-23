@@ -2,6 +2,7 @@ use super::super::{
     add_line_numbers, extract_file_path, file_mtime_secs, ReadCacheEntry, ReadCacheSource, Tool,
     ToolContext, ToolError, ToolOutput, ValidationError, FILE_UNCHANGED_STUB,
 };
+use crate::read_cache_ingest::IngestDiskPayload;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use tokio::fs;
@@ -149,13 +150,20 @@ impl Tool for TailTool {
 
             let formatted = add_line_numbers(&raw, start_line);
 
+            let payload = IngestDiskPayload {
+                mtime_secs: mtime,
+                file_len: metadata.len(),
+                disk_full: content,
+                raw_slice: raw.clone(),
+                total_lines,
+            };
             crate::read_cache_ingest::ingest_read_or_tail_into_cache(
                 ctx,
-                &crate::default_registry(),
                 "Tail",
                 &full,
                 &input,
                 ReadCacheSource::Tail,
+                Some(&payload),
             )?;
 
             Ok(ToolOutput {

@@ -311,6 +311,13 @@ impl ToolContext {
             } else if let Some(span) =
                 span_from_tool_input(registry, tool_name, input, entry.total_lines)
             {
+                tracing::debug!(
+                    path = %path.display(),
+                    tool = tool_name,
+                    span_start = span.0,
+                    span_end = span.1,
+                    "read_cache promote: commit_span"
+                );
                 entry.commit_span(span);
             }
             self.touch_read_cache_path(path);
@@ -336,6 +343,12 @@ impl ToolContext {
             .is_some_and(|c| c.contains_key(path))
     }
 
+    /// True when Edit/Write may proceed: transcript committed or Write refreshed full file.
+    pub fn has_edit_context(&self, path: &PathBuf) -> bool {
+        self.read_cache_entry(path)
+            .is_some_and(|e| e.transcript_committed || e.source == ReadCacheSource::WriteRefresh)
+    }
+
     /// Normal mode read-before-write. Set `only_if_exists` for Write (skip new files).
     pub fn require_read_before_write(
         &self,
@@ -357,7 +370,7 @@ impl ToolContext {
         if only_if_exists && !full.exists() {
             return Ok(());
         }
-        if !self.was_read(full) {
+        if !self.has_edit_context(full) {
             return Err(ToolError::Execution(format!(
                 "Read {path} before {action} (read-before-write policy)"
             )));
@@ -575,5 +588,40 @@ mod tests {
     #[case("plan/foo.md", false)]
     fn path_matches_write_chapters_rule(#[case] path: &str, #[case] matches: bool) {
         assert_eq!(path_matches_rule("Write(chapters/**)", path), matches);
+    }
+
+    #[test]
+    fn has_edit_context_requires_transcript_or_write_refresh() {
+        use std::sync::Arc;
+
+        let mut ctx = ToolContext::new(std::path::PathBuf::from("."));
+        ctx.read_file_cache = Some(Arc::new(dashmap::DashMap::new()));
+        ctx.permission_mode = PermissionMode::Normal;
+        let path = std::path::PathBuf::from("a.md");
+
+        assert!(!ctx.has_edit_context(&path));
+
+        ctx.store_read_cache(
+            &path,
+            ReadCacheEntry {
+                mtime_secs: 1,
+                raw_content: "x".into(),
+                offset: Some(1),
+                limit: Some(1),
+                total_lines: 1,
+                source: ReadCacheSource::Read,
+                transcript_committed: false,
+                committed_spans: Vec::new(),
+                committed_offset: None,
+                committed_limit: None,
+            },
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(!ctx.has_edit_context(&path));
+
+        ctx.refresh_cache_after_write(&path, "written", 2);
+        assert!(ctx.has_edit_context(&path));
     }
 }

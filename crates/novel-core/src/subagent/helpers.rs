@@ -31,8 +31,7 @@ pub(crate) fn subagent_fork_tool_context(shared: &crate::EngineShared) -> ToolCo
         session_id: shared.session.id.clone(),
         db: Some(Arc::new(shared.session.db.clone())),
         permission_mode_override: Some(Arc::clone(&shared.permission_mode_override)),
-        // Subagents do not share the main read_file_cache: promote/dirty_paths are main-only
-        // (aligns with Claude Code subagent readFileState isolation).
+        // Subagents do not share the main read_file_cache: promote/dirty_paths are main-only.
         read_file_cache: None,
         file_op_locks: Some(Arc::clone(&shared.file_op_locks)),
         allow_fork: false,

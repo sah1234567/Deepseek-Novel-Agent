@@ -10,12 +10,23 @@ pub fn normalize_rel_path(rel: &str) -> String {
     norm.trim_start_matches("./").to_string()
 }
 
-/// Resolve `rel` under `project_root`. Absolute paths pass through unchanged.
+/// Strip Windows `\\?\` verbatim prefix added by `std::fs::canonicalize`.
+/// Has no effect on non-Windows or non-verbatim paths.
+fn strip_verbatim_prefix(p: PathBuf) -> PathBuf {
+    let s = p.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\") {
+        return PathBuf::from(rest);
+    }
+    p
+}
+
+/// Resolve `rel` under `project_root`. Absolute paths are normalized
+/// (Windows `\\?\` prefix stripped) before returning.
 pub fn resolve_under_project(project_root: &Path, rel: &str) -> PathBuf {
     let normalized = rel.replace('/', std::path::MAIN_SEPARATOR_STR);
     let p = PathBuf::from(normalized);
     if p.is_absolute() {
-        p
+        strip_verbatim_prefix(p)
     } else {
         project_root.join(p)
     }

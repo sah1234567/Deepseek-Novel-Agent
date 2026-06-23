@@ -190,15 +190,18 @@ fn resolve_skill_dir(
     agent_skills_dir: &Path,
     skill_id: &str,
 ) -> Option<PathBuf> {
-    // Project-level override first
+    // Project-level override first.
+    // Intentionally NOT canonicalized: canonicalize() adds a \\?\ verbatim prefix on
+    // Windows, which would leak into the system prompt and from there into file_path
+    // tool-call arguments, producing cache keys that fail strip_prefix checks downstream.
     let project_path = project_root.join("skills").join(skill_id);
     if project_path.join("SKILL.md").exists() {
-        return Some(project_path.canonicalize().unwrap_or(project_path));
+        return Some(project_path);
     }
     // Agent-level skill
     let agent_path = agent_skills_dir.join(skill_id);
     if agent_path.join("SKILL.md").exists() {
-        return Some(agent_path.canonicalize().unwrap_or(agent_path));
+        return Some(agent_path);
     }
     None
 }
