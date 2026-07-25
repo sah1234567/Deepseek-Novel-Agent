@@ -8,5 +8,5 @@ cd "$ROOT"
 bash "$ROOT/scripts/ci-ui-dist.sh"
 bash "$ROOT/scripts/ci-tauri-icons.sh"
 
-echo "=== cargo clippy --workspace --all-targets -- -D warnings -D clippy::unwrap_used ==="
-cargo clippy --workspace --all-targets -- -D warnings -D clippy::unwrap_used
+echo "=== cargo clippy --workspace --all-targets -- -D warnings -D clippy::unwrap_used -D clippy::expect_used ==="
+cargo clippy --workspace --all-targets -- -D warnings -D clippy::unwrap_used -D clippy::expect_used

@@ -33,4 +33,4 @@ if ! _prepend_node24_if_needed; then
   exit 1
 fi
 
-echo "=== node $(node -v) | npm $(npm -v) ==="
+echo "=== node $(node -v) | pnpm $(pnpm -v) ==="

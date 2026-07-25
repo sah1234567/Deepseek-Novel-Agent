@@ -11,6 +11,28 @@ description: >-
 
 在本项目内重构或新增 Rust（`crates/`）或 TypeScript（`ui/`）代码时，必须在设计和审查阶段遵循以下原则。每个原则包含**判断标准**、**Rust 正反例**、**TypeScript 正反例**。末尾的「重构执行流程」和「检查清单」确保改动严格满足所有要求。
 
+## 项目拓扑（架构约束）
+
+```
+ui (React 18 / Vite 8 / TypeScript) → Tauri IPC → novel-server → novel-core
+                                                              ├── novel-deepseek (LLM)
+                                                              ├── novel-tools (tool dispatch)
+                                                              ├── novel-knowledge (RAG/scaffold)
+                                                              ├── novel-state (SQLite sessions)
+                                                              ├── novel-compaction (context mgmt)
+                                                              ├── novel-config (paths/settings)
+                                                              ├── novel-skills (runtime skills)
+                                                              ├── novel-memory (memory extraction)
+                                                              └── novel-logging (tracing)
+```
+
+- **Crate DAG（硬规则）：** `novel-server → (novel-core | novel-deepseek | novel-tools | ...) → novel-config`。禁止反向依赖。`novel-core` 不可依赖任何 feature crate。
+- **IPC 拓扑：** `ui --Tauri invoke/listen--> novel-server/src/tauri/ --EngineCommand--> novel-core`。UI 不得直连 WebSocket 或 game 端口。
+- **数据归属：** 每作品独立 `works/{name}/.novel-agent/state.db`；全局 API 配置在 `.novel-agent/api_config.json`。API Key 不写入 per-work DB。
+- **测试纪律：** Rust 全项目只用 `cargo nextest run`（禁止 `cargo test`）。Node 24+（`ui/.nvmrc`）。
+- **CRAP 阈值：** 20（`.cargo-crap.toml`），禁止调高。
+- **与 CI / skill 的关系：** 见 [CLAUDE.md](../../CLAUDE.md) 及各层 post-change skill。
+
 ---
 
 ## 1. DRY — 不要重复自己
@@ -487,3 +509,19 @@ useEffect(() => { connectWebSocket(url); }, []);
 1. **单一职责 > DRY**：错误地合并两个职责不同但文本相似的代码，比保留两段清晰独立的代码危害更大
 2. **功能不变 > 简化**：不能为了让代码 "更好看" 而改变行为
 3. **显式 > 紧凑**：多写几行 > 一行塞进所有逻辑
+
+---
+
+## 相关 Skill
+
+本 skill 为架构设计与代码审查提供原则指导，以下 skill 负责具体执行流程：
+
+| Skill | 用途 |
+|-------|------|
+| [`rust-post-change`](../rust-post-change/SKILL.md) | Rust 后端改动收尾（清理 → 走查 → 审查 → 验证） |
+| [`ui-post-change`](../ui-post-change/SKILL.md) | UI 前端改动收尾（清理 → IPC 走查 → 反模式 → 验证） |
+| [`tauri-post-change`](../tauri-post-change/SKILL.md) | Tauri 壳改动收尾（清理 → 注册走查 → 配置 → 验证 → 冒烟） |
+| [`post-change-checklist`](../post-change-checklist/SKILL.md) | 跨层改动编排器 |
+| [`refactor-cleanup`](../refactor-cleanup/SKILL.md) | 死代码/兼容层/注释对齐（被各层 skill 步骤 1 调用） |
+| [`smoke-post-change`](../smoke-post-change/SKILL.md) | IPC Fork 防洪水冒烟测试 |
+| [`cargo-crap`](../cargo-crap/SKILL.md) | CRAP 复杂度 × 覆盖率门禁 |

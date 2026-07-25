@@ -309,4 +309,4 @@ bash scripts/ci-rust-test.sh
 
 打包发布时须随应用部署 `templates/` 与 `skills/`（与开发态相同布局）。
 
-**依赖安全：** `ci-frontend.sh` 要求 `npm audit` 无 critical；`ci-security-audit.sh` 使用 `cargo audit --deny warnings`，Tauri 桌面传递依赖的已知 advisory 列在 `.cargo/audit.toml`（GTK3/unic/glib），升级 Tauri 时需复查。
+**依赖安全：** `ci-frontend.sh` 要求 `pnpm audit` 无 critical；`ci-security-audit.sh` 使用 `cargo audit --deny warnings`，Tauri 桌面传递依赖的已知 advisory 列在 `.cargo/audit.toml`（GTK3/unic/glib），升级 Tauri 时需复查。

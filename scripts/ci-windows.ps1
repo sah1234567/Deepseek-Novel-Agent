@@ -1,7 +1,7 @@
 # Windows CI gate — same checks as GitHub job "Rust (Windows gate)" in ci.yml.
 # Usage: .\scripts\ci-windows.ps1
 #
-# Requires Git Bash so Windows cargo/npm stay on PATH (avoid WSL bash).
+# Requires Git Bash so Windows cargo/pnpm stay on PATH (avoid WSL bash).
 
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot\..

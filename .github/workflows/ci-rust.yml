@@ -1,0 +1,167 @@
+# Rust 后端 CI 门禁（fmt + clippy + nextest + Tauri 壳），三平台覆盖。
+# 仅 Rust/Tauri 相关文件变更时触发，与本地 scripts/ci-rust-gate.sh 一致。
+#
+# 路径过滤：与 post-change-checklist 步骤 0 范围 A+B 对齐。
+name: CI Rust
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'crates/**'
+      - 'src-tauri/**'
+      - 'tests/integration/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/**'
+      - '.cargo-crap.toml'
+      - '.config/nextest.toml'
+      - 'scripts/ci-rust*'
+      - 'scripts/ci-clippy*'
+      - 'scripts/ci-tauri*'
+      - 'scripts/ci-linux-tauri*'
+      - 'scripts/ci-nextest-env*'
+      - 'scripts/ci-lcov*'
+      - 'scripts/ci-crap*'
+      - 'scripts/ci-require-toolchain*'
+      - '.github/workflows/ci-rust.yml'
+  pull_request:
+    branches: [main, master]
+    paths:
+      - 'crates/**'
+      - 'src-tauri/**'
+      - 'tests/integration/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/**'
+      - '.cargo-crap.toml'
+      - '.config/nextest.toml'
+      - 'scripts/ci-rust*'
+      - 'scripts/ci-clippy*'
+      - 'scripts/ci-tauri*'
+      - 'scripts/ci-linux-tauri*'
+      - 'scripts/ci-nextest-env*'
+      - 'scripts/ci-lcov*'
+      - 'scripts/ci-crap*'
+      - 'scripts/ci-require-toolchain*'
+      - '.github/workflows/ci-rust.yml'
+
+concurrency:
+  group: ci-rust-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  CARGO_BUILD_JOBS: 1
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  rust-ubuntu:
+    name: Rust (Ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy, llvm-tools-preview
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+          cache-all-crates: true
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.15.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: ui/.nvmrc
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest,cargo-llvm-cov
+
+      - name: Install cargo-crap
+        run: cargo install cargo-crap --locked
+
+      - name: Rust gate (ci-rust-gate.sh)
+        run: bash scripts/ci-rust-gate.sh
+
+  rust-windows:
+    name: Rust (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy, llvm-tools-preview
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+          cache-all-crates: true
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.15.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: ui/.nvmrc
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest,cargo-llvm-cov
+
+      - name: Install cargo-crap
+        run: cargo install cargo-crap --locked
+
+      - name: Rust gate (ci-rust-gate.sh)
+        shell: bash
+        run: bash scripts/ci-rust-gate.sh
+
+  rust-macos:
+    name: Rust (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy, llvm-tools-preview
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+          cache-all-crates: true
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.15.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: ui/.nvmrc
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest,cargo-llvm-cov
+
+      - name: Install cargo-crap
+        run: cargo install cargo-crap --locked
+
+      - name: Rust gate (ci-rust-gate.sh)
+        run: bash scripts/ci-rust-gate.sh

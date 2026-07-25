@@ -64,10 +64,10 @@ novel_agent/
 
 以下命令均在**仓库根目录**执行（需含 `skills/`、`templates/` 目录，克隆后即存在）。
 
-**首次**安装前端依赖（`cargo tauri dev` 不会自动执行 `npm install`）：
+**首次**安装前端依赖（`cargo tauri dev` 不会自动执行 `pnpm install`）：
 
 ```bash
-npm --prefix ui install
+pnpm --prefix ui install
 ```
 
 **开发模式（推荐）：** 依赖装好后，日常只需：
@@ -81,7 +81,7 @@ cargo tauri dev
 **仅编译可执行文件（不打安装包）：**
 
 ```bash
-npm --prefix ui run build   # 首次或改 ui 后需要
+pnpm --prefix ui run build   # 首次或改 ui 后需要
 cargo build --release -p novel-agent
 ```
 

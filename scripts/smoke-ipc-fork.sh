@@ -24,7 +24,7 @@ run_phase1() {
     -E 'test(stream_coalesce) or test(interruptible) or test(clear_removes)' \
     --profile ci
 
-  (cd "$ROOT/ui" && npm test -- --run src/test/acceptance/ipc-flood-acceptance.test.ts)
+  (cd "$ROOT/ui" && pnpm test -- --run src/test/acceptance/ipc-flood-acceptance.test.ts)
 
   echo ""
   echo "Phase 1: PASSED"

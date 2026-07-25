@@ -5,12 +5,12 @@
   "identifier": "com.novelagent.app",
   "build": {
     "beforeDevCommand": {
-      "script": "npm run dev",
+      "script": "pnpm run dev",
       "cwd": "../ui"
     },
     "devUrl": "http://localhost:5173",
     "beforeBuildCommand": {
-      "script": "npm run build",
+      "script": "pnpm run build",
       "cwd": "../ui"
     },
     "frontendDist": "../ui/dist"

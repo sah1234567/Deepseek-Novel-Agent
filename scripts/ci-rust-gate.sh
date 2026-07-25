@@ -15,5 +15,8 @@ bash "$ROOT/scripts/ci-rust-static.sh"
 bash "$ROOT/scripts/ci-clippy.sh"
 bash "$ROOT/scripts/ci-rust-test.sh"
 bash "$ROOT/scripts/ci-tauri.sh"
+# CRAP gate: coverage → complexity×coverage fail-above threshold 20
+bash "$ROOT/scripts/ci-lcov.sh"
+bash "$ROOT/scripts/ci-crap.sh"
 
 echo "=== ci-rust-gate passed ==="

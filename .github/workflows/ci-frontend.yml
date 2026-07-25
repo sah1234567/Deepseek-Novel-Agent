@@ -1,0 +1,73 @@
+# 前端 CI 门禁（pnpm audit + vitest + build），Ubuntu + Windows 覆盖。
+# 仅 ui/ 相关文件变更时触发，与本地 scripts/ci-frontend.sh 一致。
+#
+# 路径过滤：与 post-change-checklist 步骤 0 范围 C 对齐。
+name: CI Frontend
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'ui/**'
+      - 'scripts/ci-frontend*'
+      - 'scripts/ci-check-node*'
+      - 'scripts/ci-ui-dist*'
+      - '.github/workflows/ci-frontend.yml'
+  pull_request:
+    branches: [main, master]
+    paths:
+      - 'ui/**'
+      - 'scripts/ci-frontend*'
+      - 'scripts/ci-check-node*'
+      - 'scripts/ci-ui-dist*'
+      - '.github/workflows/ci-frontend.yml'
+
+concurrency:
+  group: ci-frontend-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  frontend-ubuntu:
+    name: Frontend (Ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.15.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: ui/.nvmrc
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+
+      - name: Frontend gate (ci-frontend.sh)
+        run: bash scripts/ci-frontend.sh
+
+  frontend-windows:
+    name: Frontend (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.15.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: ui/.nvmrc
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+
+      - name: Frontend gate (ci-frontend.sh)
+        shell: bash
+        run: bash scripts/ci-frontend.sh

@@ -39,12 +39,12 @@ bash scripts/ci-security-audit.sh
 
 | 脚本 | 用途 |
 |------|------|
-| `ci-check-node.sh` | 强制 Node ≥24（npm 步骤前调用） |
-| `ci-frontend.sh` | `npm ci` + `npm audit --audit-level=critical` + test + build |
+| `ci-check-node.sh` | 强制 Node ≥24（执行前调用） |
+| `ci-frontend.sh` | `pnpm install --frozen-lockfile` + `pnpm audit --audit-level=critical` + test + build |
 | `ci-ui-dist.sh` | 构建 `ui/dist`（Tauri 编译前） |
 | `ci-tauri-icons.sh` | 占位 `icon.png` / `icon.ico` |
-| `ci-rust-static.sh` | rustfmt + `cargo check --workspace` |
-| `ci-clippy.sh` | clippy（deny warnings + unwrap_used） |
+| `ci-rust-static.sh` | rustfmt（cargo check 由 clippy 覆盖） |
+| `ci-clippy.sh` | clippy（deny warnings + unwrap_used + expect_used） |
 | `ci-nextest-env.sh` | 统一 `NEXTEST_TEST_THREADS` |
 | `ci-rust-test.sh` | nextest（含 `concurrent_writes` 压测） |
 | `ci-crap.sh` / `ci-crap.ps1` | **仅** `cargo crap --fail-above`（读已有 `lcov.info`） |
@@ -70,4 +70,4 @@ bash scripts/ci-security-audit.sh
 ## Node 24
 
 - CI：`setup-node` + `node-version-file: ui/.nvmrc`（值为 `24`）
-- 本地：User PATH 中 Node 24 优先于 Cursor 自带 Node 22；`npm` 步骤由 `ci-check-node.sh` 校验
+- 本地：User PATH 中 Node 24 优先于 Cursor 自带 Node 22；由 `ci-check-node.sh` 校验

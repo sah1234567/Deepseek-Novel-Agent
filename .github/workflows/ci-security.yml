@@ -1,0 +1,47 @@
+# 依赖安全审计（cargo audit），仅 Ubuntu。
+# Cargo.lock 与 OS 无关，多平台重复扫描无意义。
+# 仅 Cargo.toml / Cargo.lock / audit 配置 / 脚本变更时触发。
+name: CI Security
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/audit.toml'
+      - 'scripts/ci-security-audit*'
+      - '.github/workflows/ci-security.yml'
+  pull_request:
+    branches: [main, master]
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/audit.toml'
+      - 'scripts/ci-security-audit*'
+      - '.github/workflows/ci-security.yml'
+  # 每周一定期全量扫描（即使无变更）
+  schedule:
+    - cron: '17 6 * * 1'
+
+concurrency:
+  group: ci-security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  security-audit:
+    name: Security audit (Ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: cargo audit
+        run: bash scripts/ci-security-audit.sh

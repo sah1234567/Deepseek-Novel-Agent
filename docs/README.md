@@ -112,7 +112,7 @@ session-resumed → useAgent 清 streaming；status.sessionId 更新 / compactio
 
 ## CI / CD
 
-**Node.js 24**（`ui/.nvmrc`）— 本地与 GitHub 均由 `scripts/ci-check-node.sh` 在 `npm` 前校验；GHA 另设 `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24` 与 `setup-node` + `node-version-file: ui/.nvmrc`。
+**Node.js 24**（`ui/.nvmrc`）— 本地与 GitHub 均由 `scripts/ci-check-node.sh` 在执行前校验；GHA 另设 `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24` 与 `pnpm/action-setup@v4` + `setup-node` + `node-version-file: ui/.nvmrc`。
 
 ### 本地
 

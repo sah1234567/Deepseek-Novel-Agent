@@ -38,11 +38,15 @@ jobs:
           workspaces: .
           cache-all-crates: true
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.15.1
+
       - uses: actions/setup-node@v4
         with:
           node-version-file: ui/.nvmrc
-          cache: npm
-          cache-dependency-path: ui/package-lock.json
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
 
       - name: Frontend (Vitest + build)
         run: bash scripts/ci-frontend.sh
@@ -72,15 +76,19 @@ jobs:
           workspaces: .
           cache-all-crates: true
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.15.1
+
       - uses: actions/setup-node@v4
         with:
           node-version-file: ui/.nvmrc
-          cache: npm
-          cache-dependency-path: ui/package-lock.json
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
 
       - name: Install frontend
         working-directory: ui
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
@@ -121,5 +129,5 @@ jobs:
       - name: Compile-only fallback (no icons)
         if: steps.icons.outputs.present != 'true'
         run: |
-          npm run build --prefix ui
+          pnpm run build --prefix ui
           cargo build -p novel-agent --manifest-path src-tauri/Cargo.toml --release
