@@ -8,11 +8,12 @@
 
 ```
 React Frontend (ui/src/)
-  ChatPanel（TranscriptView + Sticky 本轮提问 + 压缩 Banner）· StatusBar（Todo 下拉常驻）· SettingsPanel（弹窗）· FileTreePanel
+  ChatPanel（TranscriptView + Sticky 本轮提问 + 压缩 Banner）· StatusBar（Todo 下拉常驻）· SettingsPanel（弹窗）· FileTreePanel · Graph 面板（plan 节点 / Book Loop / HITL）
 
-Tauri IPC（commands → engine_loop 单任务队列）
+Tauri IPC（commands → engine_loop 单任务队列；graph_* 与 chat 并行注册）
 
-Rust Backend（9 个业务 crate + novel-server，单向依赖）
+Rust Backend（10 个业务 crate + novel-server，单向依赖）
+  Graph-Primary：`novel-graph` 持有 plan-graph + GraphTracker；聊天会话 node-scoped（focus / NodeObjective）
 ```
 
 ### 1.2 Agent 根目录与数据归属
@@ -23,6 +24,7 @@ novel_agent/
 ├── skills/                           ← Agent 级 Skill（固定；作品可覆盖）
 ├── works/{作品名}/                   ← 作品实例（gitignore）
 │   ├── AGENTS.md · knowledge/ · chapters/ · memory/
+│   ├── knowledge/meta/plan-graph.json · graph-state.json · checkpoints/  ← Graph-Primary 编排
 │   ├── skills/                       ← 可选：同 id 覆盖 Agent 级 Skill
 │   ├── settings.json                 ← 作品级模型 / Hook / 权限
 │   └── .novel-agent/state.db         ← 该作品的 sessions / messages / todos
@@ -34,6 +36,7 @@ novel_agent/
 | `templates/` | Agent | 不变 |
 | `skills/` | Agent | 不变（作品 `works/{名}/skills/` 可覆盖同 id） |
 | `works/{名}/` | 作品 | `active_project`、`db_path`、`settings_path` 同步 |
+| `knowledge/meta/plan-graph.json` | 作品 | 随作品切换；Book Loop 游标在 `graph-state.json` |
 | `api_config.json` | Agent | 不变 |
 
 切换作品时更新 `active_project` 并重建 engine；文件树与会话列表读取当前作品 DB。
@@ -42,10 +45,12 @@ novel_agent/
 
 ```
 novel-server (Tauri IPC)
+  ├─ novel-graph (plan schema / GraphTracker / gates / Book Loop；仅依赖 novel-config)
   └─ novel-core (AgentEngine, Fork, Hook, dynamic_context)
+       ├─ novel-graph
        ├─ novel-deepseek (ChatClient, SSE, cache, tool_args)
-       ├─ novel-tools (24 tools, StreamingToolExecutor, permission engine)
-       ├─ novel-knowledge (scaffold, index, derive)
+       ├─ novel-tools (+ Graph* / AuditStatusUpdate；→ novel-graph)
+       ├─ novel-knowledge (scaffold 静态拷贝 plan JSON；↛ novel-graph)
        ├─ novel-state (SQLite)
        ├─ novel-compaction (4-level)
        ├─ novel-config (paths, settings, api_config.json)
@@ -53,14 +58,15 @@ novel-server (Tauri IPC)
        └─ novel-logging
 ```
 
+
 ### 1.4 核心设计原则
 
 | 原则 | 说明 |
 |------|------|
-| **LLM 自主编排** | 流程顺序由模型 InvokeSkill / ForkSubAgent / Tool 自行决定；代码仅 sandbox 安全、Plan 模式、禁止嵌套 fork |
-| **Fork 即子 Agent** | 从 system prompt 处 fork；预定义类型嵌入 `prompt/agents/*.md` 全文 + 运行时约束；GeneralPurpose 的 `task` 即自定义 prompt 主体 |
-| **检查类 Subagent** | PlanAuditor / KnowledgeAuditor / ChapterCraftAnalyzer / GeneralPurpose **全部只读**（报告写正文；Write/Edit 由 `subagent_mutator_gate` 门控）。写章分两层：细纲后 Fork PlanAuditor，正文后同批 Fork KnowledgeAuditor + ChapterCraftAnalyzer。**引擎不硬编码**，由 prompt + 门控约束；KnowledgeAuditor 另可 PostToolUse Hook opt-in |
-| **Workflow Skill** | `novel-planning` / `chapter-writing` / `revision` / `post-chapter-checklist` 经 InvokeSkill 加载 SOP；`## 本阶段完成后` 自然语言后续指引；system.md §3.1 含 ASCII 状态机图定义 skill 间调用链 |
+| **Graph-Primary 编排** | 全书推进由 `plan-graph.json` + `GraphTracker` 决定（Ready/Running/Achieved、Book Loop 游标）；模型在**当前节点**内 ReAct，不自主另选全局编排路径 |
+| **节点会话** | `focused_node_id` 绑定作者聊天；多 `running_node_ids` 可扇出并行（写路径不相交）；交接用 `NodeHandoff`（summary + files_touched + artifacts），非聊天/CoT 总线 |
+| **审计 = InvokeSkill** | 主路径：`audit-plan` / `audit-knowledge` / `audit-craft`；`AuditStatusUpdate` 写台账证据。**ForkSubAgent 非主审计路径**（可选隔离 helper；仍只读） |
+| **Workflow Skill** | `novel-planning` / `chapter-writing` / `revision` / `post-chapter-checklist` 为**节点工位手册**；顺序由 Graph deps/loop 决定，不替代 plan-graph |
 | **自主写作模式** | `prompt/autonomous-writing.md`（规则正文）；`prompt/permission-mode-enter.md` / `permission-mode-exit.md`（中途切换前后缀）。**新会话 / 压缩重建**且 Unattended → 规则写入 system；**中途切换** → 前缀合并进**下一条**用户消息（单条 user，不改 `messages[0]`）。含自主循环、审计降频、暂停条件 |
 | **Session 重建压缩** | 超阈值时：**先** archive 全量 → `refresh_system_dynamic_sections`（AGENTS/Workspace 冻结；Index/Memory/Progress/**Skills 摘要** 读盘刷新 + 权限模式重新检查）→ `[上下文刷新]` user（Skill 全文 + 摘要）→ 5 轮 ReAct。压缩摘要模板含「上一章衔接锚点」「活跃伏笔」字段加速恢复。`compaction-progress` → 前端 **CompactionBanner**（已接入）。连续 3 次失败静默 skip（重试 UI 为后续 issue） |
 | **Session 双轨存储** | `message_archive`（UI 全历史，按 `compaction_epoch`）+ `messages`（API 工作集）；前端 Turn 级懒加载 + 内存预算：`get_session_transcript_layout` + `get_session_message_turns` / `get_session_archive_turns`（`useTranscriptLoader`；贴底驻留 6 / 浏览 VIEW 6 / 硬顶 18 轮，`planMemoryReconcile` 统一预取与淘汰；贴底欠填向上预取） |
@@ -153,12 +159,12 @@ send_message
 
 | agentType | task_message 组成 |
 |-----------|-------------------|
-| 预定义（Checker/Analyzer 等） | `prompt/agents/{name}.md` 全文 + 运行时约束 + `---` + 简短 task |
+| PlanAuditor / KnowledgeAuditor / ChapterCraftAnalyzer | **`skills/audit-*/SKILL.md`** 全文（运行时加载）+ 运行时约束 + `---` + 简短 task |
 | **GeneralPurpose** | `prompt/agents/general_purpose.md` 短壳 + 运行时约束 + `---` + **## 自定义任务** + 完整 task |
 
 **LLM tools 与缓存：** 子 Agent API 的 `tools` 与主 Agent 同源（`main_tool_schemas` / `registry.names()`），与 `messages[0]` system 一并保持 DeepSeek 前缀缓存。`task_message` 中的「建议优先工具」仅作 prompt 指引，不缩减 API schema。
 
-Agent prompt 文件位于 `prompt/agents/*.md`，编译期嵌入（`agent/catalog.rs::system_prompt`）。可 fork 类型与 `max_react_loops` 见 **`FORK_AGENT_CATALOG`**（`crates/novel-core/src/agent/catalog.rs`）。
+审计手册 SSOT 为 **`skills/audit-plan|audit-knowledge|audit-craft`**（节点主路径 InvokeSkill；可选 Fork 隔离时 `format_fork_task` 同文加载）。GeneralPurpose 薄壳仍 `include_str!`。可 fork 类型与 `max_react_loops` 见 **`FORK_AGENT_CATALOG`**。
 
 **Subagent 写入门控：** `subagent_mutator_gate`（`subagent_queue` 未接线时拒绝 Write/Edit/TodoWrite；主会话始终 `subagent_queue: Some`）。
 
@@ -188,7 +194,7 @@ Agent prompt 文件位于 `prompt/agents/*.md`，编译期嵌入（`agent/catalo
 
 | 段 | 来源 |
 |----|------|
-| 静态层 | `prompt/system.md`（含读盘经济 §2.3、写后 Fork 规范、Skill 状态机） |
+| 静态层 | `prompt/system.md`（含读盘经济 §2.3、Graph-Primary / 节点 InvokeSkill `audit-*`、Fork 可选） |
 | 自主模式 | `prompt/autonomous-writing.md`（Unattended 权限时追加注入，含自主循环/审计降频/暂停条件） |
 | AGENTS.md | 作品根 |
 | INDEX | `knowledge/INDEX.md`（≤2000 字） |

@@ -82,14 +82,11 @@ allowed-tools: Read, Write, Edit, Glob, Grep, Bash, WebSearch, InvokeSkill, AskU
 - 大纲.md 章节索引：append 本章行
 - 细纲「知识库更新清单」逐条打勾 ✓
 
-### ★ Fork PlanAuditor 审计（不可跳过）
+### ★ InvokeSkill(`audit-plan`)（不可跳过）
 
-追踪文件更新完成后，Fork PlanAuditor 对计划质量做独立审计：
-```
-ForkSubAgent(agent_type="PlanAuditor", task="审计细纲 chapter-NNN-细纲.md 的计划质量")
-```
+追踪文件更新完成后，InvokeSkill(`audit-plan`) 对计划质量做审计。需要隔离上下文时再可选 `ForkSubAgent(PlanAuditor)`。
 
-按报告修改细纲后，更新审计台账（细纲PA=已通过），该章细纲才算完成。PlanAuditor 通过的细纲才可用于正文写作。
+按报告修改细纲后，更新审计台账（细纲PA=已通过），该章细纲才算完成。通过的细纲才可用于正文写作。
 
 **多世界题材：** 在 knowledge/worlds/ 下为每个持久世界创建 INDEX.md
 
@@ -102,7 +99,7 @@ ForkSubAgent(agent_type="PlanAuditor", task="审计细纲 chapter-NNN-细纲.md 
 4. 大纲（四要素齐全）✓
 5. 细纲 Ch1-5 ✓
 6. 追踪文件已更新 ✓
-7. PlanAuditor 已通过 ✓
+7. `audit-plan` 已通过 ✓
 8. 开始正文阶段 (next)
 
 **分歧确认：** 主角性别、CP 走向、战力天花板、结局倾向等关键决策，必须使用 AskUserQuestion 确认。
@@ -110,8 +107,8 @@ ForkSubAgent(agent_type="PlanAuditor", task="审计细纲 chapter-NNN-细纲.md 
 ## 本阶段完成后
 
 1. 向用户汇报规划摘要：调研要点、已创建文件清单、待确认决策。
-2. 若细纲已覆盖前 5 章且 PlanAuditor 已通过：建议 InvokeSkill(`chapter-writing`) 开始正文阶段（写第一章）。
+2. 若细纲已覆盖前 5 章且 `audit-plan` 已通过：建议 InvokeSkill(`chapter-writing`) 开始正文阶段（写第一章）。
 3. 若用户仅要大纲不要写章：说明知识库已就绪，等待用户指令。
-4. 若已完成章节数 ≥ 已有细纲最大章号 + 5：建议继续补充细纲（先补细纲 → 更新追踪文件 → Fork PlanAuditor → 再动笔正文）。
+4. 若已完成章节数 ≥ 已有细纲最大章号 + 5：建议继续补充细纲（先补细纲 → 更新追踪文件 → InvokeSkill(`audit-plan`) → 再动笔正文）。
 5. 若用户对规划产物不满意要求修改 → InvokeSkill(`revision`)（改大纲、改细纲均走 revision）。
 6. 若用户只要求追加后续卷大纲 → 复用本 Skill 的第二层步骤。

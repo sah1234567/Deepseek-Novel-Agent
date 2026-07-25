@@ -29,22 +29,22 @@ allowed-tools: Read, Edit, Glob, Grep, CharacterSearch, Tail, TodoWrite, ForkSub
 
 遗漏项 → Edit 补充。
 
-## 写后 Subagent 审计（必做，2 项同批并行）
+## 写后审计（必做：InvokeSkill）
 
-收尾记录核对完成后，**必须**在同一次 assistant 消息内 Fork 以下 Subagent（不可跳过、不可只做其中一项）：
+收尾记录核对完成后，**必须** InvokeSkill 以下审计手册（不可跳过、不可只做其中一项）：
 
-| # | agentType | task 要点 |
-|---|-----------|-----------|
-| 1 | KnowledgeAuditor | `审计 chapters/chapter-NNN.md 是否忠实执行细纲场景拆分；是否有意外事件需补充登记；收尾是否完整` |
-| 2 | ChapterCraftAnalyzer | `分析 chapters/chapter-NNN.md：对话质量、叙事节奏、情感轨迹、设定一致性（称呼/POV边界/战力/场景道具）、反AI味指标。POV=XXX` |
+| # | Skill | 要点 |
+|---|-------|------|
+| 1 | `audit-knowledge` | `chapters/chapter-NNN.md` 是否忠实执行细纲；意外事件是否需补充登记；收尾是否完整 |
+| 2 | `audit-craft` | 对话质量、叙事节奏、情感轨迹、设定一致性、反 AI 味。POV=XXX |
 
-按全部报告 Edit 修复；需作者决策的项用 AskUserQuestion。
+按全部报告 Edit 修复；需作者决策的项用 AskUserQuestion。需要独立上下文隔离时再可选同批 Fork KnowledgeAuditor + ChapterCraftAnalyzer。
 
-**禁止** 跳过上述 Fork 或只跑其中一项即向作者宣告完成。
+**禁止** 跳过上述审计或只跑其中一项即向作者宣告完成。完成后 `AuditStatusUpdate` 与 `GraphSubmitForApproval`。
 
 ## 本阶段完成后
 
-1. 知识库收尾已确认且 **2 项 Subagent 均已跑完**：汇总场景忠实度、对话/节奏/情感/设定一致性结论
+1. 知识库收尾已确认且 **2 项 audit Skill 均已跑完**：汇总场景忠实度、对话/节奏/情感/设定一致性结论
 2. 全部修复完成后，才可回复用户「本章完成」
 3. **不要**建议主 Agent 在正文后重新全量更新追踪文件——那应在细纲阶段完成
 

@@ -25,10 +25,12 @@ React (ui/) ──invoke/listen──► src-tauri/commands.rs
 
 | 路径 | 职责 |
 |------|------|
-| `commands/` | 按域拆分 session / turn / settings；`engine_ipc.rs` 统一 `cmd_tx.send` + oneshot 回复与 `session-resumed` / `permission-mode-changed` emit |
+| `commands/` | 按域拆分 session / turn / settings / **graph**；`engine_ipc.rs` 统一 `cmd_tx.send` + oneshot 回复与 `session-resumed` / `permission-mode-changed` emit |
 | `dto.rs` | `detect_message_kind` + `message_row_to_ui`；`stored_messages_to_ui` 与 fork 路径共用转换 |
-| `event_payload/` | `stream` / `tool` / `compaction` / `subagent` 子模块；`serialize_payload` 失败打 `warn!` |
+| `event_payload/` | `stream` / `tool` / `compaction` / `subagent` 子模块；含 `Event::GraphStateChanged` → `graph-state-changed` |
 | `events.rs` | Tauri 事件名与 serde payload 类型 |
+
+**Graph UI：** Chat-first；状态栏 **Graph** / **模板** 按钮。Graph 为 overlay（建图成功 `graph-plan-committed` 后自动打开一次）；点击节点 → 节点会话（顶栏 Start/Approve/Reject/Reopen）。Graph 关闭时 HITL 弹窗。IPC：`graph_get_state` / `graph_get_node` / `graph_get_loop` / activate / start / approve / reject / reopen / `graph_loop_{pause,resume,set_target,set_cursor,list_history}` / `graph_preview_template` / `graph_apply_template`。事件：`graph-state-changed`、`graph-loop-changed`、`graph-hitl`、`graph-approval-required`、`graph-plan-committed`、`node-session-reset`。工具路径 Book Loop advance 发 `Event::GraphLoopAdvanced` → 与 IPC 相同的 `graph-loop-changed`（含 `resetNodeIds`/`chapter`）+ `node-session-reset`。新建/打开作品**不**静默落正式图；`graph_get_state` 无 plan 时返回 `hasPlan: false` 空快照。AppStatus 含 `focusedNodeId` / `runningNodeIds` / `graphHitlCount` / `loopSummaries`。
 
 **启动校验（`main.rs` setup）：** 创建 `works/`、`.novel-agent/`；校验 `templates/` 存在；若 `works/default` 不存在则自动 scaffold；注册 `AppState`。
 

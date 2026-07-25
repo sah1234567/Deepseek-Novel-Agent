@@ -15,6 +15,10 @@ interface StatusBarProps {
   onNewSession: () => Promise<void>;
   onCycleTodo: (todoId: string, nextStatus: string) => void;
   onSessionError?: (message: string) => void;
+  onOpenGraph?: () => void;
+  onPreviewTemplate?: () => void;
+  graphHitlCount?: number;
+  hasPlan?: boolean;
 }
 
 function fmt(n: number): string {
@@ -145,6 +149,10 @@ export function StatusBar({
   onNewSession,
   onCycleTodo,
   onSessionError,
+  onOpenGraph,
+  onPreviewTemplate,
+  graphHitlCount = 0,
+  hasPlan = false,
 }: StatusBarProps) {
   const [todoOpen, setTodoOpen] = useState(false);
   const prevIncompleteRef = useRef(0);
@@ -389,6 +397,36 @@ export function StatusBar({
         {status && !status.projectInitialized && (
           <span className="status-chip status-warn">项目未初始化</span>
         )}
+
+        {status?.loopSummaries && status.loopSummaries.length > 0 ? (
+          <span className="status-chip" title="Book Loop">
+            {status.loopSummaries
+              .map((ls) => `${ls.loopId} ${ls.cursorLabel} · ${ls.phase}`)
+              .join(" · ")}
+          </span>
+        ) : null}
+
+        {onPreviewTemplate ? (
+          <button
+            type="button"
+            className="status-action-btn"
+            onClick={onPreviewTemplate}
+            title="预览默认 plan-graph 模板（不自动写入）"
+          >
+            模板
+          </button>
+        ) : null}
+
+        {onOpenGraph ? (
+          <button
+            type="button"
+            className={`status-action-btn${graphHitlCount > 0 ? " has-hitl" : ""}${hasPlan ? "" : " is-muted"}`}
+            onClick={onOpenGraph}
+            title={hasPlan ? "打开 Plan Graph" : "尚未落正式图 — 可先预览模板或与 Agent 访谈后 Commit"}
+          >
+            Graph{graphHitlCount > 0 ? ` · HITL ${graphHitlCount}` : ""}
+          </button>
+        ) : null}
 
       </div>
 

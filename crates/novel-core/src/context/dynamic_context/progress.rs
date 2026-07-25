@@ -154,6 +154,34 @@ pub fn load_progress(project_root: &Path, session_id: &str, db: &Database) -> St
     if let Some(hint) = format_progress_hint(&store) {
         lines.push(format!("审计台账: {hint}"));
     }
+    if let Ok(Some(t)) = novel_graph::GraphTracker::load(project_root) {
+        let snap = novel_graph::build_snapshot(&t);
+        if let Some(fid) = &snap.focused_node_id {
+            if let Ok(obj) = t.node_objective_block(fid) {
+                lines.push(obj);
+            }
+        }
+        for ls in &snap.loop_summaries {
+            lines.push(format!(
+                "BookLoop {}: {} ({:?})",
+                ls.loop_id, ls.cursor_label, ls.phase
+            ));
+        }
+        let ready: Vec<_> = snap
+            .nodes
+            .iter()
+            .filter(|n| matches!(n.status, novel_graph::NodeStatus::Ready))
+            .map(|n| n.id.as_str())
+            .collect();
+        if !ready.is_empty() {
+            lines.push(format!("Graph Ready: {}", ready.join(", ")));
+        }
+    } else if !novel_graph::plan_exists(project_root) {
+        lines.push(
+            "阶段: 访谈/建图 — 尚无正式 plan-graph.json。先与作者对齐目标，再 GraphApplyTemplate（默认骨架）或 GraphCommitPlan（自定义 JSON）；勿静默落正式图。"
+                .into(),
+        );
+    }
     lines.join("\n")
 }
 
@@ -310,5 +338,25 @@ content
         assert!(!p.contains("会话待办:"));
         assert!(!p.contains("id=done"));
         assert!(!p.contains("id=cancel"));
+    }
+
+    #[test]
+    fn load_progress_reinjects_node_objective_from_graph() {
+        let tmp = TempDir::new().expect("tmp");
+        let plan = novel_graph::default_plan().expect("plan");
+        novel_graph::save_plan(tmp.path(), &plan).expect("save plan");
+        let mut t = novel_graph::GraphTracker::new(plan);
+        t.start_node("world-bible", None).expect("start");
+        t.set_focus(Some("world-bible".into())).expect("focus");
+        t.save(tmp.path()).expect("save state");
+        let db = Database::open(tmp.path().join("t.db")).expect("db");
+        let sid = db
+            .create_session(tmp.path().to_str().unwrap(), "m")
+            .expect("s");
+        let p = load_progress(tmp.path(), &sid, &db);
+        assert!(
+            p.contains("## NodeObjective [world-bible]"),
+            "expected NodeObjective reinject after graph focus; got: {p}"
+        );
     }
 }

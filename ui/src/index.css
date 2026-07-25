@@ -43,12 +43,258 @@ main {
   min-width: 0;
 }
 
-/* ── Chat panel wrapper ── */
-.chat-panel-wrapper {
+/* ── Main stage: Chat primary; Graph / node session as overlays ── */
+.main-stage {
   flex: 1;
   min-width: 0;
   min-height: 0;
+  position: relative;
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
+
+.main-stage-chat {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.main-stage-chat .chat-panel {
+  flex: 1;
+  min-height: 0;
+}
+
+.graph-panel-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  background: #0b1220;
+}
+
+.graph-panel-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.5rem 0.85rem;
+  border-bottom: 1px solid #1e293b;
+  color: #e2e8f0;
+  flex-shrink: 0;
+}
+
+.graph-panel-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.graph-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+}
+
+.graph-modal {
+  width: min(420px, 100%);
+  max-height: min(80vh, 640px);
+  display: flex;
+  flex-direction: column;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  color: #e6edf3;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
+}
+
+.graph-modal--wide {
+  width: min(720px, 100%);
+}
+
+.graph-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid #30363d;
+}
+
+.graph-modal-header h2 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.graph-modal-close {
+  border: none;
+  background: transparent;
+  color: #8b949e;
+  font-size: 1.25rem;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.graph-modal-hint {
+  margin: 0.75rem 1rem 0;
+  font-size: 0.8125rem;
+  color: #8b949e;
+}
+
+.graph-template-pre {
+  margin: 0.75rem 1rem;
+  padding: 0.75rem;
+  overflow: auto;
+  flex: 1;
+  min-height: 0;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  background: #0d1117;
+  border: 1px solid #21262d;
+  border-radius: 6px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.graph-hitl-list {
+  list-style: none;
+  margin: 0;
+  padding: 0.75rem 1rem;
+  overflow: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.graph-hitl-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.65rem 0;
+  border-bottom: 1px solid #21262d;
+}
+
+.graph-hitl-item:last-child {
+  border-bottom: none;
+}
+
+.graph-hitl-meta {
+  display: block;
+  margin-top: 0.2rem;
+  font-size: 0.75rem;
+  color: #8b949e;
+}
+
+.graph-hitl-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.graph-hitl-actions button,
+.graph-modal-footer button {
+  border: 1px solid #30363d;
+  background: #21262d;
+  color: #e6edf3;
+  border-radius: 6px;
+  padding: 0.35rem 0.75rem;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.8125rem;
+}
+
+.graph-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-top: 1px solid #30363d;
+}
+
+.graph-modal-primary {
+  background: #238636 !important;
+  border-color: #2ea043 !important;
+}
+
+.graph-modal-danger {
+  background: #da3633 !important;
+  border-color: #f85149 !important;
+}
+
+.graph-canvas {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: #0b1220;
+  color: #e2e8f0;
+}
+
+.graph-canvas--error {
+  padding: 1rem;
+}
+
+.graph-canvas--empty {
+  padding: 1.25rem 1.5rem;
+  gap: 0.5rem;
+  justify-content: center;
+}
+
+.graph-hitl-badge {
+  display: inline-block;
+  margin-top: 4px;
+  background: #f59e0b;
+  color: #111827;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.graph-canvas-toolbar {
+  flex-shrink: 0;
+  padding: 8px 12px;
+  border-bottom: 1px solid #334155;
+  font-size: 12px;
+}
+
+.graph-toolbar-btn {
+  margin-left: 8px;
+  border: 1px solid #334155;
+  background: #1e293b;
+  color: #e2e8f0;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.graph-toolbar-btn--right {
+  float: right;
+  margin-left: 0;
+}
+
+.graph-canvas-flow {
+  flex: 1;
+  min-height: 0;
+}
+
+/* React Flow parent nodes: kill default white card chrome */
+.graph-canvas-flow .react-flow__node-loopFrame {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+}
+

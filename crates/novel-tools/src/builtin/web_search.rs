@@ -12,6 +12,7 @@ struct SearchSource {
 
 #[derive(Debug, Serialize)]
 struct WebSearchOutput {
+    /// Model synthesis from the same DeepSeek Messages+web_search request.
     summary: String,
     sources: Vec<SearchSource>,
     cached_path: String,
@@ -30,7 +31,10 @@ pub(crate) fn compose_search_query(query: &str, aspect: &str, genre: &str) -> St
     }
 }
 
-async fn perform_search(ctx: &ToolContext, query: &str) -> Result<Vec<SearchSource>, ToolError> {
+async fn perform_search(
+    ctx: &ToolContext,
+    query: &str,
+) -> Result<(String, Vec<SearchSource>), ToolError> {
     let api_key = ctx.resolve_deepseek_api_key().ok_or_else(|| {
         ToolError::Execution(
             "联网搜索未配置 API Key：请在设置中填写 DeepSeek API Key，或设置环境变量 DEEPSEEK_API_KEY"
@@ -38,25 +42,30 @@ async fn perform_search(ctx: &ToolContext, query: &str) -> Result<Vec<SearchSour
         )
     })?;
 
-    let results = novel_deepseek::ChatClient::web_search(&api_key, query, 8)
+    let response = novel_deepseek::ChatClient::web_search(&api_key, query)
         .await
         .map_err(|e| {
             tracing::warn!(error = %e, "WebSearch API call failed");
             ToolError::Execution(format!("联网搜索失败: {e}"))
         })?;
 
-    Ok(results
+    let sources = response
+        .sources
         .into_iter()
-        .map(|r| SearchSource {
-            title: r.title,
-            url: r.url,
-            key_points: if r.snippet.is_empty() {
-                vec![]
+        .map(|r| {
+            let title = if r.title.is_empty() {
+                r.url.clone()
             } else {
-                vec![r.snippet]
-            },
+                r.title
+            };
+            SearchSource {
+                title,
+                url: r.url,
+                key_points: r.excerpts,
+            }
         })
-        .collect())
+        .collect();
+    Ok((response.answer, sources))
 }
 
 #[async_trait]
@@ -65,7 +74,7 @@ impl Tool for WebSearchTool {
         "WebSearch"
     }
     fn description(&self) -> &str {
-        "通用网页搜索，基于 DeepSeek web_search_20250305 服务端搜索。可用于市场调研、对标作品分析、读者反馈、桥段参考等任何需要联网搜索的场景。原始结果缓存 .websearch/（非 knowledge 正典；纳入设定请再 Write 到 plan/ 或 knowledge/）"
+        "通用网页搜索，基于 DeepSeek web_search_20250305 服务端搜索（综合模型硬编码 deepseek-v4-flash）。可用于市场调研、对标作品分析、读者反馈、桥段参考等任何需要联网搜索的场景。原始结果缓存 .websearch/（非 knowledge 正典；纳入设定请再 Write 到 plan/ 或 knowledge/）"
     }
     fn input_schema(&self) -> Value {
         json!({
@@ -99,8 +108,12 @@ impl Tool for WebSearchTool {
         let genre = input.get("genre").and_then(|v| v.as_str()).unwrap_or("");
         let search_query = compose_search_query(&query, aspect, genre);
 
-        let sources = perform_search(ctx, &search_query).await?;
-        let summary = web_search_summary_line(&query, aspect, genre, sources.len());
+        let (answer, sources) = perform_search(ctx, &search_query).await?;
+        let summary = if answer.trim().is_empty() {
+            web_search_summary_line(&query, aspect, genre, sources.len())
+        } else {
+            answer
+        };
         let body =
             format_search_cache_body(&query, aspect, genre, &search_query, &summary, &sources);
 

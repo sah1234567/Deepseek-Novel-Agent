@@ -30,7 +30,7 @@
 - `create_stream` — 流式 LLM 调用，返回 `StreamOutcome::Complete` 或 `Cancelled`；支持 on_event/on_tool_call 回调
 - `complete_via_stream` — 无工具场景（compaction 摘要）
 - `offline_complete` — 离线 mock
-- `web_search` — 静态方法，DeepSeek 服务器端搜索
+- `web_search` — 静态方法：Anthropic Messages + `web_search_20250305`；综合模型**硬编码** `deepseek-v4-flash`（不可配置）；返回 `WebSearchResponse`（同请求内综合答案 `answer` + 全部来源 + citation 摘录），勿再二次 LLM 清洗
 
 流式 tool call 在 arguments JSON 完整时立即回调 `on_tool_call`（空对象表示参数尚未到达，不发射）。流结束补发未就绪的 tool。`drain_pending` 原样输出 raw arguments（不在协议层 repair JSON）。
 

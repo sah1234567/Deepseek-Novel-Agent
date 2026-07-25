@@ -7,6 +7,7 @@ mod builtin;
 mod context;
 mod error;
 mod executor;
+mod graph_hook;
 mod novel;
 mod paths;
 mod permission;
@@ -76,7 +77,15 @@ pub fn default_registry() -> ToolRegistry {
     reg.register(Box::new(novel::ImpactAnalysisTool));
     reg.register(Box::new(novel::KnowledgeDeriveTool));
     reg.register(Box::new(novel::AuditStatusQueryTool));
+    reg.register(Box::new(novel::AuditStatusUpdateTool));
     reg.register(Box::new(novel::TrackingQueryTool));
     reg.register(Box::new(novel::RelationQueryTool));
+    reg.register(Box::new(novel::GraphQueryTool));
+    reg.register(Box::new(novel::GraphAdvanceTool));
+    reg.register(Box::new(novel::GraphSubmitForApprovalTool));
+    reg.register(Box::new(novel::GraphMarkVerifiedTool));
+    reg.register(Box::new(novel::GraphReopenTool));
+    reg.register(Box::new(novel::GraphApplyTemplateTool));
+    reg.register(Box::new(novel::GraphCommitPlanTool));
     reg
 }

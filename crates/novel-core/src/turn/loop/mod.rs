@@ -103,6 +103,7 @@ impl AgentEngine {
         let author_content =
             turn_start::validate_turn_start(content, self.pending_user_question.is_some())?;
         self.clear_interrupt();
+        self.arm_graph_intervention_for_author_turn();
         self.turn_number += 1;
 
         if let Err(e) = self
@@ -242,6 +243,9 @@ impl AgentEngine {
         );
         self.emit_turn_finished(&reason, event_tx);
         self.clear_interrupt();
+        self.shared
+            .author_turn_graph_intervention
+            .store(false, std::sync::atomic::Ordering::Release);
         Ok(reason)
     }
 

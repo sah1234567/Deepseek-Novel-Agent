@@ -25,7 +25,7 @@
 ## 自主循环
 
 1. 完成当前章后，**不等待用户消息**——立即检查下一章细纲是否存在。
-   不存在 → 自动补写 5 章细纲 → 更新追踪 → Fork PlanAuditor → 继续正文。
+   不存在 → 自动补写 5 章细纲 → 更新追踪 → InvokeSkill(`audit-plan`) → 继续正文。
    存在 → 直接进入正文阶段写前准备（Tail 上章末 + Read 细纲 + TrackingQuery/RelationQuery）。
 2. 细纲耗尽预警：当前进度 + 已有细纲最大章号 ≤ 3 时，提前补写一批细纲（5 章），确保正文写作不间断。
 3. 大纲耗尽（所有卷已写尽，且 `chapters/` 达到目标章数）→ 停笔。
@@ -34,13 +34,13 @@
 
 正常模式每章审计，自主模式降低审计频次以节省 token：
 
-| Subagent | 频率 | 备注 |
-|----------|------|------|
-| PlanAuditor | 每批细纲（5-10章）一次 | task 含所有新细纲章号；Fork 前 `AuditStatusQuery(operation=pending, audit_type=pa)` |
-| KnowledgeAuditor + ChapterCraftAnalyzer | 每 3 章一次 | task 含最近 3 章路径，提示按章分组；Fork 前查 `audit_type=ka`/`cca` |
-| 全局审计（KA 跨章模式） | 每 20 章一次 | task 含最近 20 章，额外检查伏笔回收率/人物弧线/战力一致性 |
+| 审计 | 频率 | 备注 |
+|------|------|------|
+| `audit-plan` | 每批细纲（5-10章）一次 | 覆盖所有新细纲章号；Invoke 前 `AuditStatusQuery(operation=pending, audit_type=pa)` |
+| `audit-knowledge` + `audit-craft` | 每 3 章一次 | 覆盖最近 3 章，按章分组；Invoke 前查 `audit_type=ka`/`cca` |
+| 全局知识审计 | 每 20 章一次 | 最近 20 章，额外检查伏笔回收率/人物弧线/战力一致性 |
 
-修复后更新 `knowledge/meta/audit-status.md`：对应审计列标 `已通过`（见 system §4.5）。
+修复后 `AuditStatusUpdate` / 更新 `knowledge/meta/audit-status.md`：对应审计列标 `已通过`（见 system §4.5）。需要隔离上下文时再可选 Fork。
 
 降频的章仍需做轻量自检：Stats 字数 + Tail 上章衔接 + 细纲「写后记录」和「知识库更新确认」填写。
 
@@ -60,7 +60,7 @@
 
 ## 反馈消化（审计报告后的处理）
 
-收到 PlanAuditor / KnowledgeAuditor / ChapterCraftAnalyzer 报告后：
+收到 `audit-plan` / `audit-knowledge` / `audit-craft`（或可选 Fork 报告）后：
 
 1. **先读完报告全文**，特别关注 `## 接下来（主 Agent 必读）` 节。
 2. **可自动修复的项**（场景遗漏补充、收尾记录填写、称呼修正、冗余句删除等）→ 直接 Read → Edit 修复，不需停笔。

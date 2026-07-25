@@ -1,34 +1,9 @@
 use crate::{require_str, Tool, ToolContext, ToolError, ToolOutput};
 use async_trait::async_trait;
-use novel_skills::load_skill;
+use novel_skills::{load_skill, resolve_skill_md};
 use serde_json::{json, Value};
-use std::path::{Path, PathBuf};
 
 pub struct InvokeSkillTool;
-
-/// Resolve a skill id to `skills/{skill_id}/SKILL.md`.
-/// Checks project-level override first, then agent-level skills dir.
-fn resolve_skill_path(
-    project_root: &Path,
-    skills_dir: Option<&Path>,
-    skill_id: &str,
-) -> Option<PathBuf> {
-    // Project-level override
-    let folder_path = project_root.join("skills").join(skill_id).join("SKILL.md");
-    if folder_path.exists() {
-        return Some(folder_path);
-    }
-
-    // Agent-level skills dir
-    if let Some(dir) = skills_dir {
-        let agent_path = dir.join(skill_id).join("SKILL.md");
-        if agent_path.exists() {
-            return Some(agent_path);
-        }
-    }
-
-    None
-}
 
 #[async_trait]
 impl Tool for InvokeSkillTool {
@@ -69,7 +44,7 @@ impl Tool for InvokeSkillTool {
 
     async fn call(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
         let skill_id = require_str(&input, "skill_id")?;
-        let path = resolve_skill_path(&ctx.project_root, ctx.skills_dir.as_deref(), &skill_id)
+        let path = resolve_skill_md(&ctx.project_root, ctx.skills_dir.as_deref(), &skill_id)
             .ok_or_else(|| {
                 ToolError::Execution(format!("skill not found: skills/{skill_id}/SKILL.md"))
             })?;

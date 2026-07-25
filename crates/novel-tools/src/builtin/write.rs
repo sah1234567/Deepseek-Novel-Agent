@@ -58,6 +58,7 @@ impl Tool for WriteTool {
         let full = ctx.resolve_path(&path);
         ctx.validate_write_root(&full)?;
         ctx.validate_plan_mode_write_path(self.name(), &path)?;
+        crate::graph_hook::graph_gate_write(ctx, &path)?;
         ctx.require_read_before_write(self.name(), &full, &path, "overwriting", true)?;
 
         ctx.with_file_lock(&full, || async {
@@ -79,6 +80,7 @@ impl Tool for WriteTool {
                 .map(|m| file_mtime_secs(&m))
                 .unwrap_or(0);
             ctx.refresh_cache_after_write(&full, &content, mtime);
+            crate::graph_hook::graph_record_write(ctx, &path, "update");
 
             Ok(ToolOutput {
                 content: format!("Wrote {}", full.display()),

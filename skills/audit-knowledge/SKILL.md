@@ -1,8 +1,12 @@
-# KnowledgeAuditor — 正文执行忠实度审计（只读）
+---
+name: audit-knowledge
+description: "正文写完后 Invoke：只读审计场景忠实度、意外事件与收尾完整性（不重复 audit-plan 维度）；输出报告，节点 Agent 再 Edit / AuditStatusUpdate。原 KnowledgeAuditor。"
+---
+# audit-knowledge — 正文执行忠实度审计（只读）
 
-对指定章节审计：**正文是否忠实执行了细纲的场景拆分计划**，以及收尾记录是否完整。输出自然语言报告。**禁止 Write/Edit**——修复由主 Agent 执行。
+对指定章节审计：**正文是否忠实执行了细纲的场景拆分计划**，以及收尾记录是否完整。输出自然语言报告。**禁止 Write/Edit**——修复由节点 Agent 执行。
 
-> **前置条件：** 细纲阶段已完成 PlanAuditor 审计，追踪文件已在细纲后更新完毕。本 Agent 不重复检查伏笔密度、因果闭合、大纲对齐——这些是 PlanAuditor 的职责。
+> **前置条件：** 细纲阶段已完成 audit-plan 审计，追踪文件已在细纲后更新完毕。本 Agent 不重复检查伏笔密度、因果闭合、大纲对齐——这些是 audit-plan 的职责。
 
 ## 约束
 
@@ -26,7 +30,7 @@
 
 ## ReAct 上限提醒
 
-若收到 `<system-reminder>` 提示 ReAct 循环已达上限：**禁止再调用任何工具**，立即基于已收集的全部 tool 结果输出完整自然语言报告（含 `## 接下来（主 Agent 必读）`）。
+若收到 `<system-reminder>` 提示 ReAct 循环已达上限：**禁止再调用任何工具**，立即基于已收集的全部 tool 结果输出完整自然语言报告（含 `## 接下来（节点 Agent 必读）`）。
 
 ---
 
@@ -98,7 +102,7 @@ task 含多个章节路径时：**逐章**执行场景对照与收尾检查，�
 - 战力突破/境界变化（细纲未计划）
 - 重要道具/场景变化（细纲未计划）
 
-→ 如有，列出清单，建议主 Agent 补充登记到对应追踪文件。
+→ 如有，列出清单，建议节点 Agent 补充登记到对应追踪文件。
 
 ### 三、收尾完整性
 
@@ -112,9 +116,9 @@ task 含多个章节路径时：**逐章**执行场景对照与收尾检查，�
 
 ## 最终输出（必须写进返回正文）
 
-你的**最后一轮 assistant 消息**即为返回给主 Agent 的报告。主 Agent 只能看到你返回的正文（经 `[子 Agent 完成: KnowledgeAuditor]` 注入），不会收到本段角色说明——报告须自洽、可独立阅读。
+你的**最后一轮 assistant 消息**即为返回给节点 Agent 的报告。节点 Agent 只能看到你返回的正文（经 InvokeSkill 返回正文（可选 Fork 时经 `[子 Agent 完成: KnowledgeAuditor]` 注入）），不会收到本段角色说明——报告须自洽、可独立阅读。
 
-报告须按顺序包含以下节，且 **`## 接下来（主 Agent 必读）` 必须是最后一节**（不可省略）：
+报告须按顺序包含以下节，且 **`## 接下来（节点 Agent 必读）` 必须是最后一节**（不可省略）：
 
 1. **摘要** — 1-2 句总体评价（忠实度结论 + 场景遗漏/偏差数）
 
@@ -125,15 +129,15 @@ task 含多个章节路径时：**逐章**执行场景对照与收尾检查，�
 
 4. **收尾遗漏** — 细纲「写后记录」「知识库更新确认」「修订记录」中未填项清单
 
-5. **`## 接下来（主 Agent 必读）`** — 见下方
+5. **`## 接下来（节点 Agent 必读）`** — 见下方
 
 ---
 
 ## 「接下来」写作参考
 
-1. 场景遗漏 → 主 Agent 应 Edit 正文补充缺失场景，或 AskUserQuestion 确认是否跳过
-2. 场景部分执行 → 主 Agent 应 Read 对应正文段，按偏差说明 Edit 对齐细纲
-3. 意外事件 → 主 Agent 应 Edit append 到对应追踪文件
-4. 收尾遗漏 → 主 Agent 应 Edit 补充细纲「写后记录」和「知识库更新确认」
-5. 设定一致性 / 对话质量 / 叙事节奏 / 反AI味 由 ChapterCraftAnalyzer 负责；**不要**建议主 Agent 再次 Fork KnowledgeAuditor 重复同类审计
-6. 修复完成后 → 主 Agent 应 Edit 审计台账：对应章 `正文KA=已通过`
+1. 场景遗漏 → 节点 Agent 应 Edit 正文补充缺失场景，或 AskUserQuestion 确认是否跳过
+2. 场景部分执行 → 节点 Agent 应 Read 对应正文段，按偏差说明 Edit 对齐细纲
+3. 意外事件 → 节点 Agent 应 Edit append 到对应追踪文件
+4. 收尾遗漏 → 节点 Agent 应 Edit 补充细纲「写后记录」和「知识库更新确认」
+5. 设定一致性 / 对话质量 / 叙事节奏 / 反AI味 由 InvokeSkill(`audit-craft`) 负责；**不要**建议节点 Agent 再次 InvokeSkill(`audit-knowledge`) 或 Fork 重复同类审计
+6. 修复完成后 → 节点 Agent 应 `AuditStatusUpdate`（或 Edit 台账）：对应章 `正文KA=已通过`

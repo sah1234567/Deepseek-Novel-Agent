@@ -8,6 +8,7 @@ mod dto;
 mod engine_loop;
 mod event_payload;
 mod events;
+mod graph_emit;
 mod session_api;
 mod state;
 mod stream_coalesce;

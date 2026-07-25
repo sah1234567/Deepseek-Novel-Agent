@@ -1,6 +1,6 @@
 //! Fork initialization: build `ForkedAgentContext` and `[system, task]` message pair.
 
-use crate::agent::format_fork_task;
+use crate::agent::{format_fork_task, SkillLoadRoots};
 use crate::{AgentDefinition, AgentError, AgentType, ChatMessage};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -13,6 +13,18 @@ pub enum ForkError {
     EmptyTask,
     #[error("Knowledge file missing: {0}")]
     KnowledgeFileMissing(String),
+}
+
+/// Inputs for [`ForkedAgentContext::fork`].
+pub struct ForkBuildParams<'a> {
+    pub parent_system_message: &'a ChatMessage,
+    pub parent_session_id: String,
+    pub agent_type: AgentType,
+    pub task_prompt: String,
+    pub max_react_loops: u32,
+    pub knowledge_snapshots: HashMap<PathBuf, String>,
+    pub parent_is_forked: bool,
+    pub skill_roots: Option<SkillLoadRoots<'a>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -51,40 +63,11 @@ pub struct ForkedAgentContext {
 }
 
 impl ForkedAgentContext {
-    pub fn fork(
-        parent_system_message: &ChatMessage,
-        parent_session_id: String,
-        agent_type: AgentType,
-        task_prompt: String,
-        max_react_loops: u32,
-        knowledge_snapshots: HashMap<PathBuf, String>,
-        parent_is_forked: bool,
-    ) -> Result<Self, ForkError> {
-        if parent_is_forked {
-            return Err(ForkError::InvalidMaxReactLoops(0)); // mapped to NestedFork in engine
-        }
-        let agent_def = agent_type.definition();
-        if max_react_loops == 0 || max_react_loops > 80 {
-            return Err(ForkError::InvalidMaxReactLoops(max_react_loops));
-        }
-        let formatted_task = format_fork_task(agent_type, &task_prompt, &agent_def.tools)
-            .map_err(|_| ForkError::EmptyTask)?;
-        let fork = ConversationFork {
-            parent_session_id,
-            frozen_knowledge_snapshots: knowledge_snapshots,
-            agent_def: agent_def.clone(),
-            task_message: ChatMessage {
-                role: "user".into(),
-                content: formatted_task,
-                tool_call_id: None,
-                tool_calls: None,
-                reasoning_content: None,
-                ..Default::default()
-            },
-            max_react_loops,
-        };
+    pub fn fork(params: ForkBuildParams<'_>) -> Result<Self, ForkError> {
+        validate_fork_request(params.parent_is_forked, params.max_react_loops)?;
+        let fork = build_conversation_fork(&params)?;
         fork.validate()?;
-        let messages = fork.build_messages(parent_system_message);
+        let messages = fork.build_messages(params.parent_system_message);
         Ok(Self {
             fork,
             messages,
@@ -106,6 +89,42 @@ impl ForkedAgentContext {
     }
 }
 
+fn validate_fork_request(parent_is_forked: bool, max_react_loops: u32) -> Result<(), ForkError> {
+    if parent_is_forked {
+        // Mapped to NestedFork in engine.
+        return Err(ForkError::InvalidMaxReactLoops(0));
+    }
+    if max_react_loops == 0 || max_react_loops > 80 {
+        return Err(ForkError::InvalidMaxReactLoops(max_react_loops));
+    }
+    Ok(())
+}
+
+fn build_conversation_fork(params: &ForkBuildParams<'_>) -> Result<ConversationFork, ForkError> {
+    let agent_def = params.agent_type.definition();
+    let formatted_task = format_fork_task(
+        params.agent_type,
+        &params.task_prompt,
+        &agent_def.tools,
+        params.skill_roots,
+    )
+    .map_err(|_| ForkError::EmptyTask)?;
+    Ok(ConversationFork {
+        parent_session_id: params.parent_session_id.clone(),
+        frozen_knowledge_snapshots: params.knowledge_snapshots.clone(),
+        agent_def: agent_def.clone(),
+        task_message: ChatMessage {
+            role: "user".into(),
+            content: formatted_task,
+            tool_call_id: None,
+            tool_calls: None,
+            reasoning_content: None,
+            ..Default::default()
+        },
+        max_react_loops: params.max_react_loops,
+    })
+}
+
 /// Build a fork child context from engine state (shared system prompt + formatted task).
 pub fn build_fork_child(
     shared: &crate::EngineShared,
@@ -120,15 +139,20 @@ pub fn build_fork_child(
         reasoning_content: None,
         ..Default::default()
     };
-    ForkedAgentContext::fork(
-        &system_msg,
-        shared.session.id.clone(),
+    let roots = SkillLoadRoots {
+        project_root: shared.session.project_root.as_path(),
+        agent_skills_dir: Some(shared.agent_skills_dir.as_path()),
+    };
+    ForkedAgentContext::fork(ForkBuildParams {
+        parent_system_message: &system_msg,
+        parent_session_id: shared.session.id.clone(),
         agent_type,
-        task,
-        agent_type.max_react_loops_for(&shared.settings.agent),
-        HashMap::new(),
-        false,
-    )
+        task_prompt: task,
+        max_react_loops: agent_type.max_react_loops_for(&shared.settings.agent),
+        knowledge_snapshots: HashMap::new(),
+        parent_is_forked: false,
+        skill_roots: Some(roots),
+    })
     .map_err(|e| {
         if e == ForkError::InvalidMaxReactLoops(0) {
             AgentError::NestedForkProhibited
@@ -208,15 +232,29 @@ mod tests {
     #[test]
     fn nested_fork_rejected() {
         let sys = msg("system", "sys");
-        let result = ForkedAgentContext::fork(
-            &sys,
-            "s".into(),
-            AgentType::KnowledgeAuditor,
-            "task".into(),
-            10,
-            HashMap::new(),
-            true,
-        );
+        let result = ForkedAgentContext::fork(ForkBuildParams {
+            parent_system_message: &sys,
+            parent_session_id: "s".into(),
+            agent_type: AgentType::KnowledgeAuditor,
+            task_prompt: "task".into(),
+            max_react_loops: 10,
+            knowledge_snapshots: HashMap::new(),
+            parent_is_forked: true,
+            skill_roots: None,
+        });
         assert_eq!(result, Err(ForkError::InvalidMaxReactLoops(0)));
+    }
+
+    #[test]
+    fn validate_fork_request_rejects_bad_loops() {
+        assert_eq!(
+            validate_fork_request(false, 0),
+            Err(ForkError::InvalidMaxReactLoops(0))
+        );
+        assert_eq!(
+            validate_fork_request(false, 81),
+            Err(ForkError::InvalidMaxReactLoops(81))
+        );
+        assert!(validate_fork_request(false, 10).is_ok());
     }
 }

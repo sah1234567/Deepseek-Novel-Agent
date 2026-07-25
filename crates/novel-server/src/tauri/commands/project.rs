@@ -9,7 +9,10 @@ pub async fn init_novel_project(ctx: &CommandContext) -> Result<(), String> {
         let cfg = ctx.config.read().await;
         (cfg.active_project.clone(), cfg.templates_dir())
     };
-    novel_knowledge::init_project_scaffold(&work, templates.as_path()).map_err(|e| e.to_string())
+    novel_knowledge::init_project_scaffold(&work, templates.as_path())
+        .map_err(|e| e.to_string())?;
+    // Do not auto-seed formal plan-graph; author applies template or commits via tools.
+    Ok(())
 }
 
 pub fn list_works(works_dir: &std::path::Path) -> Result<Vec<WorkSummary>, String> {
@@ -50,6 +53,7 @@ pub async fn create_work(ctx: &CommandContext, name: String) -> Result<String, S
     if !work.exists() {
         novel_knowledge::init_project_scaffold(&work, templates.as_path())
             .map_err(|e| e.to_string())?;
+        // Formal plan is applied later (GraphApplyTemplate / GraphCommitPlan).
     }
     switch_project_and_create_session(ctx, work).await
 }
@@ -61,6 +65,10 @@ pub async fn open_work(ctx: &CommandContext, name: String) -> Result<String, Str
     };
     if !work.exists() {
         return Err(format!("work not found: {name}"));
+    }
+    // Load state only if a formal plan already exists — never silent-seed a template plan.
+    if novel_graph::plan_exists(&work) {
+        novel_graph::ensure_graph_initialized(&work).map_err(|e| e.to_string())?;
     }
     switch_project_and_create_session(ctx, work).await
 }

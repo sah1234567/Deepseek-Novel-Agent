@@ -43,6 +43,14 @@ pub(crate) fn stream_payload(
             },
         )
         .map(|payload| ("session-todos-updated".into(), payload)),
+        Event::GraphStateChanged => Some((
+            "graph-state-changed".into(),
+            serde_json::json!({ "source": "tool" }),
+        )),
+        Event::GraphPlanCommitted => Some((
+            "graph-plan-committed".into(),
+            serde_json::json!({ "source": "tool" }),
+        )),
         Event::TurnComplete {
             cache_hit_tokens,
             cache_miss_tokens,

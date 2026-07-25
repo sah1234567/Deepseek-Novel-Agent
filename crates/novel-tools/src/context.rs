@@ -103,9 +103,20 @@ pub struct ToolContext {
     pub global_api_config_path: Option<PathBuf>,
     /// Optional hook when a path's cache entry changes (novel-core wires dirty-path tracking).
     pub on_read_cache_path_touched: Option<Arc<dyn Fn(PathBuf) + Send + Sync>>,
+    /// Optional hook when graph state mutates outside IPC (e.g. Write/Edit demote).
+    pub on_graph_state_changed: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// When true, successful Write/Edit on a focused graph node sets `human_intervened`.
+    pub mark_graph_intervention_on_write: bool,
+    /// Optional hook when a formal plan-graph is committed/applied.
+    pub on_graph_plan_committed: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// Optional hook when Book Loop advances (chapter roll + station reopen).
+    pub on_graph_loop_advanced: Option<GraphLoopAdvancedHook>,
     /// Memory-extraction fork: allow Write/Edit only under `memory/` (see `novel_memory::guard`).
     pub memory_fork_mode: bool,
 }
+
+/// `(loop_id, chapter, reset_node_ids)` after Book Loop advance.
+pub type GraphLoopAdvancedHook = Arc<dyn Fn(String, u32, Vec<String>) + Send + Sync>;
 
 impl ToolContext {
     pub fn new(project_root: PathBuf) -> Self {
@@ -130,6 +141,10 @@ impl ToolContext {
             skills_dir: None,
             global_api_config_path: None,
             on_read_cache_path_touched: None,
+            on_graph_state_changed: None,
+            mark_graph_intervention_on_write: false,
+            on_graph_plan_committed: None,
+            on_graph_loop_advanced: None,
             memory_fork_mode: false,
         }
     }
@@ -155,6 +170,10 @@ impl ToolContext {
             skills_dir: None,
             global_api_config_path: None,
             on_read_cache_path_touched: None,
+            on_graph_state_changed: None,
+            mark_graph_intervention_on_write: false,
+            on_graph_plan_committed: None,
+            on_graph_loop_advanced: None,
             memory_fork_mode: false,
         }
     }

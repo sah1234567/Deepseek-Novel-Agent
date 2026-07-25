@@ -148,10 +148,28 @@ pub struct ChatStreamConfig {
     pub cancel: Option<Arc<AtomicBool>>,
 }
 
-/// A single web search result from DeepSeek's `web_search_20250305` server-side tool.
-#[derive(Debug, Clone, Serialize)]
+/// One source from a `web_search_tool_result` block (Anthropic/DeepSeek schema).
+///
+/// Official items expose `title` / `url` / `page_age` / `encrypted_content` — there is
+/// no plaintext `snippet`. Readable excerpts come from `text.citations[].cited_text`
+/// on the same Messages response and are merged into [`excerpts`](Self::excerpts).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct WebSearchResult {
     pub title: String,
     pub url: String,
-    pub snippet: String,
+    pub page_age: Option<String>,
+    /// Plaintext excerpts from `citations[].cited_text` matched by URL (may be empty).
+    pub excerpts: Vec<String>,
+}
+
+/// Full web-search response from one Anthropic Messages call with `web_search_*`.
+///
+/// DeepSeek already runs a model pass over decrypted page content inside that request;
+/// [`answer`](Self::answer) is that synthesis (`text` blocks). Do not discard it and
+/// re-summarize with a second LLM call.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct WebSearchResponse {
+    /// Concatenated `type: "text"` blocks from the Messages response.
+    pub answer: String,
+    pub sources: Vec<WebSearchResult>,
 }

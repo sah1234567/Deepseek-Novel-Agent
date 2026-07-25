@@ -4,7 +4,15 @@
 
 基于 Rust + Tauri + React 构建，对接 **DeepSeek V4 Pro / V4 Flash**（百万上下文、流式工具调用）。前端一键切换模型，无需重启。
 
-**核心特点：** 创作流程按大纲→细纲→正文逐级推进，Workflow Skill 约束各阶段 SOP。写章分两层审计：**细纲完成后** Fork PlanAuditor 检查计划质量（大纲对齐、伏笔密度、因果闭合等）；**正文写完后**并行 Fork KnowledgeAuditor + ChapterCraftAnalyzer 检查执行忠实度与文笔一致性。子 Agent 在独立上下文中跑完，主 Agent 按报告修复后再宣告完成。详见 [FRAMEWORK.md](FRAMEWORK.md)。
+**核心特点：**
+
+- **Graph-Primary 编排：** `plan-graph.json` + `GraphTracker` 决定工位顺序与 Book Loop 游标；作者聊天绑定当前 focus 节点，不存在与 graph 并行的全局自由编排会话
+- **审计主路径 = InvokeSkill：** `audit-plan` / `audit-knowledge` / `audit-craft` + `AuditStatusUpdate` 台账闭环；ForkSubAgent 仅可选隔离
+- **Workflow Skill = 节点内 SOP：** `novel-planning` / `chapter-writing` / `revision` 等是工位操作手册，顺序由 graph deps/loop 决定，不替代 plan-graph
+- **Book Loop 轮转：** 少节点游标循环一口气连写多章
+- **扇出并行：** 多下游可同时 Running（写路径不相交），fan-in 等齐
+
+详见 [FRAMEWORK.md](FRAMEWORK.md)。
 
 ---
 
@@ -16,11 +24,11 @@
 | **策划** | 大纲 → 细纲 → 人物卡 → 伏笔与因果链，逐级细化 |
 | **写章** | 按细纲撰写正文，写后自动同步角色/场景/伏笔追踪表 |
 | **改稿** | 影响分析 + 级联修改正文与关联设定 |
-| **质量检查** | 细纲后 PlanAuditor（计划结构）；正文后 KnowledgeAuditor + ChapterCraftAnalyzer（设定一致、对话节奏、伏笔衔接） |
+| **质量检查** | 细纲后 `audit-plan`；正文后 `audit-knowledge` + `audit-craft`（可选 Fork 隔离） |
 | **流派扩展** | 30+ 题材 Skill（仙侠、科幻、快穿等）按需加载 |
 | **权限模式** | 常规 / 策划 / 自动 / 无人值守，控制写操作是否需确认 |
 
-Agent 在作品目录 sandbox 内读写 `knowledge/`、`chapters/`、`memory/`；Workflow Skill 约束创作顺序，确保先大纲后正文、写后必审计。
+Agent 在作品目录 sandbox 内读写 `knowledge/`、`chapters/`、`memory/`；Graph deps/loop 约束创作顺序，节点内 Workflow Skill 提供 SOP，确保先大纲后正文、写后必审计。
 
 ---
 
@@ -28,15 +36,20 @@ Agent 在作品目录 sandbox 内读写 `knowledge/`、`chapters/`、`memory/`�
 
 ```
 novel_agent/
-├── works/{作品名}/          # 用户作品（知识库、章节、settings）
-│   └── .novel-agent/state.db   # 该作品的 sessions / messages / todos（每作品独立）
-├── skills/                  # Agent 级 Skill（作品可在 works/{名}/skills/ 覆盖同 id）
-├── templates/               # 新建作品脚手架（必填）
-├── prompt/                  # System 与子 Agent 提示词
-└── .novel-agent/            # 全局 API 配置等
+├── works/{作品名}/               # 用户作品（知识库、章节、settings）
+│   ├── knowledge/meta/            # 编排契约与运行时
+│   │   ├── plan-graph.json       # Graph 节点、deps、Book Loop 定义
+│   │   ├── graph-state.json      # 运行时状态（游标、节点状态、handoff）
+│   │   ├── graph.jsonl           # 事件日志（Achieved/advance/demote）
+│   │   └── handoffs/             # 节点交接包归档（summary + files_touched + artifacts）
+│   └── .novel-agent/state.db     # 该作品的 sessions / messages / todos（每作品独立）
+├── skills/                       # Agent 级 Skill（作品可在 works/{名}/skills/ 覆盖同 id）
+├── templates/                    # 新建作品脚手架（必填）
+├── prompt/                       # System 与子 Agent 提示词
+└── .novel-agent/                 # 全局 API 配置等
 ```
 
-作品数据在 `works/` 下，与 Agent 代码分离。切换作品时前端同步切换会话库与文件树。跨会话**审计台账**在 `{作品}/knowledge/meta/audit-status.md`（Agent 可读）；引擎调试 JSONL 在 `{作品}/.novel/logs/`（非 Agent 知识层）。
+作品数据在 `works/` 下，与 Agent 代码分离。切换作品时前端同步切换会话库与文件树。Graph 编排 SSOT 为 `knowledge/meta/plan-graph.json` + `graph-state.json`（详见 [novel-graph](docs/crates/novel-graph.md)）。跨会话**审计台账**在 `{作品}/knowledge/meta/audit-status.md`（Agent 可读）；引擎调试 JSONL 在 `{作品}/.novel/logs/`（非 Agent 知识层）。
 
 ### 清理作品会话库
 
@@ -118,23 +131,34 @@ cargo tauri build --bundles nsis
 
 | 文档 | 内容 |
 |------|------|
-| [FRAMEWORK.md](FRAMEWORK.md) | 架构分层、数据流、Fork/压缩/IPC 等技术细节 |
+| [FRAMEWORK.md](FRAMEWORK.md) | 架构分层、数据流、Graph-Primary、Fork/压缩/IPC 等技术细节 |
 | [docs/README.md](docs/README.md) | Crate 专题索引与阅读路径 |
+| [docs/crates/novel-graph.md](docs/crates/novel-graph.md) | Graph 编排 SSOT：plan schema、GraphTracker、Book Loop、handoff、gate |
 | [prompt/system.md](prompt/system.md) | Agent 行为与创作规范（运行时嵌入） |
 
 ---
 
 ## 界面简述
 
-**布局：** 左侧**文件树**浏览作品目录，右侧**聊天区**与 Agent 对话。顶部状态栏左侧为**待办**、作品与会话切换、Token 用量；右侧为**设置**（弹窗）。
+**布局：** 左侧**文件树**浏览作品目录；主舞台默认 **Chat**。状态栏提供 **Graph**（画布 overlay）与 **模板**（预览默认 plan，确认后才落盘）。点击 Graph 节点后进入该节点会话（顶栏 Start / Approve / Reject / Reopen）。正式图经 `GraphApplyTemplate` / `GraphCommitPlan`（或 UI「应用模板」）写入后会**自动打开一次 Graph**。Graph 关闭时若有 HITL，弹出确认框。顶部状态栏另有**待办**、作品与会话切换、Token 用量、**Book Loop 摘要**；右侧为**设置**。
 
-**聊天区：**
+**Graph 画布：**
 
-- 你与 Agent、子任务检查的回复均以气泡展示；需要确认的工具操作、选择题会单独成卡片
-- 子 Agent（如写后审计）在独立浮层中查看，不挤占主对话
+- 节点按 **Waiting → Ready → Running → Verifying → AwaitingApproval → Achieved** 显示不同状态色；点击节点进入该节点会话，顶栏按状态提供 Start / Approve / Reject / Reopen
+- 作者在节点内实质性改稿后，即使 plan 未要求 human gate，提交出门也会进入 **AwaitingApproval**（`human_intervened`，本节点本轮）
+- **Book Loop 帧**包住轮转工位组，帧头显示 Ch.N/M、phase（Idle/Running/Paused/Completed）、进度条与暂停/继续按钮；游标前进时徽章即时更新，无需刷新整页
+- **HITL 角标**在需要人类反馈时立即出现在节点上（待审批 / 待回答），无需先点开节点
+- deps 实线 vs **轮转虚线回流**（粉色 dashed，纯装饰，不入库）颜色/线型可区分
+- **HistoryDrawer** 查看往章 handoff 摘要与产物路径，历史章不进入画布节点列表
+
+**聊天区（节点会话覆盖）：**
+
+- 你与 Agent、审计 Skill 的回复均以气泡展示；需要确认的工具操作、选择题会单独成卡片
+- 审计 Skill（`audit-plan` 等）在节点内 Invoke 执行；可选 Fork 隔离在独立浮层中查看
 - 当前这一轮对话占满可视区域，往上滚可看更早记录
 - 历史消息按需加载，长会话不会一次占满内存；回到底部后只保留最近几轮在内存中
 - 回复边生成边显示；Agent 要向你提问时，会暂停并等你作答
+- Loop advance 后重置工位 session，并经 `node-session-reset` 清掉节点会话顶栏（工具路径与 IPC `graph_approve` 对齐）
 
 **待办（状态栏）：** Agent 写入待办后会即时出现在「待办事项」里。有未完成项时按钮高亮并显示数量，新增待办时自动展开、全部完成后自动收起。列表按**进行中 / 未进行 / 已完成**分组，已完成项显示删除线。点击条目可在三种状态间切换。
 

@@ -8,6 +8,7 @@
 
 | Crate | 文档 |
 |-------|------|
+| novel-graph | [novel-graph.md](crates/novel-graph.md) |
 | novel-core | [novel-core.md](crates/novel-core.md) |
 | novel-deepseek | [novel-deepseek.md](crates/novel-deepseek.md) |
 | novel-tools | [novel-tools.md](crates/novel-tools.md) |
@@ -24,6 +25,7 @@
 | 目标 | 建议顺序 |
 |------|----------|
 | 首次上手 | [README](../README.md) → [novel-config](crates/novel-config.md)（路径布局）→ [novel-server](crates/novel-server.md) |
+| Graph-Primary 编排 / Book Loop | [novel-graph](crates/novel-graph.md) · [FRAMEWORK §1](../FRAMEWORK.md) · `ui/src/graph/` |
 | 改 UI / IPC | [novel-server](crates/novel-server.md) · [FRAMEWORK §2.5](../FRAMEWORK.md#25-前端状态与-ipc) |
 | 改 Agent 循环 / 流式 Tool / Subagent | [novel-core](crates/novel-core.md) §1.2 · [novel-tools](crates/novel-tools.md) · [FRAMEWORK §2.3](../FRAMEWORK.md#23-fork-子-agent) |
 | 改知识库 / 脚手架 | [novel-knowledge](crates/novel-knowledge.md) · `templates/` 目录 |
@@ -34,7 +36,7 @@
 
 | 路径 | 说明 |
 |------|------|
-| [prompt/](../prompt/) | System / 子 Agent 提示词（`include_str!` 嵌入）；含 `agents/plan-auditor.md`、`knowledge-auditor.md`、`chapter-craft-analyzer.md`、`general_purpose.md`、`compaction-summary-trailing.md` |
+| [prompt/](../prompt/) | System / 可选 Fork 薄壳（`general_purpose.md`）与记忆提取；审计全文在 `skills/audit-*` |
 | [skills/](../skills/) | Workflow + 流派 Skill（Agent 级；`works/{名}/skills/` 可覆盖同 id） |
 | [templates/](../templates/) | 新建作品脚手架 Markdown（运行时读盘，必填） |
 | [works/](../works/) | 用户作品实例（gitignore） |
@@ -84,14 +86,14 @@ Skill 文件夹格式：`skills/<id>/SKILL.md` + 可选 `references/`。
 
 **会话术语：** 见 [novel-state §1.4](crates/novel-state.md#14-sessionsummary)（`total_turns` vs `api_call_count` vs `context_tokens` vs `last_active_at`）。
 
-## Subagent 双轨模型
+## Subagent / Skill 编排（Graph-Primary）
 
 | 模式 | 触发 | 典型场景 |
 |------|------|----------|
-| Workflow Skill | InvokeSkill | 策划、写章、改稿、写后收尾 |
-| 计划审计 Subagent | ForkSubAgent（细纲 + 追踪文件更新后） | PlanAuditor（大纲对齐、伏笔密度、因果闭合等） |
-| 写后检查 Subagent | ForkSubAgent（正文写后同批 2 项） | KnowledgeAuditor（执行忠实度）、ChapterCraftAnalyzer（文笔 + 设定一致性） |
-| GeneralPurpose | ForkSubAgent，task = 完整 prompt | 只读自定义调研/分析（完整报告；正典写盘交主 Agent） |
+| Graph 工位 | `plan-graph` + GraphTracker | Ready→Running→Achieved；Book Loop 游标 |
+| Workflow Skill | InvokeSkill | 节点内策划/写章/改稿/收尾 SOP |
+| 审计 Skill | InvokeSkill | `audit-plan` / `audit-knowledge` / `audit-craft` / `research` |
+| 可选 Fork | ForkSubAgent | 需要独立上下文隔离时的 PlanAuditor / KA / CCA / GeneralPurpose |
 
 主 LLM 仅见工具路径的一条 `[子 Agent 完成: …]` 摘要；完整 transcript 在 `fork_messages` + overlay。Hook 路径（KnowledgeAuditor）**不 inject** 主会话。
 

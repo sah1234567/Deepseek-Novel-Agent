@@ -45,6 +45,10 @@ export interface AppStatus {
   sessionCompletion: number;
   contextTokens: number;
   activeWorkName: string;
+  focusedNodeId?: string | null;
+  runningNodeIds?: string[];
+  graphHitlCount?: number;
+  loopSummaries?: Array<{ loopId: string; cursorLabel: string; phase: string }>;
 }
 
 export function useAppStatus() {

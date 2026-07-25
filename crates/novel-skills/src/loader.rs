@@ -55,6 +55,25 @@ pub fn load_skill(path: impl AsRef<Path>) -> Result<SkillDefinition, SkillError>
     parse_skill_file(path, &id)
 }
 
+/// Resolve `skills/{skill_id}/SKILL.md`: project override first, then agent-level skills dir.
+pub fn resolve_skill_md(
+    project_root: &Path,
+    agent_skills_dir: Option<&Path>,
+    skill_id: &str,
+) -> Option<PathBuf> {
+    let folder_path = project_root.join("skills").join(skill_id).join("SKILL.md");
+    if folder_path.exists() {
+        return Some(folder_path);
+    }
+    if let Some(dir) = agent_skills_dir {
+        let agent_path = dir.join(skill_id).join("SKILL.md");
+        if agent_path.exists() {
+            return Some(agent_path);
+        }
+    }
+    None
+}
+
 /// Load a folder-based skill: reads `dir/SKILL.md`, uses directory name as skill id.
 fn load_folder_skill(dir: &Path) -> Result<SkillDefinition, SkillError> {
     let skill_md = dir.join("SKILL.md");

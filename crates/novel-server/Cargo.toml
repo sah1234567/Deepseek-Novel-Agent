@@ -10,6 +10,7 @@ tauri = ["dep:tauri", "dep:uuid"]
 [dependencies]
 novel-config = { path = "../novel-config" }
 novel-core = { path = "../novel-core" }
+novel-graph = { path = "../novel-graph" }
 novel-knowledge = { path = "../novel-knowledge" }
 novel-logging = { path = "../novel-logging" }
 novel-state = { path = "../novel-state" }

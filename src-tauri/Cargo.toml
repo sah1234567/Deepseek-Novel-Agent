@@ -11,6 +11,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 novel-config = { path = "../crates/novel-config" }
 novel-core = { path = "../crates/novel-core" }
+novel-graph = { path = "../crates/novel-graph" }
 novel-knowledge = { path = "../crates/novel-knowledge" }
 novel-server = { path = "../crates/novel-server", features = ["tauri"] }
 novel-state = { path = "../crates/novel-state" }

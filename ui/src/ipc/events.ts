@@ -15,4 +15,10 @@ export const IPC_EVENTS = {
   subAgentTool: "sub-agent-tool",
   subAgentComplete: "sub-agent-complete",
   interruptibleStatusChanged: "interruptible-status-changed",
+  graphStateChanged: "graph-state-changed",
+  graphLoopChanged: "graph-loop-changed",
+  graphHitl: "graph-hitl",
+  graphApprovalRequired: "graph-approval-required",
+  graphPlanCommitted: "graph-plan-committed",
+  nodeSessionReset: "node-session-reset",
 } as const;

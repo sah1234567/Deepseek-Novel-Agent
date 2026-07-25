@@ -249,3 +249,157 @@ pub async fn set_api_config(
     let ctx = state.command_context(app);
     novel_server::tauri::set_api_config(&ctx, api_key, api_base).await
 }
+
+#[tauri::command]
+pub async fn graph_get_state(
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<novel_graph::GraphStateSnapshot, String> {
+    let ctx = state.command_context(app);
+    novel_server::tauri::graph_get_state(&ctx).await
+}
+
+#[tauri::command]
+pub async fn graph_get_node(
+    state: State<'_, AppState>,
+    app: AppHandle,
+    node_id: String,
+) -> Result<serde_json::Value, String> {
+    let ctx = state.command_context(app);
+    novel_server::tauri::graph_get_node(&ctx, node_id).await
+}
+
+#[tauri::command]
+pub async fn graph_get_loop(
+    state: State<'_, AppState>,
+    app: AppHandle,
+    loop_id: String,
+) -> Result<serde_json::Value, String> {
+    let ctx = state.command_context(app);
+    novel_server::tauri::graph_get_loop(&ctx, loop_id).await
+}
+
+#[tauri::command]
+pub async fn graph_activate_node(
+    state: State<'_, AppState>,
+    app: AppHandle,
+    node_id: String,
+) -> Result<(), String> {
+    let ctx = state.command_context(app);
+    novel_server::tauri::graph_activate_node(&ctx, node_id).await
+}
+
+#[tauri::command]
+pub async fn graph_start_node(
+    state: State<'_, AppState>,
+    app: AppHandle,
+    node_id: String,
+) -> Result<(), String> {
+    let ctx = state.command_context(app);
+    novel_server::tauri::graph_start_node(&ctx, node_id).await
+}
+
+#[tauri::command]
+pub async fn graph_approve(
+    state: State<'_, AppState>,
+    app: AppHandle,
+    node_id: String,
+) -> Result<novel_server::tauri::GraphMutateResult, String> {
+    let ctx = state.command_context(app);
+    novel_server::tauri::graph_approve(&ctx, node_id).await
+}
+
+#[tauri::command]
+pub async fn graph_reject(
+    state: State<'_, AppState>,
+    app: AppHandle,
+    node_id: String,
+    note: String,
+) -> Result<novel_server::tauri::GraphMutateResult, String> {
+    let ctx = state.command_context(app);
+    novel_server::tauri::graph_reject(&ctx, node_id, note).await
+}
+
+#[tauri::command]
+pub async fn graph_reopen(
+    state: State<'_, AppState>,
+    app: AppHandle,
+    node_id: String,
+    cascade_downstream: Option<bool>,
+) -> Result<novel_server::tauri::GraphMutateResult, String> {
+    let ctx = state.command_context(app);
+    novel_server::tauri::graph_reopen(&ctx, node_id, cascade_downstream).await
+}
+
+#[tauri::command]
+pub async fn graph_loop_pause(
+    state: State<'_, AppState>,
+    app: AppHandle,
+    loop_id: String,
+    reason: Option<String>,
+) -> Result<novel_server::tauri::GraphMutateResult, String> {
+    let ctx = state.command_context(app);
+    novel_server::tauri::graph_loop_pause(&ctx, loop_id, reason).await
+}
+
+#[tauri::command]
+pub async fn graph_loop_resume(
+    state: State<'_, AppState>,
+    app: AppHandle,
+    loop_id: String,
+) -> Result<novel_server::tauri::GraphMutateResult, String> {
+    let ctx = state.command_context(app);
+    novel_server::tauri::graph_loop_resume(&ctx, loop_id).await
+}
+
+#[tauri::command]
+pub async fn graph_loop_set_target(
+    state: State<'_, AppState>,
+    app: AppHandle,
+    loop_id: String,
+    target_chapters: u32,
+) -> Result<novel_server::tauri::GraphMutateResult, String> {
+    let ctx = state.command_context(app);
+    novel_server::tauri::graph_loop_set_target(&ctx, loop_id, target_chapters).await
+}
+
+#[tauri::command]
+pub async fn graph_loop_set_cursor(
+    state: State<'_, AppState>,
+    app: AppHandle,
+    loop_id: String,
+    chapter: u32,
+) -> Result<novel_server::tauri::GraphMutateResult, String> {
+    let ctx = state.command_context(app);
+    novel_server::tauri::graph_loop_set_cursor(&ctx, loop_id, chapter).await
+}
+
+#[tauri::command]
+pub async fn graph_loop_list_history(
+    state: State<'_, AppState>,
+    app: AppHandle,
+    loop_id: String,
+    limit: Option<u32>,
+) -> Result<Vec<novel_server::tauri::LoopHistoryRow>, String> {
+    let ctx = state.command_context(app);
+    novel_server::tauri::graph_loop_list_history(&ctx, loop_id, limit).await
+}
+
+#[tauri::command]
+pub async fn graph_preview_template(
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<String, String> {
+    let ctx = state.command_context(app);
+    novel_server::tauri::graph_preview_template(&ctx).await
+}
+
+#[tauri::command]
+pub async fn graph_apply_template(
+    state: State<'_, AppState>,
+    app: AppHandle,
+    force: Option<bool>,
+) -> Result<novel_graph::GraphStateSnapshot, String> {
+    let ctx = state.command_context(app);
+    novel_server::tauri::graph_apply_template(&ctx, force).await
+}

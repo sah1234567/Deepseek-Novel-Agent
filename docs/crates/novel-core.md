@@ -56,20 +56,20 @@ SubAgent 与主 Agent 共用 `EngineShared.session_llm`（`SessionLlmSnapshot`�
 
 **子 Agent 类型（4 种）：** PlanAuditor、KnowledgeAuditor、ChapterCraftAnalyzer、GeneralPurpose。`AgentType::parse()` 支持 PascalCase / kebab-case 统一解析。
 
-写章分两层审计：细纲写完后 Fork PlanAuditor（计划质量审计），正文写完后 Fork KnowledgeAuditor + ChapterCraftAnalyzer（执行忠实度 + 文笔一致性）。各类型 `max_react_loops` 与建议工具见 `agent/catalog.rs`（`FORK_AGENT_CATALOG`）。
+写章审计主路径（Graph-Primary）：细纲后 InvokeSkill(`audit-plan`)；正文后 InvokeSkill(`audit-knowledge`) + InvokeSkill(`audit-craft`)。Fork 四类 Subagent 仍可用作可选隔离（见 `agent/catalog.rs` / `FORK_AGENT_CATALOG`）。
 
-GeneralPurpose 的 `task` 即主 Agent 编写的完整自定义 prompt；预定义类型则嵌入 `prompt/agents/*.md` 全文 + 运行时约束。
+GeneralPurpose 的 `task` 即主 Agent 编写的完整自定义 prompt；审计类（PlanAuditor / KA / CCA）从 **`skills/audit-*/SKILL.md`** 运行时加载全文 + 运行时约束（不再 `include_str!` 内置角色 prompt）。
 
 ### 1.3 Agent 类型与工具
 
-详细 prompt 来自 `prompt/agents/*.md`（`include_str!` 编译期嵌入，路径见 `agent/catalog.rs::system_prompt`）。主 Agent 读不到这些 prompt 文件——子 Agent 须在报告末尾输出 `## 接下来（主 Agent 必读）`。
+详细审计手册来自 **`skills/audit-plan` / `audit-knowledge` / `audit-craft`**（Fork 可选隔离时由 `format_fork_task` 加载；主路径为节点内 InvokeSkill）。GeneralPurpose 薄壳仍为 `prompt/agents/general_purpose.md`。子 Agent / 节点报告末尾须含 `## 接下来（主 Agent 必读）`。
 
 **声明式目录（SSOT）：**
 
 | 层级 | 文件 | 内容 |
 |------|------|------|
 | 名称 + 默认 loops | `novel-config/src/fork_agents.rs` | `FORKABLE_AGENT_TYPE_NAMES`、`PLAN_AUDITOR_MAX_REACT_LOOPS` 等 |
-| 工具列表 + prompt 路径 + fallback | `novel-core/src/agent/catalog.rs` | `FORK_AGENT_CATALOG`；`AgentType::definition()` 由此构建 |
+| 工具列表 + skill_id + fallback | `novel-core/src/agent/catalog.rs` | `FORK_AGENT_CATALOG`；`AgentType::definition()` 由此构建 |
 
 运行时 LLM `tools` schema 与主 Agent 全量同源（§1.2）；下表「建议优先工具」列仅作 prompt 指引。
 
@@ -80,7 +80,7 @@ GeneralPurpose 的 `task` 即主 Agent 编写的完整自定义 prompt；预定�
 | ChapterCraftAnalyzer | 25 | Read/Grep/CharacterSearch/Stats/Tail/TrackingQuery/RelationQuery |
 | **GeneralPurpose** | 20 | Read/Write/Edit/Grep/Glob/CharacterSearch/PlotGraph/Tail/Stats/InvokeSkill/ImpactAnalysis/TodoWrite/WebSearch；LLM API 与主 Agent 同 schema；Write/Edit/TodoWrite 运行时门控拒绝 |
 
-写章分两层审计：细纲后 Fork PlanAuditor，正文后同批 Fork KnowledgeAuditor + ChapterCraftAnalyzer。Workflow 经 **InvokeSkill** 加载。GeneralPurpose 只读调研 + 完整报告；WebSearch 可写 `.websearch/`。
+写章审计主路径：细纲后 `audit-plan`，正文后 `audit-knowledge` + `audit-craft`（Workflow / 审计 Skill 经 **InvokeSkill**）。Fork 为可选隔离。GeneralPurpose 只读调研 + 完整报告（优先 InvokeSkill `research`）；WebSearch 可写 `.websearch/`。
 
 ### 1.4 System Prompt 与动态上下文
 
@@ -114,7 +114,7 @@ GeneralPurpose 的 `task` 即主 Agent 编写的完整自定义 prompt；预定�
 
 `default_hook_config()` 返回**空** `post_tool_use`。用户可在 `settings.json` 启用 PostToolUse matcher 后，将 KnowledgeAuditor 任务入队 `subagent_queue`（`parent_tool_call_id: None`），由 `drain_subagent_jobs` 异步执行（仅扫描本次 Write/Edit 遗漏）。
 
-**写后流程（prompt 强制，非引擎硬编码）：** 写章分两层审计——细纲 Write + 追踪文件更新后 Fork PlanAuditor（计划质量审计）；正文 Write + 收尾后**同批 Fork 2 项** Subagent（KnowledgeAuditor + ChapterCraftAnalyzer，执行忠实度 + 文笔一致性），按报告 Edit 后再宣告完成。PostToolUse Hook 仅做轻量扫描，不能替代完整写章收尾 Fork。
+**写后流程（prompt 强制，非引擎硬编码）：** Graph-Primary 下细纲 Write + 追踪更新后 InvokeSkill(`audit-plan`)；正文 Write + 收尾后 InvokeSkill(`audit-knowledge`) + InvokeSkill(`audit-craft`)，按报告 Edit 后再 `GraphSubmitForApproval` / 宣告完成。Fork 仅可选隔离。PostToolUse Hook 仅做轻量扫描，不能替代完整写章收尾审计。
 
 **审计台账：** ToolFork 类 Subagent 注入报告时，`subagent/mod.rs` 调用 `novel_knowledge::mark_audited` 写入 `knowledge/meta/audit-status.md`（`已审计`）；主 Agent 修复后 prompt 要求标 `已通过`。`build_dynamic_context` Progress 段含 `format_progress_hint` 摘要。
 
@@ -162,7 +162,7 @@ src/
   permission/       mode_prompt
 ```
 
-`lib.rs` 对外 re-export 保持稳定：`AgentType`、`FORKABLE_AGENT_TYPE_NAMES`、`FORK_AGENT_CATALOG` / `fork_agent_catalog()`、`AgentEngine`、`Event`/`Op`、权限文案 helper、`AbortController` 等。
+`lib.rs` 对外 re-export 保持稳定：`AgentType`、`FORKABLE_AGENT_TYPE_NAMES`、`FORK_AGENT_CATALOG`、`AgentEngine`、`Event`/`Op`、权限文案 helper、`AbortController` 等。
 
 ---
 

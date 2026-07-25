@@ -4,10 +4,17 @@ import { ErrorBanner } from "./components/layout/ErrorBanner";
 import { FileTreePanel } from "./components/layout/FileTreePanel";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { StatusBar } from "./components/StatusBar";
+import { APP_DISPLAY_NAME } from "./constants/app";
 import { AgentProvider, useAgentContext } from "./context/AgentContext";
 import { useAppStatus } from "./hooks/useAppStatus";
 import { useProjectFiles } from "./hooks/useProjectFiles";
-import { APP_DISPLAY_NAME } from "./constants/app";
+import { GraphCanvas } from "./graph/GraphCanvas";
+import { GraphHitlModal } from "./graph/GraphHitlModal";
+import { GraphPanelOverlay } from "./graph/GraphPanelOverlay";
+import { NodeSessionHeader } from "./graph/NodeSessionHeader";
+import { TemplatePreviewModal } from "./graph/TemplatePreviewModal";
+import { useGraphState } from "./graph/useGraphState";
+import { ReactFlowProvider } from "@xyflow/react";
 
 function AppShell({
   appStatus,
@@ -40,6 +47,7 @@ function AppShell({
   } = appStatus;
 
   const agent = useAgentContext();
+  const graph = useGraphState();
   const projectFiles = useProjectFiles(
     status?.projectInitialized ?? false,
     status?.activeWorkName,
@@ -81,7 +89,12 @@ function AppShell({
       agent.questionError ??
       projectFiles.error ??
       transcriptBootstrapError ??
-      statusBarError;
+      statusBarError ??
+      graph.error;
+
+  const sessionNode = graph.sessionNode;
+  const sessionSnap = graph.snapshot;
+  const hasPlan = !!graph.snapshot?.hasPlan;
 
   return (
     <div className="app">
@@ -102,10 +115,14 @@ function AppShell({
         listSessions={listSessions}
         onOpenWork={async (name) => {
           await openWork(name);
+          graph.backToChat();
+          graph.closeGraph();
           setErrorDismissed(false);
         }}
         onCreateWork={async (name) => {
           await createWork(name);
+          graph.backToChat();
+          graph.closeGraph();
           setErrorDismissed(false);
         }}
         onResumeSession={async (sessionId) => {
@@ -140,6 +157,10 @@ function AppShell({
           setStatusBarError(message);
           setErrorDismissed(false);
         }}
+        onOpenGraph={graph.openGraph}
+        onPreviewTemplate={() => void graph.previewTemplate()}
+        graphHitlCount={graph.snapshot?.hitl?.length ?? status?.graphHitlCount ?? 0}
+        hasPlan={hasPlan}
       />
       <main className="app-main">
         <FileTreePanel
@@ -152,33 +173,73 @@ function AppShell({
           collapsed={fileTreeCollapsed}
           onToggle={() => setFileTreeCollapsed((v) => !v)}
         />
-        <div className="chat-panel-wrapper">
-          <ChatPanel
-            permissionMode={status?.permissionMode ?? "normal"}
-            sessionId={status?.sessionId}
-            appTurnInProgress={status?.turnInProgress ?? false}
-            onSetPermissionMode={setPermissionMode}
-            overlayActive={overlayActive}
-            filePreview={
-              previewOpen && projectFiles.previewPath && projectFiles.previewContent !== null
-                ? {
-                    path: projectFiles.previewPath,
-                    content: projectFiles.previewContent,
-                    initialScrollTop:
-                      fileScrollCache.current.get(projectFiles.previewPath) ?? 0,
-                    onScrollPositionChange: (top) => {
-                      currentFileScrollRef.current = top;
-                    },
-                    onClose: closeFilePreview,
-                  }
-                : null
-            }
-            subAgentForkRun={subAgentOverlayOpen ? openForkRun : undefined}
-            onCloseSubAgent={agent.closeForkOverlay}
-            onTranscriptBootstrapError={setTranscriptBootstrapError}
-          />
+        <div className="main-stage">
+          {sessionNode && sessionSnap ? (
+            <NodeSessionHeader
+              node={sessionNode}
+              snapshot={sessionSnap}
+              onBack={graph.backToChat}
+              onStart={() => void graph.start(sessionNode.id)}
+              onApprove={() => void graph.approve(sessionNode.id)}
+              onReject={() => void graph.reject(sessionNode.id, "needs revision")}
+              onReopen={() => void graph.reopen(sessionNode.id)}
+            />
+          ) : null}
+          <div className="main-stage-chat">
+            <ChatPanel
+              permissionMode={status?.permissionMode ?? "normal"}
+              sessionId={status?.sessionId}
+              appTurnInProgress={status?.turnInProgress ?? false}
+              onSetPermissionMode={setPermissionMode}
+              overlayActive={overlayActive}
+              filePreview={
+                previewOpen &&
+                projectFiles.previewPath &&
+                projectFiles.previewContent !== null
+                  ? {
+                      path: projectFiles.previewPath,
+                      content: projectFiles.previewContent,
+                      initialScrollTop:
+                        fileScrollCache.current.get(projectFiles.previewPath) ?? 0,
+                      onScrollPositionChange: (top) => {
+                        currentFileScrollRef.current = top;
+                      },
+                      onClose: closeFilePreview,
+                    }
+                  : null
+              }
+              subAgentForkRun={subAgentOverlayOpen ? openForkRun : undefined}
+              onCloseSubAgent={agent.closeForkOverlay}
+              onTranscriptBootstrapError={setTranscriptBootstrapError}
+            />
+          </div>
+          {graph.graphPanelOpen ? (
+            <GraphPanelOverlay onClose={graph.closeGraph}>
+              <ReactFlowProvider>
+                <GraphCanvas graph={graph} />
+              </ReactFlowProvider>
+            </GraphPanelOverlay>
+          ) : null}
         </div>
       </main>
+      {graph.showHitlModal && graph.snapshot ? (
+        <GraphHitlModal
+          items={graph.snapshot.hitl}
+          onOpenGraph={graph.openGraph}
+          onApprove={(id) => void graph.approve(id)}
+          onReject={(id) => void graph.reject(id, "needs revision")}
+          onDismiss={graph.dismissHitlModal}
+        />
+      ) : null}
+      {graph.templatePreview !== null ? (
+        <TemplatePreviewModal
+          json={graph.templatePreview}
+          busy={graph.templateBusy}
+          hasPlan={hasPlan}
+          onClose={graph.closeTemplatePreview}
+          onApply={(force) => void graph.applyTemplate(force)}
+        />
+      ) : null}
       <SettingsPanel
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}

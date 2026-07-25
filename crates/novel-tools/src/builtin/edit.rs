@@ -112,6 +112,7 @@ impl Tool for EditTool {
         let full = ctx.resolve_path(&path);
         ctx.validate_write_root(&full)?;
         ctx.validate_plan_mode_write_path(self.name(), &path)?;
+        crate::graph_hook::graph_gate_write(ctx, &path)?;
         ctx.require_read_before_write(self.name(), &full, &path, "editing", false)?;
 
         ctx.with_file_lock(&full, || async {
@@ -160,6 +161,7 @@ impl Tool for EditTool {
                     occurrences_replaced: occ,
                 },
             );
+            crate::graph_hook::graph_record_write(ctx, &path, "update");
 
             Ok(ToolOutput {
                 content: format!("Edited {} ({occ} occurrence(s) replaced)", full.display()),

@@ -21,8 +21,8 @@ pub(crate) mod types;
 
 // ── Public API (novel-server / integration tests) ─────────────────
 pub use agent::{
-    fallback_prompt, fork_agent_catalog, format_fork_task, load_agent_prompt, system_prompt,
-    AgentType, FORKABLE_AGENT_TYPE_NAMES, FORK_AGENT_CATALOG,
+    audit_skill_id, fallback_prompt, format_fork_task, load_agent_prompt, system_prompt, AgentType,
+    SkillLoadRoots, FORKABLE_AGENT_TYPE_NAMES, FORK_AGENT_CATALOG,
 };
 pub use engine::{AgentEngine, EngineConfig, EngineStatus};
 pub use error::AgentError;

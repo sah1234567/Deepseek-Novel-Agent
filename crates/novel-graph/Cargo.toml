@@ -1,0 +1,19 @@
+[package]
+name = "novel-graph"
+version.workspace = true
+edition.workspace = true
+description = "Graph-primary plan schema, tracker, handoff, and loop runtime (depends only on novel-config)"
+
+[dependencies]
+novel-config = { path = "../novel-config" }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+rstest = { workspace = true }
+pretty_assertions = { workspace = true }

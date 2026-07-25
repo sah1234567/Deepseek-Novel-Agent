@@ -1,10 +1,12 @@
 mod audit_status_query;
+mod audit_status_update;
 mod character_rotate;
 mod character_search;
 mod common;
 mod corkboard;
 mod foreshadow_tracker;
 mod fork_sub_agent;
+mod graph_tools;
 mod impact_analysis;
 mod knowledge_derive;
 mod plot_graph;
@@ -14,11 +16,16 @@ mod stats;
 mod tracking_query;
 
 pub use audit_status_query::AuditStatusQueryTool;
+pub use audit_status_update::AuditStatusUpdateTool;
 pub use character_rotate::CharacterRotateTool;
 pub use character_search::CharacterSearchTool;
 pub use corkboard::CorkboardTool;
 pub use foreshadow_tracker::ForeshadowTrackerTool;
 pub use fork_sub_agent::ForkSubAgentTool;
+pub use graph_tools::{
+    GraphAdvanceTool, GraphApplyTemplateTool, GraphCommitPlanTool, GraphMarkVerifiedTool,
+    GraphQueryTool, GraphReopenTool, GraphSubmitForApprovalTool,
+};
 pub use impact_analysis::ImpactAnalysisTool;
 pub use knowledge_derive::KnowledgeDeriveTool;
 pub use plot_graph::PlotGraphTool;

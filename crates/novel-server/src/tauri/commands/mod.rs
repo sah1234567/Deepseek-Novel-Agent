@@ -1,5 +1,6 @@
 mod engine_ipc;
 mod fork;
+mod graph;
 mod project;
 mod session;
 mod settings;
@@ -9,6 +10,7 @@ mod turn;
 mod tests;
 
 pub use fork::*;
+pub use graph::*;
 pub use project::*;
 pub use session::*;
 pub use settings::*;

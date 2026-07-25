@@ -84,8 +84,16 @@ mod novel_tools_tests {
             "ImpactAnalysis",
             "KnowledgeDerive",
             "AuditStatusQuery",
+            "AuditStatusUpdate",
             "TrackingQuery",
             "RelationQuery",
+            "GraphQuery",
+            "GraphAdvance",
+            "GraphSubmitForApproval",
+            "GraphMarkVerified",
+            "GraphReopen",
+            "GraphApplyTemplate",
+            "GraphCommitPlan",
         ];
         for name in names {
             assert!(reg.get(name).is_some(), "missing tool {name}");

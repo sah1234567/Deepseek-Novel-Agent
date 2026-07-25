@@ -20,21 +20,21 @@ allowed-tools: Read, Write, Edit, Glob, Grep, Bash, CharacterSearch, PlotGraph, 
 
 ### 重写模式
 
-1. 细纲已存在且 PlanAuditor 已通过 → **跳过细纲阶段**（细纲不变）
+1. 细纲已存在且 `audit-plan` / 细纲PA 已通过 → **跳过细纲阶段**（细纲不变）
 2. Read 细纲「修订记录」→ 了解之前的修改历史
 3. Write 覆写正文 → 覆写细纲「写后记录」
-4. 正文后审计不可跳过 → 正常 Fork KnowledgeAuditor + ChapterCraftAnalyzer
+4. 正文后审计不可跳过 → InvokeSkill(`audit-knowledge`) + InvokeSkill(`audit-craft`)
 5. 如果重写后偏离细纲 → 按下方「偏离处理」执行
 6. 细纲「修订记录」追加一行（原因=重写，范围=全章）
 
 ### 批量模式（多章连写）
 
 当作者要求一次写多章（≤5 章）：
-1. 细纲批量 Write → 批量更新追踪文件 → **一次性** Fork PlanAuditor（task 含所有章号）
+1. 细纲批量 Write → 批量更新追踪文件 → **一次性** InvokeSkill(`audit-plan`)（覆盖所有章号）
 2. 正文逐章 Write（每章单独 Stats + 写后记录）
-3. 全部章写完后 → **一次性** Fork KnowledgeAuditor + ChapterCraftAnalyzer（task 含所有章号，提示按章分组输出）
+3. 全部章写完后 → **一次性** InvokeSkill(`audit-knowledge`) + InvokeSkill(`audit-craft`)（覆盖所有章号，按章分组输出）
 
-批量模式下 PlanAuditor 可额外检查跨章伏笔节奏与人物弧线。
+批量模式下 `audit-plan` 可额外检查跨章伏笔节奏与人物弧线。
 
 ---
 
@@ -75,14 +75,11 @@ allowed-tools: Read, Write, Edit, Glob, Grep, Bash, CharacterSearch, PlotGraph, 
 | `knowledge/shared-systems/时间线.md` | 本章有关键时间戳 | append 时间戳行 |
 | `knowledge/INDEX.md` | 每次 | 更新进度段 |
 
-### ★ Fork PlanAuditor（不可跳过）
+### ★ InvokeSkill(`audit-plan`)（不可跳过）
 
-追踪文件更新完成后，Fork PlanAuditor：
-```
-ForkSubAgent(agent_type="PlanAuditor", task="审计细纲 chapter-NNN-细纲.md 的计划质量：大纲对齐、伏笔密度、因果闭合、人物轮换、字数分配、登记完整性")
-```
+追踪文件更新完成后，InvokeSkill(`audit-plan`) 审计细纲计划质量（大纲对齐、伏笔密度、因果闭合、人物轮换、字数分配、登记完整性）。需要独立上下文隔离时再可选 `ForkSubAgent(PlanAuditor)`。
 
-按报告 Edit 细纲 → 更新 `knowledge/meta/audit-status.md`（细纲PA=已通过）。PlanAuditor 通过后，才可进入正文阶段。
+按报告 Edit 细纲 → `AuditStatusUpdate` / 更新 `knowledge/meta/audit-status.md`（细纲PA=已通过）→ 通过后才可进入正文阶段 / `GraphSubmitForApproval`。
 
 ---
 
@@ -136,7 +133,7 @@ ForkSubAgent(agent_type="PlanAuditor", task="审计细纲 chapter-NNN-细纲.md 
 |---------|------|------|
 | 微调 | 同一场景内对话/细节不同，核心动作和伏笔操作不变 | 继续写，正文后在细纲「知识库更新确认」标记「已变更」并备注 |
 | 局部偏离 | 单个场景核心动作变化，但不影响后续章因果链 | 暂停→Edit 细纲对应场景→继续写→正文后在追踪文件追加状态更新行 |
-| 重大偏离 | 场景增删、伏笔操作变化、影响后续章走向 | 暂停→AskUserQuestion 确认→更新细纲+追踪文件→重新 Fork PlanAuditor→再继续写 |
+| 重大偏离 | 场景增删、伏笔操作变化、影响后续章走向 | 暂停→AskUserQuestion 确认→更新细纲+追踪文件→重新 InvokeSkill(`audit-plan`)→再继续写 |
 
 **禁止**不经确认的重大偏离——那会导致追踪文件与正文系统性不一致。
 
@@ -202,14 +199,14 @@ Write 正文完成后逐项确认（**反AI味专项由 ChapterCraftAnalyzer 负
 
 1. 确认正文已 Write 至 `chapters/chapter-NNN.md`，`Stats(chapter="N")` 确认字数 2000–4000
 2. 确认细纲「写后记录」和「知识库更新确认」已填
-3. **★ 同一次 assistant 消息**内并行 Fork 2 项 Subagent：
-   - **KnowledgeAuditor**：`审计 chapters/chapter-NNN.md 是否忠实执行细纲，收尾是否完整`
-   - **ChapterCraftAnalyzer**：`分析 chapters/chapter-NNN.md：对话质量、叙事节奏、情感轨迹、设定一致性（称呼/POV边界/战力/场景道具）、反AI味指标。POV=XXX`
-4. 按全部 Subagent 报告 Edit 修复后，更新审计台账（正文KA/文笔CCA=已通过），向作者汇报：本章摘要、钩子、出场人物、待确认项、审计结论
+3. **★** InvokeSkill(`audit-knowledge`) + InvokeSkill(`audit-craft`)（不可跳过）：
+   - **audit-knowledge**：`chapters/chapter-NNN.md` 是否忠实执行细纲，收尾是否完整
+   - **audit-craft**：对话质量、叙事节奏、情感轨迹、设定一致性、反 AI 味。POV=XXX
+4. 按报告 Edit 修复后，`AuditStatusUpdate`（正文KA/文笔CCA=已通过）→ `GraphSubmitForApproval` → 向作者汇报：本章摘要、钩子、出场人物、待确认项、审计结论
 
 **按审计报告 Edit**：`old_string` 须从 Read/Tail tool_result 逐字复制（非报告引文）；报告给行号则 Grep→Read；写「保留」则跳过；`not found on disk` 时 Grep 锚点重定位，勿同参重读。
 
-**禁止** 跳过步骤 3 或只跑部分 Subagent 即向作者说「本章完成」。
+**禁止** 跳过步骤 3 或只跑其中一项审计即向作者说「本章完成」。
 **禁止** 在正文后重复全量更新追踪文件——追溯文件应在细纲阶段一次性完成。
 
 **下一步：** 审计修复完成 → 回复作者「本章完成」。如需继续写下一章 → 再次 Invoke 本 Skill。如需基于审计报告改稿 → InvokeSkill(`revision`)。如本章是独立写完（非通过本 Skill 的正文阶段）、只需收尾核对 → InvokeSkill(`post-chapter-checklist`)。

@@ -220,6 +220,32 @@
   background: #30363d;
 }
 
+.status-action-btn {
+  border: 1px solid #30363d;
+  background: #21262d;
+  color: #e6edf3;
+  border-radius: 6px;
+  padding: 0.35rem 0.7rem;
+  font: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.status-action-btn:hover {
+  border-color: #58a6ff;
+  color: #79c0ff;
+}
+
+.status-action-btn.has-hitl {
+  border-color: #f59e0b;
+  color: #fbbf24;
+}
+
+.status-action-btn.is-muted {
+  opacity: 0.75;
+}
+
 /* ── Todo dropdown ── */
 .todo-dropdown-wrapper {
   position: relative;

@@ -395,7 +395,7 @@ mod tests {
         assert!(!out.content.contains("line 30"));
     }
 
-    /// ChapterCraftAnalyzer 推荐的破折号正则（见 `prompt/agents/chapter-craft-analyzer.md`）。
+    /// ChapterCraftAnalyzer / `skills/audit-craft` 推荐的破折号正则。
     const CRAFT_EM_DASH_PATTERN: &str = r"——|--|—|–| - ";
 
     /// 内联夹具文本（U+2014×2 中文破折号）；不读取 `works/` 下真实章节。

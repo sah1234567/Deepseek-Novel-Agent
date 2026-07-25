@@ -4,7 +4,7 @@ use crate::error::LlmError;
 use crate::tool_args::parse_tool_arguments;
 use crate::types::{
     ChatStreamConfig, ContentBlockKind, LlmChatMessage, LlmCompletion, LlmToolCall, StreamEvent,
-    StreamOutcome, TokenUsage, WebSearchResult,
+    StreamOutcome, TokenUsage, WebSearchResponse, WebSearchResult,
 };
 use futures::StreamExt;
 use serde::Deserialize;
@@ -15,6 +15,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 // Web Search via DeepSeek's `web_search_20250305` server-side tool (Anthropic Messages API).
+// Search synthesis model is intentionally hardcoded — not env/config overridable.
+const WEB_SEARCH_MODEL: &str = "deepseek-v4-flash";
+const WEB_SEARCH_MAX_TOKENS: u32 = 8192;
 
 struct DrainUsageRequest {
     messages: Vec<Value>,
@@ -692,18 +695,17 @@ impl ChatClient {
     }
 
     /// Perform a web search via DeepSeek's `web_search_20250305` server-side tool.
-    /// Uses the Anthropic Messages API format (separate endpoint from chat completions).
-    /// Returns a list of `(title, url, snippet)` tuples.
-    pub async fn web_search(
-        api_key: &str,
-        query: &str,
-        max_results: usize,
-    ) -> Result<Vec<WebSearchResult>, LlmError> {
+    ///
+    /// Uses the Anthropic Messages API (separate from chat completions). Synthesis
+    /// always runs on [`WEB_SEARCH_MODEL`] (`deepseek-v4-flash`) — hardcoded, not
+    /// configurable. Callers should return [`WebSearchResponse::answer`] to the agent
+    /// rather than running a second cleanup LLM pass.
+    pub async fn web_search(api_key: &str, query: &str) -> Result<WebSearchResponse, LlmError> {
         let url = crate::config::web_search_messages_url();
         let body = serde_json::json!({
-            "model": "deepseek-chat",
-            "max_tokens": 1024,
-            "system": "You are a web search assistant. Search for the given query and return factual results.",
+            "model": WEB_SEARCH_MODEL,
+            "max_tokens": WEB_SEARCH_MAX_TOKENS,
+            "system": "You are a web search assistant. Search for the given query, then summarize the findings with concrete facts and source attribution. Prefer citing specific titles and URLs from the search results.",
             "messages": [{
                 "role": "user",
                 "content": format!("Perform a web search for: {query}")
@@ -713,11 +715,12 @@ impl ChatClient {
                 "name": "web_search",
                 "max_uses": 1
             }],
+            "tool_choice": { "type": "any" },
             "stream": false,
         });
 
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(90))
             .build()
             .map_err(|e| LlmError::Api(e.to_string()))?;
         let resp = client
@@ -739,13 +742,27 @@ impl ChatClient {
 
         let json: serde_json::Value = serde_json::from_str(&text)
             .map_err(|e| LlmError::Api(format!("web_search JSON: {e}")))?;
+        parse_web_search_response(&json)
+    }
+}
 
-        let mut results = Vec::new();
-        if let Some(blocks) = json.get("content").and_then(|c| c.as_array()) {
-            for block in blocks {
-                if block.get("type").and_then(|t| t.as_str()) == Some("web_search_tool_result") {
-                    if let Some(tool_result) = block.get("content").and_then(|c| c.as_array()) {
-                        for item in tool_result.iter().take(max_results) {
+/// Parse Anthropic/DeepSeek Messages content: sources + model synthesis + citation excerpts.
+pub(crate) fn parse_web_search_response(json: &Value) -> Result<WebSearchResponse, LlmError> {
+    let blocks = json
+        .get("content")
+        .and_then(|c| c.as_array())
+        .ok_or_else(|| LlmError::Api("web_search response missing content array".into()))?;
+
+    let mut answer_parts: Vec<String> = Vec::new();
+    let mut sources: Vec<WebSearchResult> = Vec::new();
+    let mut excerpts_by_url: HashMap<String, Vec<String>> = HashMap::new();
+
+    for block in blocks {
+        match block.get("type").and_then(|t| t.as_str()) {
+            Some("web_search_tool_result") => {
+                match block.get("content") {
+                    Some(Value::Array(items)) => {
+                        for item in items {
                             let title = item
                                 .get("title")
                                 .and_then(|t| t.as_str())
@@ -756,25 +773,97 @@ impl ChatClient {
                                 .and_then(|u| u.as_str())
                                 .unwrap_or("")
                                 .to_string();
-                            let snippet = item
-                                .get("snippet")
-                                .and_then(|s| s.as_str())
-                                .unwrap_or("")
-                                .to_string();
-                            if !title.is_empty() {
-                                results.push(WebSearchResult {
-                                    title,
-                                    url: result_url,
-                                    snippet,
-                                });
+                            let page_age = item
+                                .get("page_age")
+                                .and_then(|p| p.as_str())
+                                .map(str::to_string);
+                            if title.is_empty() && result_url.is_empty() {
+                                continue;
                             }
+                            sources.push(WebSearchResult {
+                                title,
+                                url: result_url,
+                                page_age,
+                                excerpts: Vec::new(),
+                            });
+                        }
+                    }
+                    Some(Value::Object(err))
+                        if err.get("type").and_then(|t| t.as_str())
+                            == Some("web_search_tool_result_error") =>
+                    {
+                        let code = err
+                            .get("error_code")
+                            .and_then(|c| c.as_str())
+                            .unwrap_or("unknown");
+                        tracing::warn!(error_code = %code, "deepseek_web_search_tool_error");
+                        return Err(LlmError::Api(format!(
+                            "web_search tool error: {code}"
+                        )));
+                    }
+                    _ => {}
+                }
+            }
+            Some("text") => {
+                if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        answer_parts.push(trimmed.to_string());
+                    }
+                }
+                if let Some(citations) = block.get("citations").and_then(|c| c.as_array()) {
+                    for cite in citations {
+                        let cite_url = cite
+                            .get("url")
+                            .and_then(|u| u.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let cited = cite
+                            .get("cited_text")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("")
+                            .trim()
+                            .to_string();
+                        if cite_url.is_empty() || cited.is_empty() {
+                            continue;
+                        }
+                        excerpts_by_url
+                            .entry(cite_url.clone())
+                            .or_default()
+                            .push(cited);
+                        let title = cite
+                            .get("title")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        if !sources.iter().any(|s| s.url == cite_url) {
+                            sources.push(WebSearchResult {
+                                title,
+                                url: cite_url,
+                                page_age: None,
+                                excerpts: Vec::new(),
+                            });
                         }
                     }
                 }
             }
+            _ => {}
         }
-        Ok(results)
     }
+
+    for source in &mut sources {
+        if let Some(excerpts) = excerpts_by_url.remove(&source.url) {
+            source.excerpts = excerpts;
+        }
+    }
+
+    let answer = answer_parts.join("\n\n");
+    tracing::debug!(
+        source_count = sources.len(),
+        answer_chars = answer.chars().count(),
+        "deepseek_web_search_parsed"
+    );
+    Ok(WebSearchResponse { answer, sources })
 }
 
 // ── JSON helpers ────────────────────────────────────────────────
@@ -1126,6 +1215,81 @@ mod tests {
         assert_eq!(usage.cache_hit_tokens, 5);
     }
 
+    #[test]
+    fn parse_web_search_response_keeps_answer_citations_and_all_sources() {
+        let body = serde_json::json!({
+            "content": [
+                {
+                    "type": "server_tool_use",
+                    "id": "srvtoolu_1",
+                    "name": "web_search",
+                    "input": { "query": "rust" }
+                },
+                {
+                    "type": "web_search_tool_result",
+                    "tool_use_id": "srvtoolu_1",
+                    "content": [
+                        {
+                            "type": "web_search_result",
+                            "title": "Rust Lang",
+                            "url": "https://www.rust-lang.org/",
+                            "encrypted_content": "abc",
+                            "page_age": "July 1, 2026"
+                        },
+                        {
+                            "type": "web_search_result",
+                            "title": "",
+                            "url": "https://doc.rust-lang.org/book/",
+                            "encrypted_content": "def"
+                        }
+                    ]
+                },
+                {
+                    "type": "text",
+                    "text": "Rust is a systems language.",
+                    "citations": [{
+                        "type": "web_search_result_location",
+                        "url": "https://www.rust-lang.org/",
+                        "title": "Rust Lang",
+                        "cited_text": "A language empowering everyone to build reliable software."
+                    }]
+                },
+                {
+                    "type": "text",
+                    "text": " The Book is the primary guide."
+                }
+            ]
+        });
+        let parsed = parse_web_search_response(&body).expect("parse");
+        assert!(parsed.answer.contains("Rust is a systems language."));
+        assert!(parsed.answer.contains("The Book is the primary guide."));
+        assert_eq!(parsed.sources.len(), 2);
+        assert_eq!(parsed.sources[0].url, "https://www.rust-lang.org/");
+        assert_eq!(
+            parsed.sources[0].excerpts,
+            vec!["A language empowering everyone to build reliable software."]
+        );
+        assert_eq!(parsed.sources[0].page_age.as_deref(), Some("July 1, 2026"));
+        assert_eq!(parsed.sources[1].url, "https://doc.rust-lang.org/book/");
+        assert!(parsed.sources[1].title.is_empty());
+    }
+
+    #[test]
+    fn parse_web_search_response_surfaces_tool_error() {
+        let body = serde_json::json!({
+            "content": [{
+                "type": "web_search_tool_result",
+                "tool_use_id": "t1",
+                "content": {
+                    "type": "web_search_tool_result_error",
+                    "error_code": "max_uses_exceeded"
+                }
+            }]
+        });
+        let err = parse_web_search_response(&body).expect_err("tool error");
+        assert!(err.to_string().contains("max_uses_exceeded"));
+    }
+
     #[tokio::test]
     async fn web_search_parses_mock_response() {
         use wiremock::matchers::method;
@@ -1133,14 +1297,33 @@ mod tests {
 
         let server = MockServer::start().await;
         let body = serde_json::json!({
-            "content": [{
-                "type": "web_search_tool_result",
-                "content": [{
-                    "title": "Example",
-                    "url": "https://example.com",
-                    "snippet": "text"
-                }]
-            }]
+            "content": [
+                {
+                    "type": "web_search_tool_result",
+                    "content": [{
+                        "type": "web_search_result",
+                        "title": "Example",
+                        "url": "https://example.com",
+                        "encrypted_content": "opaque",
+                        "page_age": "May 1, 2026"
+                    }, {
+                        "type": "web_search_result",
+                        "title": "Second",
+                        "url": "https://example.com/2",
+                        "encrypted_content": "opaque2"
+                    }]
+                },
+                {
+                    "type": "text",
+                    "text": "Example is a useful domain.",
+                    "citations": [{
+                        "type": "web_search_result_location",
+                        "url": "https://example.com",
+                        "title": "Example",
+                        "cited_text": "Example Domain"
+                    }]
+                }
+            ]
         });
         Mock::given(method("POST"))
             .respond_with(ResponseTemplate::new(200).set_body_json(body))
@@ -1152,14 +1335,16 @@ mod tests {
             "DEEPSEEK_WEB_SEARCH_MESSAGES_URL",
             format!("{}/v1/messages", server.uri()),
         );
-        let results = ChatClient::web_search("key", "rust", 3)
+        let results = ChatClient::web_search("key", "rust")
             .await
             .expect("web_search");
         match prev {
             Some(p) => std::env::set_var("DEEPSEEK_WEB_SEARCH_MESSAGES_URL", p),
             None => std::env::remove_var("DEEPSEEK_WEB_SEARCH_MESSAGES_URL"),
         }
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].title, "Example");
+        assert_eq!(results.sources.len(), 2);
+        assert_eq!(results.sources[0].title, "Example");
+        assert_eq!(results.answer, "Example is a useful domain.");
+        assert_eq!(results.sources[0].excerpts, vec!["Example Domain"]);
     }
 }

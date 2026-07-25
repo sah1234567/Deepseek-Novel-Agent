@@ -18,5 +18,6 @@ pub use error::{is_context_length_exceeded, is_output_truncated, LlmError};
 pub use tool_args::{parse_tool_arguments, ToolParseError};
 pub use types::{
     BackgroundUsageRx, ChatRequestOptions, ChatStreamConfig, ContentBlockKind, LlmChatMessage,
-    LlmCompletion, LlmToolCall, StreamEvent, StreamOutcome, TokenUsage, WebSearchResult,
+    LlmCompletion, LlmToolCall, StreamEvent, StreamOutcome, TokenUsage, WebSearchResponse,
+    WebSearchResult,
 };

@@ -1,0 +1,35 @@
+{
+  "planVersion": "1",
+  "nodes": [
+    {"id":"world-bible","title":"世界观","kind":"world_bible","status":"achieved"},
+    {"id":"outline","title":"大纲","kind":"outline","status":"achieved"},
+    {"id":"ensure-fine-outline","title":"细纲","kind":"ensure_fine_outline","status":"achieved","loopId":"book-body","cursorBadge":"Ch.37"},
+    {"id":"write-chapter","title":"写章","kind":"chapter_body","status":"running","loopId":"book-body","cursorBadge":"Ch.37","effectiveSpec":"写第37章"},
+    {"id":"sync-canon","title":"正典","kind":"sync_canon","status":"waiting","loopId":"book-body","cursorBadge":"Ch.37"},
+    {"id":"volume-review","title":"卷审","kind":"volume_review","status":"waiting"}
+  ],
+  "edges": [
+    {"source":"world-bible","target":"outline","kind":"deps"},
+    {"source":"outline","target":"ensure-fine-outline","kind":"deps"},
+    {"source":"ensure-fine-outline","target":"write-chapter","kind":"deps"},
+    {"source":"write-chapter","target":"sync-canon","kind":"deps"},
+    {"source":"sync-canon","target":"volume-review","kind":"deps"}
+  ],
+  "loops": [{
+    "loopId":"book-body",
+    "stationIds":["ensure-fine-outline","write-chapter","sync-canon"],
+    "cursor":{"chapter":37,"volume":1,"fineOutlineThrough":37,"round":37},
+    "targetChapters":200,
+    "phase":"running",
+    "activeStationId":"write-chapter",
+    "lastAdvanceAt":"2026-07-01T00:00:00Z",
+    "worldStateBoard":["knowledge/characters/","knowledge/INDEX.md"],
+    "entry":"ensure-fine-outline",
+    "advanceAfter":"sync-canon"
+  }],
+  "focusedNodeId":"write-chapter",
+  "runningNodeIds":["write-chapter"],
+  "hitl":[],
+  "loopSummaries":[{"loopId":"book-body","cursorLabel":"Ch.37/200","phase":"running"}],
+  "enforceGates":true
+}

@@ -33,6 +33,8 @@ pub(crate) fn emit_compaction_circuit_breaker(
 pub(crate) fn compaction_skill_snapshot(
     engine: &mut AgentEngine,
 ) -> Result<CompactionSkillSnapshot, AgentError> {
+    // Graph-Primary: after compaction, refresh_system_dynamic_sections rebuilds Progress
+    // including full NodeObjective + upstream handoffs from graph-state (not from summarized chat).
     engine.refresh_system_dynamic_sections()?;
     let skill_ids = filter_loadable_skill_ids(
         &engine.shared.session.project_root,

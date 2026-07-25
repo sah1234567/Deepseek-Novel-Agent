@@ -41,6 +41,14 @@ pub struct AppStatus {
     pub session_completion: i64,
     pub context_tokens: i64,
     pub active_work_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focused_node_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub running_node_ids: Vec<String>,
+    #[serde(default)]
+    pub graph_hitl_count: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub loop_summaries: Vec<novel_graph::LoopSummary>,
 }
 
 pub enum EngineCommand {
@@ -102,6 +110,19 @@ fn build_app_status(engine: &AgentEngine, active_work_name: &str) -> AppStatus {
     } = engine.status_snapshot();
     let todos = engine.list_session_todos();
     let (hit, miss, comp, ctx) = engine.session_token_summary();
+    let (focused_node_id, running_node_ids, graph_hitl_count, loop_summaries) =
+        match novel_graph::GraphTracker::load(engine.project_root()) {
+            Ok(Some(t)) => {
+                let snap = novel_graph::build_snapshot(&t);
+                (
+                    snap.focused_node_id,
+                    snap.running_node_ids,
+                    snap.hitl.len(),
+                    snap.loop_summaries,
+                )
+            }
+            _ => (None, Vec::new(), 0, Vec::new()),
+        };
     AppStatus {
         session_id,
         permission_mode,
@@ -117,6 +138,10 @@ fn build_app_status(engine: &AgentEngine, active_work_name: &str) -> AppStatus {
         session_completion: comp,
         context_tokens: ctx,
         active_work_name: active_work_name.to_string(),
+        focused_node_id,
+        running_node_ids,
+        graph_hitl_count,
+        loop_summaries,
     }
 }
 

@@ -4,13 +4,11 @@ mod prompt;
 use novel_config::AgentConfig;
 use serde::{Deserialize, Serialize};
 
-pub use catalog::{fallback_prompt, system_prompt, ForkAgentCatalogEntry, FORK_AGENT_CATALOG};
+pub use catalog::{
+    audit_skill_id, fallback_prompt, system_prompt, FORK_AGENT_CATALOG,
+};
 pub use novel_config::FORKABLE_AGENT_TYPE_NAMES;
-pub use prompt::{format_fork_task, load_agent_prompt};
-/// All forkable sub-agent catalog rows.
-pub fn fork_agent_catalog() -> &'static [ForkAgentCatalogEntry] {
-    FORK_AGENT_CATALOG
-}
+pub use prompt::{format_fork_task, load_agent_prompt, SkillLoadRoots};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AgentType {

@@ -25,16 +25,18 @@
 
 ### 1.2 ToolRegistry
 
-`default_registry()` 注册 **24** 个工具（无参数；`project_root` 由 `ToolContext` 提供）：
+`default_registry()` 注册工具（无参数；`project_root` 由 `ToolContext` 提供）：
 
 **11 个 builtin：** Read, Write, Edit, **Tail**, Grep, Glob, Bash, WebSearch, InvokeSkill, TodoWrite, AskUserQuestion
 
-**13 个 Novel 专属：**
-CharacterSearch, PlotGraph, PlotGrid, ForeshadowTracker, Stats, Corkboard, CharacterRotate, **ForkSubAgent**, ImpactAnalysis, KnowledgeDerive, **AuditStatusQuery**, TrackingQuery, RelationQuery
+**Novel 专属（含 Graph）：**
+CharacterSearch, PlotGraph, PlotGrid, ForeshadowTracker, Stats, Corkboard, CharacterRotate, **ForkSubAgent**, ImpactAnalysis, KnowledgeDerive, **AuditStatusQuery**, **AuditStatusUpdate**, TrackingQuery, RelationQuery, **GraphQuery**, **GraphAdvance**, **GraphSubmitForApproval**, **GraphMarkVerified**, **GraphReopen**, **GraphApplyTemplate**, **GraphCommitPlan**
 
-**AuditStatusQuery：** 只读查询 `knowledge/meta/audit-status.md`。`operation`: `summary` | `chapter` | `pending`；`pending` 需 `audit_type`: `pa` | `ka` | `cca` | `any`（snake_case）。
+**AuditStatusQuery / AuditStatusUpdate：** 读写 `knowledge/meta/audit-status.md`（Graph 审计台账证据）。
 
-（对话/节奏/情感分析由 **Subagent** ChapterCraftAnalyzer 承担，非独立主会话工具。）
+**Graph* 工具：** 查询 / 推进 / 提交审批 / 机审通过 / reopen。Write/Edit 经 `graph_hook`：`graph_gate_write`（enforce_gates 时校验可写集）+ `graph_record_write`（journal / demote_on_edit / `graph.jsonl` / UI 回调）。
+
+（对话/节奏/情感分析主路径为 InvokeSkill(`audit-craft`)；Fork ChapterCraftAnalyzer 为可选隔离。）
 
 ### 1.3 权限系统
 
@@ -94,7 +96,7 @@ SSE 流开始前创建，Allow 权限的工具在 arguments JSON 完整时即可
 | TodoWrite | SQLite `session_todos`；`replace=false` 仅更新已有 id；未知 id 跳过并在结果中 `warning`；`replace=true` 新建一批并覆盖旧表；至多一项 `in_progress`；Normal 模式直接 Allow |
 | CharacterSearch | 人物档案 + 演变日志末行；tool_result 输出 ≤80 行（`KNOWLEDGE_MAX_LINES`） |
 | PlotGraph | 因果图 BFS |
-| WebSearch | 通用网页搜索（DeepSeek `web_search_20250305`），API Key 与主对话相同：`DEEPSEEK_API_KEY` env 优先，否则 `{agent_root}/.novel-agent/api_config.json`（经 `ToolContext.global_api_config_path` → `novel_config::resolve_agent_api_key`）；失败返回 `ToolError` 而非空成功。原始结果缓存 `{project}/.websearch/`（非 `knowledge/` 正典）。支持 research/similar-works/reader-feedback/trope-reference/fact-check/writing-tips/trending/short-drama 等搜索角度 |
+| WebSearch | 通用网页搜索（DeepSeek Anthropic 兼容 `web_search_20250305`；综合模型硬编码 `deepseek-v4-flash`，不可配置）。返回模型合成摘要（`summary`）+ 全部来源 URL/title + `citations.cited_text` 摘录；失败返回 `ToolError`。API Key：`DEEPSEEK_API_KEY` env 优先，否则 `{agent_root}/.novel-agent/api_config.json`。原始结果缓存 `{project}/.websearch/`（非 `knowledge/` 正典）。支持 research/similar-works/reader-feedback/trope-reference/fact-check/writing-tips/trending/short-drama 等搜索角度 |
 | PlotGrid / ForeshadowTracker | 剧情网格 / 伏笔追踪（含可视化） |
 | Stats | 字数、完成率、连续天数 |
 | Corkboard | 细纲场景卡片 |
@@ -104,7 +106,7 @@ SSE 流开始前创建，Allow 权限的工具在 arguments JSON 完整时即可
 | KnowledgeDerive | 知识库派生快照、伏笔分类、关系索引、`INDEX.md` 重建 |
 | TrackingQuery | 追踪表查询（场景/道具/势力/时间线/战力/功法），支持 current/range/search 三种操作 |
 | RelationQuery | 角色关系与称呼查询，支持双向关系、历史演变、目标过滤 |
-| **ForkSubAgent** | 主会话委派子 Agent；入队 `subagent_queue`，`drain_subagent_jobs` spawn/join 后 inject **一条**报告摘要；完整 transcript 在 `fork_messages`（与 PostToolUse KnowledgeAuditor hook 并列，触发路径不同） |
+| **ForkSubAgent** | 可选隔离 helper（Graph-Primary 下审计主路径为 InvokeSkill `audit-*`）；入队 `subagent_queue`，完成后 inject **一条**报告摘要 |
 
 ### 1.8 ForkSubAgent
 
@@ -124,7 +126,7 @@ SSE 流开始前创建，Allow 权限的工具在 arguments JSON 完整时即可
 
 **GeneralPurpose：** 只读自定义调研（`task` = 完整 prompt）；LLM tools schema 与主 Agent 相同；Write/Edit 由 `subagent_mutator_gate` 拒绝。WebSearch 原始缓存 `{project}/.websearch/`。
 
-**与 PostToolUse 的关系：** 用户可在 `settings.json` 启用 PostToolUse matcher，工具执行后自动入队 **KnowledgeAuditor hook**（轻量遗漏扫描，`source=hook`，不 inject 主会话）。写章收尾仍须手动 Fork 完整 KnowledgeAuditor + ChapterCraftAnalyzer。
+**与 PostToolUse 的关系：** 用户可在 `settings.json` 启用 PostToolUse matcher，工具执行后自动入队 **KnowledgeAuditor hook**（轻量遗漏扫描，`source=hook`，不 inject 主会话）。写章收尾主路径仍为 InvokeSkill(`audit-knowledge`) + InvokeSkill(`audit-craft`)；Fork 完整审计为可选。
 
 ### 1.9 Tool Result Pipeline
 

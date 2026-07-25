@@ -45,7 +45,54 @@ impl AgentEngine {
                 );
             }
         }
+        self.flush_graph_state_changed(event_tx);
+        self.flush_graph_loop_advanced(event_tx);
+        self.flush_graph_plan_committed(event_tx);
         Ok(())
+    }
+
+    fn flush_graph_state_changed(&self, event_tx: Option<&mpsc::UnboundedSender<Event>>) {
+        if !self
+            .shared
+            .graph_state_dirty
+            .swap(false, std::sync::atomic::Ordering::AcqRel)
+        {
+            return;
+        }
+        if let Some(tx) = event_tx {
+            let _ = tx.send(Event::GraphStateChanged);
+        }
+    }
+
+    fn flush_graph_loop_advanced(&self, event_tx: Option<&mpsc::UnboundedSender<Event>>) {
+        let pending = match self.shared.graph_loop_advance_pending.lock() {
+            Ok(mut g) => g.take(),
+            Err(_) => None,
+        };
+        let Some(adv) = pending else {
+            return;
+        };
+        if let Some(tx) = event_tx {
+            let _ = tx.send(Event::GraphLoopAdvanced {
+                loop_id: adv.loop_id,
+                chapter: adv.chapter,
+                reset_node_ids: adv.reset_node_ids,
+            });
+        }
+    }
+
+    fn flush_graph_plan_committed(&self, event_tx: Option<&mpsc::UnboundedSender<Event>>) {
+        if !self
+            .shared
+            .graph_plan_committed
+            .swap(false, std::sync::atomic::Ordering::AcqRel)
+        {
+            return;
+        }
+        if let Some(tx) = event_tx {
+            // UI opens Graph on GraphPlanCommitted; side-effects reload HITL/loops once.
+            let _ = tx.send(Event::GraphPlanCommitted);
+        }
     }
 
     fn post_tool_hook_task(

@@ -31,6 +31,14 @@ pub struct EngineStatus {
     pub has_interruptible_tool_in_progress: bool,
 }
 
+/// Queued Book Loop advance (from graph tools) awaiting flush to UI events.
+#[derive(Debug, Clone)]
+pub struct GraphLoopAdvancePending {
+    pub loop_id: String,
+    pub chapter: u32,
+    pub reset_node_ids: Vec<String>,
+}
+
 #[derive(Clone)]
 pub struct EngineConfig {
     pub project_root: PathBuf,
@@ -55,6 +63,14 @@ pub struct EngineShared {
     pub read_file_cache: Arc<DashMap<PathBuf, ReadCacheEntry>>,
     /// Paths touched since last SQLite flush (partial UPSERT batch).
     pub read_cache_dirty_paths: Arc<Mutex<HashSet<PathBuf>>>,
+    /// Set by tool-side graph hooks (demote); flushed to `Event::GraphStateChanged` after tool apply.
+    pub graph_state_dirty: Arc<std::sync::atomic::AtomicBool>,
+    /// Author-started turn while a graph node is focused → Write/Edit marks `human_intervened`.
+    pub author_turn_graph_intervention: Arc<std::sync::atomic::AtomicBool>,
+    /// Set when GraphApplyTemplate / GraphCommitPlan succeeds; flushed like graph_state_dirty.
+    pub graph_plan_committed: Arc<std::sync::atomic::AtomicBool>,
+    /// Pending Book Loop advance from graph tools; flushed to `Event::GraphLoopAdvanced`.
+    pub graph_loop_advance_pending: Arc<std::sync::Mutex<Option<GraphLoopAdvancePending>>>,
     pub file_op_locks: Arc<DashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>,
     pub subagent_queue: SubagentWorkQueue,
     pub session_llm: SessionLlm,
@@ -191,6 +207,10 @@ impl AgentEngine {
 
     pub fn session_id(&self) -> &str {
         &self.shared.session.id
+    }
+
+    pub fn project_root(&self) -> &std::path::Path {
+        &self.shared.session.project_root
     }
 
     pub fn list_session_todos(&self) -> Vec<novel_state::SessionTodo> {

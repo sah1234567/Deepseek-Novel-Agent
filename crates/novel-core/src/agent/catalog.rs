@@ -26,8 +26,10 @@ pub struct ForkAgentCatalogEntry {
     pub max_react_loops: u32,
     /// Suggested tools in fork task prompt (not the LLM API tool filter).
     pub suggested_tools: &'static [&'static str],
-    /// When `prompt/agents/*.md` is missing at build time.
+    /// Fallback when `skills/{skill_id}/SKILL.md` (or GP thin shell) cannot be loaded.
     pub fallback_prompt: &'static str,
+    /// Audit agents: `skills/{id}/SKILL.md`. `None` = built-in thin shell (`prompt/agents/general_purpose.md`).
+    pub skill_id: Option<&'static str>,
     /// Append to docs tools column (e.g. read-only note).
     pub tools_doc_suffix: &'static str,
     /// When true, docs note that `settings.agent.knowledge_auditor_max_react_loops` overrides default.
@@ -98,6 +100,7 @@ pub const FORK_AGENT_CATALOG: &[ForkAgentCatalogEntry] = &[
         max_react_loops: PLAN_AUDITOR_MAX_REACT_LOOPS,
         suggested_tools: PLAN_AUDITOR_TOOLS,
         fallback_prompt: "你是细纲计划审计 Agent。只读检查大纲对齐、伏笔密度、因果闭合、人物轮换、字数分配、登记完整性，输出自然语言报告与「接下来」指引。",
+        skill_id: Some("audit-plan"),
         tools_doc_suffix: "（只读）",
         loops_overridable_by_settings: false,
     },
@@ -109,6 +112,7 @@ pub const FORK_AGENT_CATALOG: &[ForkAgentCatalogEntry] = &[
         max_react_loops: KNOWLEDGE_AUDITOR_MAX_REACT_LOOPS_DEFAULT,
         suggested_tools: KNOWLEDGE_AUDITOR_TOOLS,
         fallback_prompt: "你是知识库审计 Agent。只读检查正文执行忠实度与收尾完整性，输出自然语言报告与「接下来」指引。",
+        skill_id: Some("audit-knowledge"),
         tools_doc_suffix: "（只读）",
         loops_overridable_by_settings: true,
     },
@@ -120,6 +124,7 @@ pub const FORK_AGENT_CATALOG: &[ForkAgentCatalogEntry] = &[
         max_react_loops: CHAPTER_CRAFT_ANALYZER_MAX_REACT_LOOPS,
         suggested_tools: CHAPTER_CRAFT_TOOLS,
         fallback_prompt: "你是章节文笔分析 Agent。分析对话、节奏、情感、设定一致性，输出自然语言报告。禁止 fork 与 JSON。",
+        skill_id: Some("audit-craft"),
         tools_doc_suffix: "",
         loops_overridable_by_settings: false,
     },
@@ -131,6 +136,7 @@ pub const FORK_AGENT_CATALOG: &[ForkAgentCatalogEntry] = &[
         max_react_loops: GENERAL_PURPOSE_MAX_REACT_LOOPS,
         suggested_tools: GENERAL_PURPOSE_TOOLS,
         fallback_prompt: "你是只读通用子 Agent。严格按下方自定义任务执行；结论写在返回正文中。Write/Edit 被门控拒绝。禁止 fork。",
+        skill_id: None,
         tools_doc_suffix: "",
         loops_overridable_by_settings: false,
     },
@@ -162,17 +168,21 @@ pub fn fallback_prompt(agent_type: AgentType) -> &'static str {
     catalog_entry(agent_type).fallback_prompt
 }
 
+/// Skill id for audit fork agents (`skills/{id}/SKILL.md`); `None` for GP / MemoryExtractor.
+pub fn audit_skill_id(agent_type: AgentType) -> Option<&'static str> {
+    match agent_type {
+        AgentType::MemoryExtractor => None,
+        other => catalog_entry(other).skill_id,
+    }
+}
+
+/// Built-in thin shell only for GeneralPurpose. Audit agents load `skills/audit-*` at runtime.
 pub fn system_prompt(agent_type: AgentType) -> &'static str {
     match agent_type {
-        AgentType::PlanAuditor => include_str!("../../../../prompt/agents/plan-auditor.md"),
-        AgentType::KnowledgeAuditor => {
-            include_str!("../../../../prompt/agents/knowledge-auditor.md")
-        }
-        AgentType::ChapterCraftAnalyzer => {
-            include_str!("../../../../prompt/agents/chapter-craft-analyzer.md")
-        }
         AgentType::GeneralPurpose => include_str!("../../../../prompt/agents/general_purpose.md"),
-        AgentType::MemoryExtractor => "", // prompt lives in prompt/memory/extraction-task.md
+        // PlanAuditor / KnowledgeAuditor / ChapterCraftAnalyzer: body lives in skills/audit-*.
+        // MemoryExtractor: prompt/memory/extraction-task.md via task pass-through.
+        _ => "",
     }
 }
 
@@ -210,6 +220,7 @@ impl ForkAgentCatalogEntry {
             agent_type: self.agent_type,
             name: self.slug.into(),
             when_to_use: self.when_to_use.into(),
+            // Audit prompts are injected into the fork task from skills/; not a system role blob.
             system_prompt: system_prompt(self.agent_type).into(),
             max_react_loops: self.max_react_loops,
             tools: self.suggested_tools.iter().map(|t| (*t).into()).collect(),

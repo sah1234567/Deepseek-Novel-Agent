@@ -40,6 +40,15 @@ pub(crate) fn subagent_fork_tool_context(shared: &crate::EngineShared) -> ToolCo
         skills_dir: Some(shared.agent_skills_dir.clone()),
         global_api_config_path: Some(shared.global_config_path.clone()),
         on_read_cache_path_touched: None,
+        on_graph_state_changed: Some({
+            let flag = Arc::clone(&shared.graph_state_dirty);
+            Arc::new(move || {
+                flag.store(true, std::sync::atomic::Ordering::Release);
+            })
+        }),
+        mark_graph_intervention_on_write: false,
+        on_graph_plan_committed: None,
+        on_graph_loop_advanced: None,
         memory_fork_mode: false,
     }
 }

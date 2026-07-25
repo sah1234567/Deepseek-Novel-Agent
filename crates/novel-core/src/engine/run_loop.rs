@@ -62,8 +62,48 @@ impl AgentEngine {
             on_read_cache_path_touched: Some(crate::read_cache::sync::read_cache_touch_callback(
                 &self.shared.read_cache_dirty_paths,
             )),
+            on_graph_state_changed: Some({
+                let flag = Arc::clone(&self.shared.graph_state_dirty);
+                Arc::new(move || {
+                    flag.store(true, Ordering::Release);
+                })
+            }),
+            mark_graph_intervention_on_write: self
+                .shared
+                .author_turn_graph_intervention
+                .load(Ordering::Acquire),
+            on_graph_plan_committed: Some({
+                let flag = Arc::clone(&self.shared.graph_plan_committed);
+                Arc::new(move || {
+                    flag.store(true, Ordering::Release);
+                })
+            }),
+            on_graph_loop_advanced: Some({
+                let pending = Arc::clone(&self.shared.graph_loop_advance_pending);
+                Arc::new(move |loop_id, chapter, reset_node_ids| {
+                    if let Ok(mut guard) = pending.lock() {
+                        *guard = Some(super::types::GraphLoopAdvancePending {
+                            loop_id,
+                            chapter,
+                            reset_node_ids,
+                        });
+                    }
+                })
+            }),
             memory_fork_mode: false,
         }
+    }
+
+    /// If a graph node is focused, author Writes in this turn will set `human_intervened`.
+    pub(crate) fn arm_graph_intervention_for_author_turn(&self) {
+        let armed = novel_graph::GraphTracker::load(&self.shared.session.project_root)
+            .ok()
+            .flatten()
+            .and_then(|t| t.state.focused_node_id)
+            .is_some();
+        self.shared
+            .author_turn_graph_intervention
+            .store(armed, Ordering::Release);
     }
 
     // ── Sub-agent management (used by turn/loop/inner_turn.rs) ──

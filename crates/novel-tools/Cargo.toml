@@ -8,6 +8,7 @@ async-trait = { workspace = true }
 dashmap = "6"
 novel-config = { path = "../novel-config" }
 novel-deepseek = { path = "../novel-deepseek" }
+novel-graph = { path = "../novel-graph" }
 novel-knowledge = { path = "../novel-knowledge" }
 novel-memory = { path = "../novel-memory" }
 novel-skills = { path = "../novel-skills" }
