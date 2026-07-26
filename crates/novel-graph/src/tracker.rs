@@ -3,8 +3,8 @@
 use crate::error::{GraphError, GraphResult};
 use crate::template::render_template;
 use crate::types::{
-    ArtifactRole, FileTouch, GraphLoopRuntime, GraphNodeRuntime, GraphSettings, GraphState,
-    LoopPhase, NodeHandoff, NodeStatus, OnReject, PlanGraph, PlanNode,
+    ArtifactRole, CounterOp, FileTouch, GraphLoopRuntime, GraphNodeRuntime, GraphSettings,
+    GraphState, LoopPhase, NodeHandoff, NodeStatus, OnReject, PlanGraph, PlanNode, Until,
 };
 use chrono::Utc;
 use serde_json::json;
@@ -25,7 +25,7 @@ impl GraphTracker {
                 enforce_gates: plan.enforce_gates,
                 max_parallel_nodes: plan.max_parallel_nodes,
                 auto_start_ready: plan.auto_start_ready,
-                target_chapters: plan.target_chapters,
+                settings: plan.settings.clone(),
             },
             ..GraphState::default()
         };
@@ -76,7 +76,7 @@ impl GraphTracker {
                 enforce_gates: plan.enforce_gates,
                 max_parallel_nodes: plan.max_parallel_nodes,
                 auto_start_ready: plan.auto_start_ready,
-                target_chapters: plan.target_chapters,
+                settings: plan.settings.clone(),
             };
         }
         for n in &plan.nodes {
@@ -219,7 +219,11 @@ impl GraphTracker {
             ));
         }
         let effective = self.render_effective_spec(node_id)?;
-        let rt = self.state.nodes.get_mut(node_id).expect("checked");
+        let rt = self
+            .state
+            .nodes
+            .get_mut(node_id)
+            .ok_or_else(|| GraphError::NodeNotFound(node_id.into()))?;
         rt.status = NodeStatus::Running;
         rt.session_id = session_id;
         rt.effective_spec = Some(effective);
@@ -434,17 +438,17 @@ impl GraphTracker {
             achieved_at: Some(Utc::now().to_rfc3339()),
         };
         crate::persist::save_handoff(work_root, &handoff)?;
-        // Archive per-chapter copy so history survives loop-advance overwrites.
-        let current_chapter = self
+        // Archive snapshot copy so history survives loop-advance overwrites.
+        let snapshot_key = self
             .state
             .nodes
             .get(node_id)
             .and_then(|r| r.loop_id.as_ref())
             .and_then(|lid| self.state.loops.get(lid))
-            .map(|l| l.cursor.chapter);
-        if let Some(ch) = current_chapter {
-            if let Err(e) = crate::persist::save_handoff_chapter(work_root, &handoff, ch) {
-                tracing::warn!(error = %e, node_id, chapter = ch, "save_handoff_chapter failed");
+            .map(|l| snapshot_key_from_cursor(&l.cursor));
+        if let Some(ref key) = snapshot_key {
+            if let Err(e) = crate::persist::save_handoff_snapshot(work_root, &handoff, key) {
+                tracing::warn!(error = %e, node_id, snapshot_key = key, "save_handoff_snapshot failed");
             }
         }
         crate::persist::append_jsonl(
@@ -462,7 +466,11 @@ impl GraphTracker {
             .get(node_id)
             .and_then(|r| r.loop_id.clone());
         {
-            let rt = self.state.nodes.get_mut(node_id).expect("exists");
+            let rt = self
+                .state
+                .nodes
+                .get_mut(node_id)
+                .ok_or_else(|| GraphError::NodeNotFound(node_id.into()))?;
             rt.status = NodeStatus::Achieved;
             rt.handoff = Some(handoff);
             rt.session_id = None;
@@ -504,15 +512,9 @@ impl GraphTracker {
         if rt.phase == LoopPhase::Paused {
             return Ok(None);
         }
-        let target = self
-            .state
-            .settings
-            .target_chapters
-            .or(self.plan.target_chapters)
-            .or(lp_plan.until.value)
-            .unwrap_or(u32::MAX);
-        let next_chapter = rt.cursor.chapter + 1;
-        if next_chapter > target {
+
+        // Evaluate termination condition.
+        if evaluate_until(&lp_plan.until, &rt.cursor, &self.state.settings.settings) {
             if let Some(l) = self.state.loops.get_mut(loop_id) {
                 l.phase = LoopPhase::Completed;
                 l.active_station_id = None;
@@ -523,16 +525,46 @@ impl GraphTracker {
             )?;
             return Ok(None);
         }
-        // advance
+
+        // Advance: apply AdvanceRule to cursor.
         let now = Utc::now().to_rfc3339();
+        let advance_rule = lp_plan.advance.clone();
+        let snapshot_key;
         {
-            let l = self.state.loops.get_mut(loop_id).expect("exists");
+            let l = self
+                .state
+                .loops
+                .get_mut(loop_id)
+                .ok_or_else(|| GraphError::LoopNotFound(loop_id.into()))?;
             l.phase = LoopPhase::Advancing;
-            l.cursor.chapter = next_chapter;
-            l.cursor.round += 1;
+
+            // Primary increment.
+            let cur = l
+                .cursor
+                .counters
+                .get(&advance_rule.increment)
+                .copied()
+                .unwrap_or(0);
+            l.cursor
+                .counters
+                .insert(advance_rule.increment.clone(), cur + advance_rule.step);
+
+            // Side effects.
+            for op in &advance_rule.side_effects {
+                apply_counter_op(&mut l.cursor.counters, op);
+            }
+
+            snapshot_key = snapshot_key_from_cursor(&l.cursor);
             l.last_advance_at = Some(now.clone());
             l.active_station_id = Some(lp_plan.entry.clone());
         }
+        let counters_snapshot = self
+            .state
+            .loops
+            .get(loop_id)
+            .map(|l| l.cursor.counters.clone())
+            .unwrap_or_default();
+
         for sid in &lp_plan.on_advance.reopen {
             if let Some(n) = self.state.nodes.get_mut(sid) {
                 n.status = NodeStatus::Waiting;
@@ -547,12 +579,11 @@ impl GraphTracker {
         if !lp_plan.on_advance.preserve_canon_files {
             tracing::warn!(
                 loop_id,
-                "on_advance.preserve_canon_files=false is ignored; Book Loop never deletes world_state_board files"
+                "on_advance.preserve_canon_files=false is ignored; Loop never deletes world_state_board files"
             );
         }
         self.recompute_ready();
-        // Only force entry Ready if its deps (that are outside the reopen set) are still Achieved.
-        // If a skeleton ancestor was cascade-demoted, entry stays Waiting to avoid bypassing deps.
+        // Only force entry Ready if its deps (outside the reopen set) are still Achieved.
         let deps_ok = self
             .node_plan(&lp_plan.entry)
             .map(|pn| {
@@ -571,10 +602,14 @@ impl GraphTracker {
             }
         }
         {
-            let l = self.state.loops.get_mut(loop_id).expect("exists");
+            let l = self
+                .state
+                .loops
+                .get_mut(loop_id)
+                .ok_or_else(|| GraphError::LoopNotFound(loop_id.into()))?;
             l.phase = LoopPhase::Running;
         }
-        // Chapter rolled — drop focus so next turn does not keep a reset station's NodeObjective.
+        // Cursor advanced — drop focus so next turn does not keep a reset station's NodeObjective.
         if self
             .state
             .focused_node_id
@@ -588,13 +623,15 @@ impl GraphTracker {
             &json!({
                 "event": "loop_advanced",
                 "loop_id": loop_id,
-                "chapter": next_chapter,
+                "snapshot_key": snapshot_key,
+                "counters": counters_snapshot,
                 "at": now,
             }),
         )?;
         Ok(Some(LoopAdvanceEvent {
             loop_id: loop_id.to_string(),
-            chapter: next_chapter,
+            snapshot_key,
+            counters: counters_snapshot,
             reset_node_ids: lp_plan.on_advance.reopen.clone(),
         }))
     }
@@ -624,18 +661,26 @@ impl GraphTracker {
         Ok(())
     }
 
-    pub fn set_loop_target(&mut self, loop_id: &str, target: u32) -> GraphResult<()> {
+    pub fn set_loop_setting(
+        &mut self,
+        loop_id: &str,
+        key: &str,
+        value: serde_json::Value,
+    ) -> GraphResult<()> {
         if !self.plan.loops.iter().any(|l| l.id == loop_id)
             && !self.state.loops.contains_key(loop_id)
         {
             return Err(GraphError::LoopNotFound(loop_id.into()));
         }
-        // Work-level target (all loops share settings.target_chapters).
-        self.state.settings.target_chapters = Some(target);
+        self.state.settings.settings.insert(key.into(), value);
         Ok(())
     }
 
-    pub fn set_loop_cursor(&mut self, loop_id: &str, chapter: u32) -> GraphResult<()> {
+    pub fn set_loop_cursor(
+        &mut self,
+        loop_id: &str,
+        counters: HashMap<String, i64>,
+    ) -> GraphResult<()> {
         // Demote all active loop stations so they re-render with the new cursor value.
         let stations: Vec<String> = self
             .plan
@@ -694,8 +739,7 @@ impl GraphTracker {
                 .loops
                 .get_mut(loop_id)
                 .ok_or_else(|| GraphError::LoopNotFound(loop_id.into()))?;
-            l.cursor.chapter = chapter;
-            l.cursor.round = chapter;
+            l.cursor.counters = counters;
         }
         Ok(())
     }
@@ -868,7 +912,7 @@ impl GraphTracker {
 }
 
 /// Clear per-iteration fields when a station is reset (loop advance / cursor / reopen).
-/// Always clears `human_intervened` so chapter N intervention does not leak to N+1.
+/// Always clears `human_intervened` so iteration N intervention does not leak to N+1.
 fn clear_iteration_runtime(rt: &mut GraphNodeRuntime, clear_session: bool) {
     if clear_session {
         rt.session_id = None;
@@ -883,6 +927,250 @@ fn clear_iteration_runtime(rt: &mut GraphNodeRuntime, clear_session: bool) {
 #[derive(Debug, Clone)]
 pub struct LoopAdvanceEvent {
     pub loop_id: String,
-    pub chapter: u32,
+    pub snapshot_key: String,
+    pub counters: HashMap<String, i64>,
     pub reset_node_ids: Vec<String>,
+}
+
+// ── Helper: evaluate Until condition ────────────────────────────────
+
+fn resolve_value(
+    value: &Option<i64>,
+    value_from: &Option<String>,
+    settings: &HashMap<String, serde_json::Value>,
+) -> Option<i64> {
+    if let Some(v) = *value {
+        return Some(v);
+    }
+    if let Some(ref path) = *value_from {
+        // Try direct key lookup in settings
+        if let Some(val) = settings.get(path.as_str()) {
+            return val.as_i64();
+        }
+        // Dotted path: "work_meta.settings.targetChapters" → use last segment
+        if let Some(last) = path.split('.').next_back() {
+            if let Some(val) = settings.get(last) {
+                return val.as_i64();
+            }
+        }
+    }
+    None
+}
+
+fn evaluate_until(
+    until: &Until,
+    cursor: &crate::types::Cursor,
+    settings: &HashMap<String, serde_json::Value>,
+) -> bool {
+    match until {
+        Until::CounterGt {
+            counter,
+            value,
+            value_from,
+        } => {
+            let threshold = match resolve_value(value, value_from, settings) {
+                Some(v) => v,
+                None => return false,
+            };
+            let cur = cursor.counters.get(counter).copied().unwrap_or(0);
+            cur > threshold
+        }
+        Until::CounterGe {
+            counter,
+            value,
+            value_from,
+        } => {
+            let threshold = match resolve_value(value, value_from, settings) {
+                Some(v) => v,
+                None => return false,
+            };
+            let cur = cursor.counters.get(counter).copied().unwrap_or(0);
+            cur >= threshold
+        }
+        Until::CounterLt {
+            counter,
+            value,
+            value_from,
+        } => {
+            let threshold = match resolve_value(value, value_from, settings) {
+                Some(v) => v,
+                None => return false,
+            };
+            let cur = cursor.counters.get(counter).copied().unwrap_or(0);
+            cur < threshold
+        }
+        Until::CounterEq {
+            counter,
+            value,
+            value_from,
+        } => {
+            let threshold = match resolve_value(value, value_from, settings) {
+                Some(v) => v,
+                None => return false,
+            };
+            let cur = cursor.counters.get(counter).copied().unwrap_or(0);
+            cur == threshold
+        }
+        Until::Manual => false,
+    }
+}
+
+fn apply_counter_op(counters: &mut HashMap<String, i64>, op: &CounterOp) {
+    match op {
+        CounterOp::Increment { counter, by } => {
+            let cur = counters.get(counter).copied().unwrap_or(0);
+            counters.insert(counter.clone(), cur + by);
+        }
+        CounterOp::Decrement { counter, by } => {
+            let cur = counters.get(counter).copied().unwrap_or(0);
+            counters.insert(counter.clone(), cur.saturating_sub(*by));
+        }
+        CounterOp::Set { counter, value } => {
+            counters.insert(counter.clone(), *value);
+        }
+        CounterOp::Reset { counter } => {
+            counters.insert(counter.clone(), 0);
+        }
+    }
+}
+
+/// Build a human-readable snapshot key from cursor counters.
+/// Sorts keys alphabetically for deterministic output.
+fn snapshot_key_from_cursor(cursor: &crate::types::Cursor) -> String {
+    let mut keys: Vec<&String> = cursor.counters.keys().collect();
+    keys.sort();
+    if let Some(key) = keys.first() {
+        let val = cursor.counters.get(*key).copied().unwrap_or(0);
+        format!("{key}={val}")
+    } else {
+        String::new()
+    }
+}
+
+#[cfg(test)]
+mod evaluate_until_tests {
+    //! Boundaries for evaluate_until / resolve_value:
+    //! - each Until variant (Gt/Ge/Lt/Eq/Manual)
+    //! - missing counter → treat as 0
+    //! - resolve: explicit value; settings direct key; dotted path last segment; unresolved → false
+
+    use super::{evaluate_until, resolve_value};
+    use crate::types::{Cursor, Until};
+    use std::collections::HashMap;
+
+    fn cursor(n: i64) -> Cursor {
+        let mut counters = HashMap::new();
+        counters.insert("n".into(), n);
+        Cursor {
+            counters,
+            tags: HashMap::new(),
+        }
+    }
+
+    fn settings(pairs: &[(&str, i64)]) -> HashMap<String, serde_json::Value> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).into(), serde_json::json!(*v)))
+            .collect()
+    }
+
+    #[test]
+    fn resolve_value_edges() {
+        let s = settings(&[("target", 10), ("targetChapters", 200)]);
+        assert_eq!(resolve_value(&Some(3), &None, &s), Some(3));
+        assert_eq!(resolve_value(&None, &Some("target".into()), &s), Some(10));
+        assert_eq!(
+            resolve_value(&None, &Some("work_meta.settings.targetChapters".into()), &s),
+            Some(200)
+        );
+        assert_eq!(resolve_value(&None, &Some("missing".into()), &s), None);
+        assert_eq!(resolve_value(&None, &None, &s), None);
+    }
+
+    #[test]
+    fn until_comparisons_and_manual() {
+        let s = settings(&[]);
+        assert!(!evaluate_until(
+            &Until::CounterGt {
+                counter: "n".into(),
+                value: Some(5),
+                value_from: None
+            },
+            &cursor(5),
+            &s
+        ));
+        assert!(evaluate_until(
+            &Until::CounterGt {
+                counter: "n".into(),
+                value: Some(5),
+                value_from: None
+            },
+            &cursor(6),
+            &s
+        ));
+        assert!(evaluate_until(
+            &Until::CounterGe {
+                counter: "n".into(),
+                value: Some(5),
+                value_from: None
+            },
+            &cursor(5),
+            &s
+        ));
+        assert!(evaluate_until(
+            &Until::CounterLt {
+                counter: "n".into(),
+                value: Some(5),
+                value_from: None
+            },
+            &cursor(4),
+            &s
+        ));
+        assert!(evaluate_until(
+            &Until::CounterEq {
+                counter: "n".into(),
+                value: Some(5),
+                value_from: None
+            },
+            &cursor(5),
+            &s
+        ));
+        assert!(!evaluate_until(&Until::Manual, &cursor(99), &s));
+        // missing counter → 0; unresolved threshold → false (all counter variants)
+        for until in [
+            Until::CounterGt {
+                counter: "ghost".into(),
+                value: None,
+                value_from: Some("nope".into()),
+            },
+            Until::CounterGe {
+                counter: "ghost".into(),
+                value: None,
+                value_from: Some("nope".into()),
+            },
+            Until::CounterLt {
+                counter: "ghost".into(),
+                value: None,
+                value_from: Some("nope".into()),
+            },
+            Until::CounterEq {
+                counter: "ghost".into(),
+                value: None,
+                value_from: Some("nope".into()),
+            },
+        ] {
+            assert!(!evaluate_until(&until, &cursor(9), &s));
+        }
+        // value_from from settings
+        let s = settings(&[("cap", 3)]);
+        assert!(evaluate_until(
+            &Until::CounterGe {
+                counter: "n".into(),
+                value: None,
+                value_from: Some("cap".into())
+            },
+            &cursor(3),
+            &s
+        ));
+    }
 }

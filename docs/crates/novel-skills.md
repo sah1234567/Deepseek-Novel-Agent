@@ -51,7 +51,7 @@ Skill 统一维护在 agent 根 `skills/` 目录（新作品脚手架不再创�
 | `audit-plan` / `audit-knowledge` / `audit-craft` | Graph 审计主路径 SSOT（`skills/audit-*/SKILL.md` 全文；Fork 可选加载同一份） |
 | `research` | 调研节点 / GeneralPurpose 调研映射 |
 
-顺序由 **plan-graph deps / Book Loop** 决定；Workflow body 末尾含 **`## 本阶段完成后`**。`system.md` §3.1 描述 Graph-Primary（编排 SSOT = plan-graph，非全局 Skill 状态机）。frontmatter 可选 `skill_kind: workflow`。
+顺序由 **plan-graph deps / Loop** 决定；Workflow body 末尾含 **`## 本阶段完成后`**。`prompt/orchestrator.md` 描述 Graph-Primary 编排（编排 SSOT = plan-graph，非全局 Skill 状态机）。frontmatter 可选 `skill_kind: workflow`。
 
 ### 1.6 内置流派
 
@@ -85,7 +85,7 @@ Skill 统一维护在 agent 根 `skills/` 目录（新作品脚手架不再创�
 | Workflow Skill body | 步骤 SOP + **`## 本阶段完成后`**（主 Agent 经 InvokeSkill 读到） |
 | Subagent prompt | 角色约束 + 工作流程 + **`## 最终输出（必须写进返回正文）`** + **`## 「接下来」写作参考`** |
 | Subagent 返回报告 | Checker/Analyzer **必须**在报告末尾输出 **`## 接下来（主 Agent 必读）`**（主 Agent 读不到 prompt 文件） |
-| `system.md` | Graph-Primary：plan-graph 编排 + 节点内 InvokeSkill；ForkSubAgent 非主审计路径；不写「引擎将自动…」 |
+| `prompt/orchestrator.md` | Graph-Primary：plan-graph 编排 + 节点内 InvokeSkill；ForkSubAgent 非主审计路径；不写「引擎将自动…」 |
 | 禁止 | prompt 中写「引擎将自动 Fork…」「PermissionDenied 会拦截 chapters…」——改写成「你应当…」 |
 
 **语气：** 对模型用「应」「建议」「下一步」；避免 JSON / 结构化交接块供引擎解析。

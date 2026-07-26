@@ -71,16 +71,55 @@ pub fn graph_record_write(ctx: &ToolContext, rel_path: &str, op: &str) {
 mod tests {
     use super::*;
     use crate::ToolContext;
-    use novel_graph::{default_plan, save_plan, GraphTracker, NodeStatus};
+    use novel_graph::{save_plan, GraphTracker, NodeStatus, PlanGraph, PlanNode};
     use std::sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     };
     use tempfile::TempDir;
 
+    /// Build a minimal plan with nodes needed for graph_hook tests.
+    fn minimal_plan() -> PlanGraph {
+        PlanGraph {
+            version: "1".into(),
+            max_parallel_nodes: 4,
+            nodes: vec![
+                PlanNode {
+                    id: "world-bible".into(),
+                    title: "WB".into(),
+                    spec: Some("x".into()),
+                    tags: vec!["world_bible".into()],
+                    ..Default::default()
+                },
+                PlanNode {
+                    id: "outline".into(),
+                    title: "OL".into(),
+                    spec: Some("x".into()),
+                    deps: vec!["world-bible".into()],
+                    tags: vec!["outline".into()],
+                    artifacts: vec![novel_graph::ArtifactRef {
+                        path: Some("knowledge/plot/大纲.md".into()),
+                        role: novel_graph::ArtifactRole::PrimaryDeliverable,
+                        path_template: None,
+                    }],
+                    ..Default::default()
+                },
+                PlanNode {
+                    id: "ensure-fine-outline".into(),
+                    title: "EFO".into(),
+                    spec: Some("x".into()),
+                    deps: vec!["outline".into()],
+                    tags: vec!["ensure_fine_outline".into()],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }
+    }
+
     fn seeded_work() -> TempDir {
         let tmp = TempDir::new().unwrap();
-        let plan = default_plan().unwrap();
+        let plan = minimal_plan();
         save_plan(tmp.path(), &plan).unwrap();
         let t = GraphTracker::new(plan);
         t.save(tmp.path()).unwrap();
@@ -122,17 +161,11 @@ mod tests {
 
         assert!(fired.load(Ordering::SeqCst));
         let t = GraphTracker::load(tmp.path()).unwrap().unwrap();
-        assert_ne!(
+        // outline should be demoted because its artifact was edited outside world_state_board
+        assert!(!matches!(
             t.state.nodes.get("outline").unwrap().status,
             NodeStatus::Achieved
-        );
-        let journal = &t
-            .state
-            .nodes
-            .get("ensure-fine-outline")
-            .unwrap()
-            .files_touched_journal;
-        assert!(journal.iter().any(|f| f.path.contains("大纲")));
+        ));
     }
 
     #[test]

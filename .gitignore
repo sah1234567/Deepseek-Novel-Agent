@@ -4,6 +4,9 @@
 lcov.info
 **/lcov.info
 
+# Local CI / agent scratch logs (not part of the product)
+.ci-*.txt
+
 # ── Node / 前端 ──────────────────────────────────────────────
 ui/node_modules/
 ui/dist/

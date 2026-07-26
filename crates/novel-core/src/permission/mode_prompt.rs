@@ -1,6 +1,6 @@
 //! Mid-session permission toggles: prepend enter/exit copy to the **next** user message
-//! (single `role=user` row). Session boundary Unattended still uses `autonomous-writing.md`
-//! in system — see `SystemPromptBuilder`.
+//! (single `role=user` row). Loads autonomous-writing rules from the skill file for
+//! mid-session injection; new sessions use InvokeSkill hint in system prompt.
 
 pub const PERMISSION_MODE_ENTER_PREFIX: &str = "[权限模式: 无人值守]";
 pub const PERMISSION_MODE_EXIT_PREFIX: &str = "[权限模式: 已退出无人值守]";
@@ -8,15 +8,33 @@ pub const PERMISSION_MODE_EXIT_PREFIX: &str = "[权限模式: 已退出无人值
 /// Separator between injected prefix block and author content in a merged user message.
 pub const USER_CONTENT_SEPARATOR: &str = "\n\n---\n\n";
 
-/// Substring from `prompt/autonomous-writing.md` — detect rules already in system.
+/// Substring from autonomous-writing skill — detect rules already in system.
 pub const AUTONOMOUS_MODE_MARKER: &str = "自主连续写作模式";
 
 const PERMISSION_MODE_ENTER_HEADER: &str =
     include_str!("../../../../prompt/permission-mode-enter.md");
 const PERMISSION_MODE_EXIT_BODY: &str = include_str!("../../../../prompt/permission-mode-exit.md");
+const AUTONOMOUS_WRITING_SKILL_RAW: &str =
+    include_str!("../../../../skills/autonomous-writing/SKILL.md");
+
+/// Drop leading YAML frontmatter (`---` … `---`) from a skill markdown body.
+fn strip_yaml_frontmatter(raw: &str) -> &str {
+    let trimmed = raw.trim_start();
+    if !trimmed.starts_with("---") {
+        return raw;
+    }
+    let after_open = &trimmed[3..];
+    let Some(close_rel) = after_open.find("\n---") else {
+        return raw;
+    };
+    let after_close = &after_open[close_rel + 4..];
+    after_close
+        .trim_start_matches('\r')
+        .trim_start_matches('\n')
+}
 
 pub(crate) fn autonomous_writing_body() -> &'static str {
-    include_str!("../../../../prompt/autonomous-writing.md")
+    strip_yaml_frontmatter(AUTONOMOUS_WRITING_SKILL_RAW)
 }
 
 pub fn system_contains_autonomous(system_content: &str) -> bool {
@@ -82,6 +100,22 @@ mod tests {
         assert!(prefix.contains(AUTONOMOUS_MODE_MARKER));
         assert!(prefix.contains("审计降频"));
         assert!(!prefix.contains(PERMISSION_MODE_EXIT_PREFIX));
+        assert!(
+            !prefix.contains("name: autonomous-writing"),
+            "frontmatter must be stripped"
+        );
+        assert!(
+            !prefix.contains("skill_kind:"),
+            "frontmatter must be stripped"
+        );
+    }
+
+    #[test]
+    fn autonomous_body_strips_yaml_frontmatter() {
+        let body = autonomous_writing_body();
+        assert!(body.starts_with("# 自主连续写作模式") || body.contains("# 自主连续写作模式"));
+        assert!(!body.contains("allowed-tools:"));
+        assert!(!body.starts_with("---"));
     }
 
     #[test]

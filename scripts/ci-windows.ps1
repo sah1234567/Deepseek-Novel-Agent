@@ -6,9 +6,15 @@
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot\..
 
-$env:CARGO_BUILD_JOBS = "1"
+# GHA sets CARGO_BUILD_JOBS=1 for runner RAM. Local: leave unset → use all CPU cores.
+# Force single-job locally only if you set it yourself: $env:CARGO_BUILD_JOBS = "1"
 $env:CARGO_TERM_COLOR = "always"
 $env:RUST_BACKTRACE = "1"
+if ($env:CARGO_BUILD_JOBS) {
+    Write-Host "=== CARGO_BUILD_JOBS=$($env:CARGO_BUILD_JOBS) ===" -ForegroundColor DarkGray
+} else {
+    Write-Host "=== CARGO_BUILD_JOBS=unset (cargo default parallelism) ===" -ForegroundColor DarkGray
+}
 
 function Resolve-Bash {
     $gitBashCandidates = @(
@@ -42,8 +48,16 @@ Then re-run: .\scripts\ci-windows.ps1
 }
 
 Write-Host "=== ci-windows: running scripts/ci-windows-gate.sh via $bashPath ===" -ForegroundColor Cyan
-& $bashPath "$PSScriptRoot/ci-windows-gate.sh"
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+# Native stderr (pnpm/cargo progress) must not trip Stop; only $LASTEXITCODE matters.
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+try {
+    & $bashPath "$PSScriptRoot/ci-windows-gate.sh"
+    $code = $LASTEXITCODE
+} finally {
+    $ErrorActionPreference = $prevEap
+}
+if ($code -ne 0) { exit $code }
 
 Write-Host ""
 Write-Host "=== ci-windows passed ===" -ForegroundColor Green

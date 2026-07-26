@@ -8,9 +8,14 @@
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot\..
 
-$env:CARGO_BUILD_JOBS = "1"
+# GHA sets CARGO_BUILD_JOBS=1; local leaves unset for full CPU. Override: $env:CARGO_BUILD_JOBS = "1"
 $env:CARGO_TERM_COLOR = "always"
 $env:RUST_BACKTRACE = "1"
+if ($env:CARGO_BUILD_JOBS) {
+    Write-Host "=== CARGO_BUILD_JOBS=$($env:CARGO_BUILD_JOBS) ===" -ForegroundColor DarkGray
+} else {
+    Write-Host "=== CARGO_BUILD_JOBS=unset (cargo default parallelism) ===" -ForegroundColor DarkGray
+}
 
 function Resolve-Bash {
     $gitBashCandidates = @(

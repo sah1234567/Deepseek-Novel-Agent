@@ -56,19 +56,28 @@ pub(crate) fn apply_corkboard_filters(
 
 fn scene_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r"(?m)^###\s*场景\s*(\d+)[:：]\s*(.+)$").expect("valid scene regex")
-    })
+    RE.get_or_init(
+        || match Regex::new(r"(?m)^###\s*场景\s*(\d+)[:：]\s*(.+)$") {
+            Ok(re) => re,
+            Err(e) => panic!("scene regex: {e}"),
+        },
+    )
 }
 
 fn word_count_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"(\d+)\s*字").expect("valid word count regex"))
+    RE.get_or_init(|| match Regex::new(r"(\d+)\s*字") {
+        Ok(re) => re,
+        Err(e) => panic!("word count regex: {e}"),
+    })
 }
 
 fn foreshadow_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"\b(F\d+[a-z]?)\b").expect("valid foreshadow ref regex"))
+    RE.get_or_init(|| match Regex::new(r"\b(F\d+[a-z]?)\b") {
+        Ok(re) => re,
+        Err(e) => panic!("foreshadow regex: {e}"),
+    })
 }
 
 fn parse_scene_sections(content: &str, chapter_num: u32) -> Vec<CorkboardCard> {
@@ -85,7 +94,7 @@ fn parse_scene_sections(content: &str, chapter_num: u32) -> Vec<CorkboardCard> {
             .map(|m| m.as_str().trim())
             .unwrap_or("")
             .to_string();
-        let line_idx = content[..cap.get(0).expect("capture group 0").start()]
+        let line_idx = content[..cap.get(0).map(|m| m.start()).unwrap_or(0)]
             .lines()
             .count();
         scene_starts.push((num, title, line_idx));

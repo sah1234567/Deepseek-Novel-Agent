@@ -30,7 +30,7 @@
 **11 个 builtin：** Read, Write, Edit, **Tail**, Grep, Glob, Bash, WebSearch, InvokeSkill, TodoWrite, AskUserQuestion
 
 **Novel 专属（含 Graph）：**
-CharacterSearch, PlotGraph, PlotGrid, ForeshadowTracker, Stats, Corkboard, CharacterRotate, **ForkSubAgent**, ImpactAnalysis, KnowledgeDerive, **AuditStatusQuery**, **AuditStatusUpdate**, TrackingQuery, RelationQuery, **GraphQuery**, **GraphAdvance**, **GraphSubmitForApproval**, **GraphMarkVerified**, **GraphReopen**, **GraphApplyTemplate**, **GraphCommitPlan**
+CharacterSearch, PlotGraph, PlotGrid, ForeshadowTracker, Stats, Corkboard, CharacterRotate, **ForkSubAgent**, ImpactAnalysis, KnowledgeDerive, **AuditStatusQuery**, **AuditStatusUpdate**, TrackingQuery, RelationQuery, **PlanBuilder**, **GraphQuery**, **GraphAdvance**, **GraphSubmitForApproval**, **GraphMarkVerified**, **GraphReopen**, GraphApplyTemplate（已废弃）, **GraphCommitPlan**
 
 **AuditStatusQuery / AuditStatusUpdate：** 读写 `knowledge/meta/audit-status.md`（Graph 审计台账证据）。
 

@@ -1,4 +1,4 @@
-use crate::hooks::main_tool_schemas;
+use crate::hooks::{resolve_tool_visibility, tool_schemas_for_visibility};
 use crate::message::{assistant_from_completion, to_llm_messages_traced, RepairTraceContext};
 use crate::subagent::{clear_subagent_queue, drain_subagent_jobs};
 use crate::turn::llm_stream::LlmCallOutcome;
@@ -155,7 +155,12 @@ impl AgentEngine {
                 return Ok(reason);
             }
 
-            let schemas = main_tool_schemas(&self.shared.registry);
+            // Tool layering (plan 2.1): Interview / Orchestrator / NodeExecution by plan+focus.
+            let visibility = resolve_tool_visibility(
+                &self.shared.session.project_root,
+                self.effective_interaction_mode(),
+            );
+            let schemas = tool_schemas_for_visibility(&self.shared.registry, visibility);
 
             let llm_msgs = to_llm_messages_traced(
                 &self.messages,
@@ -168,6 +173,7 @@ impl AgentEngine {
             );
             tracing::debug!(
                 inner_turn = turn_ctx.inner_turn,
+                ?visibility,
                 message_count = self.messages.len(),
                 llm_message_count = llm_msgs.len(),
                 tool_schema_count = schemas.len(),

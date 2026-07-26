@@ -23,6 +23,7 @@ on:
       - 'scripts/ci-nextest-env*'
       - 'scripts/ci-lcov*'
       - 'scripts/ci-crap*'
+      - 'scripts/ci-rust*'
       - 'scripts/ci-require-toolchain*'
       - '.github/workflows/ci-rust.yml'
   pull_request:

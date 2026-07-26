@@ -21,6 +21,8 @@ use serde::Serialize;
 pub struct EngineStatus {
     pub session_id: String,
     pub permission_mode: String,
+    /// `orchestrate` | `work` (effective: work requires focused node).
+    pub interaction_mode: String,
     /// True while `drain_subagent_jobs` is active (PostToolUse hook batch and/or tool forks).
     pub hook_running: bool,
     pub pending_user_question: bool,
@@ -31,11 +33,12 @@ pub struct EngineStatus {
     pub has_interruptible_tool_in_progress: bool,
 }
 
-/// Queued Book Loop advance (from graph tools) awaiting flush to UI events.
+/// Queued Loop advance (from graph tools) awaiting flush to UI events.
 #[derive(Debug, Clone)]
 pub struct GraphLoopAdvancePending {
     pub loop_id: String,
-    pub chapter: u32,
+    pub snapshot_key: String,
+    pub counters: std::collections::HashMap<String, i64>,
     pub reset_node_ids: Vec<String>,
 }
 
@@ -60,6 +63,8 @@ pub struct EngineShared {
     pub context_manager: ContextManager,
     pub abort_controller: Arc<AbortController>,
     pub permission_mode_override: Arc<Mutex<PermissionMode>>,
+    /// Author-facing orchestrate vs work-inside-node (orthogonal to permission mode).
+    pub interaction_mode: Arc<Mutex<crate::InteractionMode>>,
     pub read_file_cache: Arc<DashMap<PathBuf, ReadCacheEntry>>,
     /// Paths touched since last SQLite flush (partial UPSERT batch).
     pub read_cache_dirty_paths: Arc<Mutex<HashSet<PathBuf>>>,
@@ -67,10 +72,12 @@ pub struct EngineShared {
     pub graph_state_dirty: Arc<std::sync::atomic::AtomicBool>,
     /// Author-started turn while a graph node is focused → Write/Edit marks `human_intervened`.
     pub author_turn_graph_intervention: Arc<std::sync::atomic::AtomicBool>,
-    /// Set when GraphApplyTemplate / GraphCommitPlan succeeds; flushed like graph_state_dirty.
+    /// Set when a formal plan is committed (PlanBuilder.commit / GraphCommitPlan); flushed like graph_state_dirty.
     pub graph_plan_committed: Arc<std::sync::atomic::AtomicBool>,
-    /// Pending Book Loop advance from graph tools; flushed to `Event::GraphLoopAdvanced`.
+    /// Pending Loop advance from graph tools; flushed to `Event::GraphLoopAdvanced`.
     pub graph_loop_advance_pending: Arc<std::sync::Mutex<Option<GraphLoopAdvancePending>>>,
+    /// PlanBuilder draft shared across tool calls in this session.
+    pub plan_builder_draft: Arc<std::sync::Mutex<Option<novel_graph::PlanGraph>>>,
     pub file_op_locks: Arc<DashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>,
     pub subagent_queue: SubagentWorkQueue,
     pub session_llm: SessionLlm,

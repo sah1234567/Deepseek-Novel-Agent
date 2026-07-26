@@ -4,7 +4,10 @@ use std::sync::OnceLock;
 
 fn table_row_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"(?m)^\|[^\n]+\|$").expect("valid table row regex"))
+    RE.get_or_init(|| match Regex::new(r"(?m)^\|[^\n]+\|$") {
+        Ok(re) => re,
+        Err(e) => panic!("table row regex: {e}"),
+    })
 }
 
 pub trait TableRow {

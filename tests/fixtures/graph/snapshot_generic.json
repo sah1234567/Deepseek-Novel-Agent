@@ -1,0 +1,29 @@
+{
+  "planVersion": "1",
+  "hasPlan": true,
+  "enforceGates": true,
+  "nodes": [
+    {"id":"research","title":"文献调研","tags":["research"],"status":"achieved","cursorBadge":"section=1"},
+    {"id":"write-section","title":"撰写章节","tags":["writing"],"status":"running","loopId":"paper-body","cursorBadge":"section=3","effectiveSpec":"write section 3"},
+    {"id":"review","title":"同行评审","tags":["review"],"status":"waiting","loopId":"paper-body","cursorBadge":"section=3"}
+  ],
+  "edges": [
+    {"source":"research","target":"write-section","kind":"deps"},
+    {"source":"write-section","target":"review","kind":"deps"}
+  ],
+  "loops": [{
+    "loopId":"paper-body",
+    "stationIds":["write-section","review"],
+    "cursor":{"counters":{"section":3,"round":1},"tags":{}},
+    "settings":{"targetSections":10},
+    "phase":"running",
+    "activeStationId":"write-section",
+    "worldStateBoard":["knowledge/bibliography/"],
+    "entry":"write-section",
+    "advanceAfter":"review"
+  }],
+  "focusedNodeId":"write-section",
+  "runningNodeIds":["write-section"],
+  "hitl":[],
+  "loopSummaries":[{"loopId":"paper-body","cursorLabel":"section=3/10","phase":"running"}]
+}

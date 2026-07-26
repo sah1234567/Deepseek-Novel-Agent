@@ -12,8 +12,6 @@ export function useGraphState() {
   /** When set, node session header is shown above Chat. */
   const [sessionNodeId, setSessionNodeId] = useState<string | null>(null);
   const [graphPanelOpen, setGraphPanelOpen] = useState(false);
-  const [templatePreview, setTemplatePreview] = useState<string | null>(null);
-  const [templateBusy, setTemplateBusy] = useState(false);
   const [hitlModalOpen, setHitlModalOpen] = useState(false);
 
   const refresh = useCallback(async () => {
@@ -94,9 +92,15 @@ export function useGraphState() {
     [refresh],
   );
 
-  const backToChat = useCallback(() => {
+  const backToChat = useCallback(async () => {
     setSessionNodeId(null);
-  }, []);
+    try {
+      await invoke(IPC_COMMANDS.graphClearFocus);
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [refresh]);
 
   const start = useCallback(
     async (nodeId: string) => {
@@ -136,37 +140,6 @@ export function useGraphState() {
     return invoke<LoopHistoryRow[]>(IPC_COMMANDS.graphLoopListHistory, { loopId, limit });
   }, []);
 
-  const previewTemplate = useCallback(async () => {
-    try {
-      const raw = await invoke<string>(IPC_COMMANDS.graphPreviewTemplate);
-      setTemplatePreview(raw);
-      setError(null);
-    } catch (e) {
-      setError(String(e));
-    }
-  }, []);
-
-  const closeTemplatePreview = useCallback(() => {
-    setTemplatePreview(null);
-  }, []);
-
-  const applyTemplate = useCallback(
-    async (force = false) => {
-      setTemplateBusy(true);
-      try {
-        await invoke(IPC_COMMANDS.graphApplyTemplate, { force });
-        setTemplatePreview(null);
-        setGraphPanelOpen(true);
-        await refresh();
-      } catch (e) {
-        setError(String(e));
-      } finally {
-        setTemplateBusy(false);
-      }
-    },
-    [refresh],
-  );
-
   const dismissHitlModal = useCallback(() => {
     setHitlModalOpen(false);
   }, []);
@@ -194,11 +167,6 @@ export function useGraphState() {
     graphPanelOpen,
     openGraph,
     closeGraph,
-    templatePreview,
-    templateBusy,
-    previewTemplate,
-    closeTemplatePreview,
-    applyTemplate,
     showHitlModal,
     dismissHitlModal,
   };

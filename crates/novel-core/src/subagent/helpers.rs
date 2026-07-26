@@ -50,6 +50,7 @@ pub(crate) fn subagent_fork_tool_context(shared: &crate::EngineShared) -> ToolCo
         on_graph_plan_committed: None,
         on_graph_loop_advanced: None,
         memory_fork_mode: false,
+        plan_builder_draft: Arc::new(std::sync::Mutex::new(None)),
     }
 }
 

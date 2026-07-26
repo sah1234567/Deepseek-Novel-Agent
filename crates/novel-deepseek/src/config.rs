@@ -18,9 +18,10 @@ static EMBEDDED: OnceLock<DeepSeekEndpoints> = OnceLock::new();
 fn embedded() -> &'static DeepSeekEndpoints {
     EMBEDDED.get_or_init(|| {
         let raw = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/config.toml"));
-        toml::from_str::<DeepSeekConfigFile>(raw)
-            .expect("novel-deepseek/config.toml must parse")
-            .deepseek
+        match toml::from_str::<DeepSeekConfigFile>(raw) {
+            Ok(cfg) => cfg.deepseek,
+            Err(e) => panic!("novel-deepseek/config.toml must parse: {e}"),
+        }
     })
 }
 

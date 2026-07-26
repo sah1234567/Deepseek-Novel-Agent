@@ -188,7 +188,9 @@ describe("useTranscriptLoader tail compaction", () => {
     const dispatch = vi.fn<(event: TranscriptEvent) => void>();
     const loaderOptions = mockLoaderOptions(false);
     loaderOptions.isBottomAnchoredRef.current = true;
-    loaderOptions.contentUnderflowRef.current = true;
+    // Keep underflow false during bootstrap so only the tail window loads;
+    // otherwise bootstrap's post-load reconcile already fills older idles.
+    loaderOptions.contentUnderflowRef.current = false;
 
     const maxTurn = 8;
     fetchTranscriptLayout.mockResolvedValue({
@@ -208,6 +210,7 @@ describe("useTranscriptLoader tail compaction", () => {
     const fetchCallsAfterBootstrap = fetchActiveTurns.mock.calls.length;
     dispatch.mockClear();
 
+    loaderOptions.contentUnderflowRef.current = true;
     act(() => {
       result.current.scheduleReconcile();
     });

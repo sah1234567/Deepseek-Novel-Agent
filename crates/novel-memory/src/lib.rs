@@ -1,5 +1,6 @@
 #![deny(clippy::unwrap_used)]
 #![cfg_attr(test, allow(clippy::unwrap_used))]
+#![cfg_attr(test, allow(clippy::expect_used))]
 
 //! Memory crate: types, scanning, selection, extraction, prefetch, and fork
 //! guard — the single canonical home for all memory-related logic in novel-agent.

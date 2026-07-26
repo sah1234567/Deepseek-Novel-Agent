@@ -82,13 +82,13 @@ export function LoopHistoryDrawer({
         <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
           {rows.map((row) => (
             <li
-              key={`${row.chapter}-${row.artifactPath}`}
+              key={`${row.snapshotKey}-${row.artifactPath}`}
               style={{
                 padding: "6px 0",
                 borderBottom: "1px solid #1e293b",
               }}
             >
-              <div style={{ fontWeight: 600 }}>Ch.{row.chapter}</div>
+              <div style={{ fontWeight: 600 }}>{row.snapshotKey}</div>
               <div style={{ color: "#94a3b8", wordBreak: "break-all" }}>{row.artifactPath}</div>
               {row.handoffSummaryPreview ? (
                 <div style={{ marginTop: 4, opacity: 0.85 }}>{row.handoffSummaryPreview}</div>

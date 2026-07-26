@@ -33,6 +33,8 @@ export interface WorkSummary {
 export interface AppStatus {
   sessionId: string;
   permissionMode: string;
+  /** `orchestrate` | `work` */
+  interactionMode?: string;
   hookRunning: boolean;
   pendingUserQuestion: boolean;
   turnInProgress: boolean;
@@ -104,6 +106,7 @@ export function useAppStatus() {
       // Token fields stay event-driven via `session-tokens-updated`.
       // Session switches refresh via invoke callers (resumeSession / createSession / openWork).
       () => listen(IPC_EVENTS.permissionModeChanged, () => void refresh()),
+      () => listen(IPC_EVENTS.interactionModeChanged, () => void refresh()),
     ]);
   }, [refresh]);
 
@@ -116,6 +119,20 @@ export function useAppStatus() {
     async (mode: string) => {
       try {
         await invoke(IPC_COMMANDS.setPermissionMode, { mode });
+        await refresh();
+        setError(null);
+      } catch (e) {
+        setError(String(e));
+        throw e;
+      }
+    },
+    [refresh],
+  );
+
+  const setInteractionMode = useCallback(
+    async (mode: string) => {
+      try {
+        await invoke(IPC_COMMANDS.setInteractionMode, { mode });
         await refresh();
         setError(null);
       } catch (e) {
@@ -191,6 +208,7 @@ export function useAppStatus() {
     refresh,
     initProject,
     setPermissionMode,
+    setInteractionMode,
     resumeSession,
     createSession,
     createWork,

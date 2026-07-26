@@ -80,17 +80,19 @@ impl AgentEngine {
             }),
             on_graph_loop_advanced: Some({
                 let pending = Arc::clone(&self.shared.graph_loop_advance_pending);
-                Arc::new(move |loop_id, chapter, reset_node_ids| {
+                Arc::new(move |loop_id, snapshot_key, counters, reset_node_ids| {
                     if let Ok(mut guard) = pending.lock() {
                         *guard = Some(super::types::GraphLoopAdvancePending {
                             loop_id,
-                            chapter,
+                            snapshot_key,
+                            counters,
                             reset_node_ids,
                         });
                     }
                 })
             }),
             memory_fork_mode: false,
+            plan_builder_draft: Arc::clone(&self.shared.plan_builder_draft),
         }
     }
 

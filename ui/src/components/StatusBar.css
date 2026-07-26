@@ -273,6 +273,37 @@
   border-color: #58a6ff;
 }
 
+.interaction-mode-toggle {
+  display: inline-flex;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.interaction-mode-btn {
+  border: none;
+  background: #21262d;
+  color: #8b949e;
+  font: inherit;
+  font-size: 0.8125rem;
+  padding: 0.35rem 0.65rem;
+  cursor: pointer;
+}
+
+.interaction-mode-btn + .interaction-mode-btn {
+  border-left: 1px solid #30363d;
+}
+
+.interaction-mode-btn.is-active {
+  background: #30363d;
+  color: #e6edf3;
+}
+
+.interaction-mode-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .todo-dropdown {
   position: absolute;
   top: calc(100% + 4px);

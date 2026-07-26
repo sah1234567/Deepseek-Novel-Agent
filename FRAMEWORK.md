@@ -13,7 +13,7 @@ React Frontend (ui/src/)
 Tauri IPC（commands → engine_loop 单任务队列；graph_* 与 chat 并行注册）
 
 Rust Backend（10 个业务 crate + novel-server，单向依赖）
-  Graph-Primary：`novel-graph` 持有 plan-graph + GraphTracker；聊天会话 node-scoped（focus / NodeObjective）
+  Graph-Primary：`novel-graph` 持有 plan-graph + GraphTracker；聊天会话 node-scoped（focus / NodeObjective）。作者 **编排 | 互动** 双模式：编排侧用 Interview/Orchestrator 工具 + orchestrator 提示；互动侧（focus 节点）用 NodeExecution 工具 + node-execution 提示。
 ```
 
 ### 1.2 Agent 根目录与数据归属
@@ -36,7 +36,7 @@ novel_agent/
 | `templates/` | Agent | 不变 |
 | `skills/` | Agent | 不变（作品 `works/{名}/skills/` 可覆盖同 id） |
 | `works/{名}/` | 作品 | `active_project`、`db_path`、`settings_path` 同步 |
-| `knowledge/meta/plan-graph.json` | 作品 | 随作品切换；Book Loop 游标在 `graph-state.json` |
+| `knowledge/meta/plan-graph.json` | 作品 | 随作品切换；Loop 游标在 `graph-state.json` |
 | `api_config.json` | Agent | 不变 |
 
 切换作品时更新 `active_project` 并重建 engine；文件树与会话列表读取当前作品 DB。
@@ -67,7 +67,7 @@ novel-server (Tauri IPC)
 | **节点会话** | `focused_node_id` 绑定作者聊天；多 `running_node_ids` 可扇出并行（写路径不相交）；交接用 `NodeHandoff`（summary + files_touched + artifacts），非聊天/CoT 总线 |
 | **审计 = InvokeSkill** | 主路径：`audit-plan` / `audit-knowledge` / `audit-craft`；`AuditStatusUpdate` 写台账证据。**ForkSubAgent 非主审计路径**（可选隔离 helper；仍只读） |
 | **Workflow Skill** | `novel-planning` / `chapter-writing` / `revision` / `post-chapter-checklist` 为**节点工位手册**；顺序由 Graph deps/loop 决定，不替代 plan-graph |
-| **自主写作模式** | `prompt/autonomous-writing.md`（规则正文）；`prompt/permission-mode-enter.md` / `permission-mode-exit.md`（中途切换前后缀）。**新会话 / 压缩重建**且 Unattended → 规则写入 system；**中途切换** → 前缀合并进**下一条**用户消息（单条 user，不改 `messages[0]`）。含自主循环、审计降频、暂停条件 |
+| **自主写作模式** | `skills/autonomous-writing/SKILL.md`（规则正文，新会话 Unattended 时提示 `InvokeSkill`；中途切换时作为用户消息注入）；`prompt/permission-mode-enter.md` / `permission-mode-exit.md`（中途切换前后缀）。含自主循环、审计降频、暂停条件 |
 | **Session 重建压缩** | 超阈值时：**先** archive 全量 → `refresh_system_dynamic_sections`（AGENTS/Workspace 冻结；Index/Memory/Progress/**Skills 摘要** 读盘刷新 + 权限模式重新检查）→ `[上下文刷新]` user（Skill 全文 + 摘要）→ 5 轮 ReAct。压缩摘要模板含「上一章衔接锚点」「活跃伏笔」字段加速恢复。`compaction-progress` → 前端 **CompactionBanner**（已接入）。连续 3 次失败静默 skip（重试 UI 为后续 issue） |
 | **Session 双轨存储** | `message_archive`（UI 全历史，按 `compaction_epoch`）+ `messages`（API 工作集）；前端 Turn 级懒加载 + 内存预算：`get_session_transcript_layout` + `get_session_message_turns` / `get_session_archive_turns`（`useTranscriptLoader`；贴底驻留 6 / 浏览 VIEW 6 / 硬顶 18 轮，`planMemoryReconcile` 统一预取与淘汰；贴底欠填向上预取） |
 | **中断与 token 估算** | `AbortController` 立即断开 SSE 流，drain 请求估算 prompt_tokens 保持 session 总数准确 |
@@ -77,7 +77,7 @@ novel-server (Tauri IPC)
 | **Hook opt-in** | `default_hook_config` 默认空；用户 settings 可启用 PostToolUse Hook |
 | **单队列 Engine** | 所有 IPC 经 `engine_loop` 串行 |
 | **流式 Tool 早执行** | arguments JSON 完整即 dispatch；Allow 立即入队执行；Ask 等 approve；Deny 流末注入 error |
-| **读盘经济** | `prompt/system.md` §2.3 + `novel-tools` pipeline（`read_economy` 硬限）：knowledge/memory/plan/** >80 行拒绝注入；Grep 默认 80 匹配、`head_limit`/`offset` 分页、截断自动标注 pagination 信息；Read 256KB 硬限 |
+| **读盘经济** | `prompt/shared-base.md` §2 + `novel-tools` pipeline（`read_economy` 硬限）：knowledge/memory/plan/** >80 行拒绝注入；Grep 默认 80 匹配、`head_limit`/`offset` 分页、截断自动标注 pagination 信息；Read 256KB 硬限 |
 | **Tool 谓词方法 (OCP)** | 新增 Tool 可覆盖 predicate 方法替代硬编码名称匹配：`blocks_nested_fork`、`is_always_allowed`、`can_write_outside_plan_dir`、`allowed_in_plan_mode`、`tracks_skill_references`、`is_skill_invocation`、`errors_abort_siblings`、`extract_read_span` |
 | **权限引擎独立** | `check_permissions` 策略从 Tool trait 提取到 `permission.rs`，trait 默认为薄委托；避免 53 行策略引擎驻留 trait vtable |
 | **Turn 续跑预算** | 续跑时 inner turn 预算按**当前 turn 内**已消耗量计算，避免长会话因累计 assistant 消息数提前触及上限 |
@@ -162,7 +162,7 @@ send_message
 | PlanAuditor / KnowledgeAuditor / ChapterCraftAnalyzer | **`skills/audit-*/SKILL.md`** 全文（运行时加载）+ 运行时约束 + `---` + 简短 task |
 | **GeneralPurpose** | `prompt/agents/general_purpose.md` 短壳 + 运行时约束 + `---` + **## 自定义任务** + 完整 task |
 
-**LLM tools 与缓存：** 子 Agent API 的 `tools` 与主 Agent 同源（`main_tool_schemas` / `registry.names()`），与 `messages[0]` system 一并保持 DeepSeek 前缀缓存。`task_message` 中的「建议优先工具」仅作 prompt 指引，不缩减 API schema。
+**LLM tools 与缓存：** 子 Agent API 的 `tools` 按 catalog 过滤（`tool_schemas_for_agent`），仅暴露声明工具。System prompt 精简为 shared-base + skill body，不含编排器指令。
 
 审计手册 SSOT 为 **`skills/audit-plan|audit-knowledge|audit-craft`**（节点主路径 InvokeSkill；可选 Fork 隔离时 `format_fork_task` 同文加载）。GeneralPurpose 薄壳仍 `include_str!`。可 fork 类型与 `max_react_loops` 见 **`FORK_AGENT_CATALOG`**。
 
@@ -173,7 +173,7 @@ send_message
 - 无 `allow_chapter_write` / `validate_chapter_write` / 按路径禁止 Write（主 Agent 路径）
 - 无 Write 后默认自动 KnowledgeAuditor 入队（除非用户 opt-in hooks）
 - 无 `fork_handoff` / `## 引擎交接` 引擎解析驱动 Fork 链
-- Subagent 只读：fork 角色 prompt + **执行层门控**；**禁止**为只读而缩减 fork LLM `tools` schema
+- Subagent 只读：fork 角色 prompt + **执行层门控**；LLM `tools` schema **按 catalog 过滤**（`tool_schemas_for_agent`），与主 Agent 可见集无关
 
 **UI 事件：** fork 实例经 scoped Tauri 事件更新前端 overlay（不 append 主 Chat `messages`）：
 
@@ -194,8 +194,9 @@ send_message
 
 | 段 | 来源 |
 |----|------|
-| 静态层 | `prompt/system.md`（含读盘经济 §2.3、Graph-Primary / 节点 InvokeSkill `audit-*`、Fork 可选） |
-| 自主模式 | `prompt/autonomous-writing.md`（Unattended 权限时追加注入，含自主循环/审计降频/暂停条件） |
+| 共享底座 | `prompt/shared-base.md`（工具约定、权限、Memory、禁止项） |
+| 编排器 | `prompt/orchestrator.md`（图生命周期、节点激活协议、PlanBuilder、Gate 评估） |
+| 自主模式 | `skills/autonomous-writing/SKILL.md`（Unattended 会话切换时注入用户消息） |
 | AGENTS.md | 作品根 |
 | INDEX | `knowledge/INDEX.md`（≤2000 字） |
 | Skills | `skills/` 摘要 only（压缩时读盘刷新；正文经 InvokeSkill → `[上下文刷新]`） |

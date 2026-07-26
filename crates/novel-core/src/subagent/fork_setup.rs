@@ -125,23 +125,29 @@ fn build_conversation_fork(params: &ForkBuildParams<'_>) -> Result<ConversationF
     })
 }
 
-/// Build a fork child context from engine state (shared system prompt + formatted task).
+/// Build a fork child context from engine state (minimal sub-agent prompt + formatted task).
 pub fn build_fork_child(
     shared: &crate::EngineShared,
     agent_type: AgentType,
     task: String,
 ) -> Result<ForkedAgentContext, AgentError> {
+    // Sub-agents use shared-base only (no orchestrator, no node-domain).
+    // Audit agents get their skill body appended.
+    let roots = SkillLoadRoots {
+        project_root: shared.session.project_root.as_path(),
+        agent_skills_dir: Some(shared.agent_skills_dir.as_path()),
+    };
+    let skill_body = crate::agent::load_agent_prompt(agent_type, Some(roots)).ok();
+    let subagent_prompt =
+        crate::context::SystemPromptBuilder::new().build_subagent(skill_body.as_deref());
+
     let system_msg = ChatMessage {
         role: "system".into(),
-        content: shared.system_prompt.clone(),
+        content: subagent_prompt,
         tool_call_id: None,
         tool_calls: None,
         reasoning_content: None,
         ..Default::default()
-    };
-    let roots = SkillLoadRoots {
-        project_root: shared.session.project_root.as_path(),
-        agent_skills_dir: Some(shared.agent_skills_dir.as_path()),
     };
     ForkedAgentContext::fork(ForkBuildParams {
         parent_system_message: &system_msg,

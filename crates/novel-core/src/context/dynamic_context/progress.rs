@@ -163,7 +163,7 @@ pub fn load_progress(project_root: &Path, session_id: &str, db: &Database) -> St
         }
         for ls in &snap.loop_summaries {
             lines.push(format!(
-                "BookLoop {}: {} ({:?})",
+                "Loop {}: {} ({:?})",
                 ls.loop_id, ls.cursor_label, ls.phase
             ));
         }
@@ -176,9 +176,15 @@ pub fn load_progress(project_root: &Path, session_id: &str, db: &Database) -> St
         if !ready.is_empty() {
             lines.push(format!("Graph Ready: {}", ready.join(", ")));
         }
-    } else if !novel_graph::plan_exists(project_root) {
+    } else if !novel_graph::plan_exists(project_root)
+        || novel_graph::GraphTracker::load(project_root)
+            .ok()
+            .flatten()
+            .map(|t| t.plan.nodes.is_empty())
+            .unwrap_or(true)
+    {
         lines.push(
-            "阶段: 访谈/建图 — 尚无正式 plan-graph.json。先与作者对齐目标，再 GraphApplyTemplate（默认骨架）或 GraphCommitPlan（自定义 JSON）；勿静默落正式图。"
+            "阶段: 访谈/建图 — 尚无正式 plan-graph.json。先与作者对齐目标，再 PlanBuilder 增量构建工作流（add_node → add_loop → set_dep → preview → commit）；勿静默落正式图。"
                 .into(),
         );
     }
@@ -343,11 +349,23 @@ content
     #[test]
     fn load_progress_reinjects_node_objective_from_graph() {
         let tmp = TempDir::new().expect("tmp");
-        let plan = novel_graph::default_plan().expect("plan");
+        // Build a minimal plan with one node since default_plan is now empty skeleton
+        let plan = novel_graph::PlanGraph {
+            version: "1".into(),
+            max_parallel_nodes: 4,
+            nodes: vec![novel_graph::PlanNode {
+                id: "test-node".into(),
+                title: "Test".into(),
+                spec: Some("do something".into()),
+                tags: vec!["test".into()],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
         novel_graph::save_plan(tmp.path(), &plan).expect("save plan");
         let mut t = novel_graph::GraphTracker::new(plan);
-        t.start_node("world-bible", None).expect("start");
-        t.set_focus(Some("world-bible".into())).expect("focus");
+        t.start_node("test-node", None).expect("start");
+        t.set_focus(Some("test-node".into())).expect("focus");
         t.save(tmp.path()).expect("save state");
         let db = Database::open(tmp.path().join("t.db")).expect("db");
         let sid = db
@@ -355,7 +373,7 @@ content
             .expect("s");
         let p = load_progress(tmp.path(), &sid, &db);
         assert!(
-            p.contains("## NodeObjective [world-bible]"),
+            p.contains("## NodeObjective [test-node]"),
             "expected NodeObjective reinject after graph focus; got: {p}"
         );
     }

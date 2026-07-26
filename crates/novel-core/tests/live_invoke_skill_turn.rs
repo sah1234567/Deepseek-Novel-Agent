@@ -8,6 +8,7 @@
 //!   cargo nextest run -p novel-core --test live_invoke_skill_turn --run-ignored all
 
 #![allow(clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
 
 use novel_core::{AgentEngine, EngineConfig};
 use std::collections::HashSet;

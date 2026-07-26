@@ -74,9 +74,10 @@ impl AgentEngine {
         };
         if let Some(tx) = event_tx {
             let _ = tx.send(Event::GraphLoopAdvanced {
-                loop_id: adv.loop_id,
-                chapter: adv.chapter,
-                reset_node_ids: adv.reset_node_ids,
+                loop_id: adv.loop_id.clone(),
+                snapshot_key: adv.snapshot_key.clone(),
+                counters: adv.counters.clone(),
+                reset_node_ids: adv.reset_node_ids.clone(),
             });
         }
     }

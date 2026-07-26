@@ -1,7 +1,7 @@
 //! Per-job subagent ReAct runner (`run_subagent_job`).
 
 use crate::engine::session_llm::{build_chat_client, SessionLlmSnapshot};
-use crate::hooks::main_tool_schemas;
+use crate::hooks::tool_schemas_for_agent;
 use crate::message::{assistant_from_completion, to_llm_messages_traced, RepairTraceContext};
 use crate::subagent::helpers::{
     execute_subagent_tool_batch, fork_child_push, subagent_push_tool_results,
@@ -79,7 +79,9 @@ pub(crate) async fn run_subagent_job_with_child(
         )?;
     }
 
-    let schemas = main_tool_schemas(&shared.registry);
+    // Sub-agents receive only the tools declared in their catalog entry,
+    // not the full 30+ main-agent tool list.
+    let schemas = tool_schemas_for_agent(&shared.registry, &child.fork.agent_def.tools);
     let max_react_loops = child.fork.max_react_loops;
     let job_ctx = SubagentJobCtx {
         shared: &shared,

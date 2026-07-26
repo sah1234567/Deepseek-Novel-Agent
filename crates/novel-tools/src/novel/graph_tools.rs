@@ -10,7 +10,7 @@ fn load_tracker(ctx: &ToolContext) -> Result<GraphTracker, ToolError> {
         .map_err(|e| ToolError::Execution(e.to_string()))?
         .ok_or_else(|| {
             ToolError::Execution(
-                "no plan-graph.json — use GraphApplyTemplate or GraphCommitPlan first".into(),
+                "no plan-graph.json — use GraphCommitPlan or PlanBuilder first".into(),
             )
         })
 }
@@ -208,11 +208,16 @@ fn submit_node(
     save_tracker(ctx, t)?;
     if let Some(ref a) = adv {
         if let Some(cb) = &ctx.on_graph_loop_advanced {
-            cb(a.loop_id.clone(), a.chapter, a.reset_node_ids.clone());
+            cb(
+                a.loop_id.clone(),
+                a.snapshot_key.clone(),
+                a.counters.clone(),
+                a.reset_node_ids.clone(),
+            );
         }
     }
     let extra = adv
-        .map(|a| format!(" Loop `{}` advanced to Ch.{}", a.loop_id, a.chapter))
+        .map(|a| format!(" Loop `{}` advanced to {}", a.loop_id, a.snapshot_key))
         .unwrap_or_default();
     Ok(ToolOutput {
         content: format!("Node `{id}` → Achieved.{extra}"),
@@ -356,7 +361,7 @@ impl Tool for GraphApplyTemplateTool {
         "GraphApplyTemplate"
     }
     fn description(&self) -> &str {
-        "Apply the bundled Book-Loop plan-graph template to this work (creates plan-graph.json + state). Use after the author agrees to start from the default skeleton. Set force=true only to replace an existing plan."
+        "[DEPRECATED — use PlanBuilder instead] Write an empty plan-graph skeleton (no nodes/loops). After applying, use PlanBuilder to incrementally construct the workflow."
     }
     fn input_schema(&self) -> Value {
         json!({
@@ -444,7 +449,8 @@ impl Tool for GraphCommitPlanTool {
                 "plan-graph.json already exists — pass replace=true to overwrite".into(),
             ));
         }
-        let plan = novel_graph::parse_plan(&raw).map_err(|e| ToolError::Execution(e.to_string()))?;
+        let plan =
+            novel_graph::parse_plan(&raw).map_err(|e| ToolError::Execution(e.to_string()))?;
         novel_graph::save_plan(&ctx.project_root, &plan)
             .map_err(|e| ToolError::Execution(e.to_string()))?;
         let t = novel_graph::GraphTracker::new(plan);
@@ -468,7 +474,12 @@ impl Tool for GraphCommitPlanTool {
 mod tests {
     use super::*;
     use crate::PermissionMode;
-    use novel_graph::{default_plan, ensure_graph_initialized, save_plan, NodeStatus};
+    use novel_graph::{
+        ensure_graph_initialized, save_plan, Acceptance, AdvanceRule, CounterOp, Cursor,
+        LoopOnAdvance, MachineAcceptance, NodeStatus, Until, WorkflowLoop,
+    };
+    use std::collections::HashMap;
+    use std::sync::Arc;
     use tempfile::TempDir;
 
     fn ctx(tmp: &TempDir) -> ToolContext {
@@ -479,8 +490,188 @@ mod tests {
         }
     }
 
-    async fn seeded(tmp: &TempDir) -> ToolContext {
-        let plan = default_plan().unwrap();
+    /// Build a classic 6-node book-loop plan (matches coverage_tests::classic_plan).
+    fn classic_plan() -> novel_graph::PlanGraph {
+        use novel_graph::{
+            ArtifactRef, ArtifactRole, HumanGate, Iterate, IterateUntil, OnReject, PlanGraph,
+            PlanNode,
+        };
+        PlanGraph {
+            version: "1".into(),
+            enforce_gates: true,
+            max_parallel_nodes: 4,
+            auto_start_ready: false,
+            settings: {
+                let mut s = HashMap::new();
+                s.insert("targetChapters".into(), serde_json::json!(200));
+                s
+            },
+            nodes: vec![
+                PlanNode {
+                    id: "world-bible".into(),
+                    title: "世界观".into(),
+                    spec: Some("build world bible".into()),
+                    tags: vec!["world_bible".into()],
+                    artifacts: vec![ArtifactRef {
+                        path: Some("knowledge/shared-systems/背景设定.md".into()),
+                        role: ArtifactRole::PrimaryDeliverable,
+                        path_template: None,
+                    }],
+                    acceptance: Acceptance {
+                        machine: MachineAcceptance::None,
+                        human: Some(HumanGate {
+                            required: true,
+                            on_reject: OnReject::Continue,
+                            prompt: Some("批准世界观？".into()),
+                            review: vec![],
+                        }),
+                    },
+                    ..Default::default()
+                },
+                PlanNode {
+                    id: "outline".into(),
+                    title: "大纲".into(),
+                    spec: Some("write outline".into()),
+                    deps: vec!["world-bible".into()],
+                    tags: vec!["outline".into()],
+                    artifacts: vec![ArtifactRef {
+                        path: Some("knowledge/plot/大纲.md".into()),
+                        role: ArtifactRole::PrimaryDeliverable,
+                        path_template: None,
+                    }],
+                    acceptance: Acceptance {
+                        machine: MachineAcceptance::Auditor,
+                        human: Some(HumanGate {
+                            required: true,
+                            on_reject: OnReject::Continue,
+                            prompt: Some("批准大纲？".into()),
+                            review: vec![],
+                        }),
+                    },
+                    ..Default::default()
+                },
+                PlanNode {
+                    id: "ensure-fine-outline".into(),
+                    title: "细纲确保".into(),
+                    spec_template: Some("fine outline ch{{cursor.chapter}}".into()),
+                    deps: vec!["outline".into()],
+                    tags: vec!["ensure_fine_outline".into()],
+                    artifacts: vec![ArtifactRef {
+                        path_template: Some(
+                            "knowledge/plot/细纲/chapter-{{cursor.chapter | pad3}}-细纲.md".into(),
+                        ),
+                        role: ArtifactRole::PrimaryDeliverable,
+                        path: None,
+                    }],
+                    acceptance: Acceptance {
+                        machine: MachineAcceptance::Auditor,
+                        human: Some(HumanGate {
+                            required: false,
+                            on_reject: OnReject::Continue,
+                            prompt: None,
+                            review: vec![],
+                        }),
+                    },
+                    ..Default::default()
+                },
+                PlanNode {
+                    id: "write-chapter".into(),
+                    title: "写章".into(),
+                    spec_template: Some("write chapter {{cursor.chapter}}".into()),
+                    deps: vec!["ensure-fine-outline".into()],
+                    tags: vec!["chapter_body".into()],
+                    artifacts: vec![ArtifactRef {
+                        path_template: Some("chapters/chapter-{{cursor.chapter | pad3}}.md".into()),
+                        role: ArtifactRole::PrimaryDeliverable,
+                        path: None,
+                    }],
+                    iterate: Some(Iterate {
+                        max_iterations: 8,
+                        until: IterateUntil::AuditorPass,
+                    }),
+                    ..Default::default()
+                },
+                PlanNode {
+                    id: "sync-canon".into(),
+                    title: "正典同步".into(),
+                    spec_template: Some("sync canon after ch{{cursor.chapter}}".into()),
+                    deps: vec!["write-chapter".into()],
+                    tags: vec!["sync_canon".into()],
+                    artifacts: vec![
+                        ArtifactRef {
+                            path: Some("knowledge/characters/".into()),
+                            role: ArtifactRole::Aux,
+                            path_template: None,
+                        },
+                        ArtifactRef {
+                            path: Some("knowledge/INDEX.md".into()),
+                            role: ArtifactRole::Aux,
+                            path_template: None,
+                        },
+                    ],
+                    ..Default::default()
+                },
+                PlanNode {
+                    id: "volume-review".into(),
+                    title: "卷审".into(),
+                    spec: Some("volume review".into()),
+                    deps: vec!["sync-canon".into()],
+                    tags: vec!["volume_review".into()],
+                    ..Default::default()
+                },
+            ],
+            loops: vec![WorkflowLoop {
+                id: "book-body".into(),
+                stations: vec![
+                    "ensure-fine-outline".into(),
+                    "write-chapter".into(),
+                    "sync-canon".into(),
+                ],
+                entry: "ensure-fine-outline".into(),
+                advance_after: "sync-canon".into(),
+                cursor: Cursor {
+                    counters: {
+                        let mut c = HashMap::new();
+                        c.insert("chapter".into(), 1);
+                        c.insert("volume".into(), 1);
+                        c.insert("round".into(), 1);
+                        c
+                    },
+                    tags: HashMap::new(),
+                },
+                advance: AdvanceRule {
+                    increment: "chapter".into(),
+                    step: 1,
+                    side_effects: vec![CounterOp::Increment {
+                        counter: "round".into(),
+                        by: 1,
+                    }],
+                },
+                until: Until::CounterGt {
+                    counter: "chapter".into(),
+                    value: None,
+                    value_from: Some("work_meta.settings.targetChapters".into()),
+                },
+                on_advance: LoopOnAdvance {
+                    reopen: vec![
+                        "ensure-fine-outline".into(),
+                        "write-chapter".into(),
+                        "sync-canon".into(),
+                    ],
+                    clear_node_sessions: true,
+                    reinject_objectives: true,
+                    preserve_canon_files: true,
+                },
+                world_state_board: vec![
+                    "knowledge/characters/".into(),
+                    "knowledge/INDEX.md".into(),
+                ],
+            }],
+        }
+    }
+
+    async fn seeded_with_classic_plan(tmp: &TempDir) -> ToolContext {
+        let plan = classic_plan();
         save_plan(tmp.path(), &plan).unwrap();
         let _ = ensure_graph_initialized(tmp.path()).unwrap();
         ctx(tmp)
@@ -489,7 +680,7 @@ mod tests {
     #[tokio::test]
     async fn graph_query_operations() {
         let tmp = TempDir::new().unwrap();
-        let c = seeded(&tmp).await;
+        let c = seeded_with_classic_plan(&tmp).await;
         for op in ["summary", "ready", "pending_approval"] {
             let out = GraphQueryTool
                 .call(json!({"operation": op}), &c)
@@ -511,7 +702,7 @@ mod tests {
     #[tokio::test]
     async fn graph_advance_submit_mark_reopen() {
         let tmp = TempDir::new().unwrap();
-        let c = seeded(&tmp).await;
+        let c = seeded_with_classic_plan(&tmp).await;
         GraphAdvanceTool
             .call(json!({"node_id": "world-bible"}), &c)
             .await
@@ -569,7 +760,7 @@ mod tests {
     async fn graph_submit_auto_achieves_machine_none() {
         // sync-canon has machine: none + human: false → auto-Achieve.
         let tmp = TempDir::new().unwrap();
-        let c = seeded(&tmp).await;
+        let c = seeded_with_classic_plan(&tmp).await;
         {
             let mut t = GraphTracker::load(tmp.path()).unwrap().unwrap();
             for id in [
@@ -607,9 +798,9 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let saw = Arc::new(Mutex::new(None));
         let saw2 = Arc::clone(&saw);
-        let mut c = seeded(&tmp).await;
-        c.on_graph_loop_advanced = Some(Arc::new(move |loop_id, chapter, reset| {
-            *saw2.lock().unwrap() = Some((loop_id, chapter, reset));
+        let mut c = seeded_with_classic_plan(&tmp).await;
+        c.on_graph_loop_advanced = Some(Arc::new(move |loop_id, snapshot_key, counters, reset| {
+            *saw2.lock().unwrap() = Some((loop_id, snapshot_key, counters, reset));
         }));
         {
             let mut t = GraphTracker::load(tmp.path()).unwrap().unwrap();
@@ -640,9 +831,10 @@ mod tests {
             .unwrap();
         assert!(out.content.contains("advanced") || out.content.contains("Achieved"));
         let got = saw.lock().unwrap().clone();
-        let (loop_id, chapter, reset) = got.expect("on_graph_loop_advanced must fire");
+        let (loop_id, snapshot_key, _counters, reset) =
+            got.expect("on_graph_loop_advanced must fire");
         assert_eq!(loop_id, "book-body");
-        assert_eq!(chapter, 2);
+        assert_eq!(snapshot_key, "chapter=2");
         assert!(reset.iter().any(|id| id == "sync-canon"));
     }
 
@@ -650,7 +842,7 @@ mod tests {
     async fn graph_submit_auditor_stays_verifying() {
         // ensure-fine-outline has machine: auditor + human: false → stays Verifying.
         let tmp = TempDir::new().unwrap();
-        let c = seeded(&tmp).await;
+        let c = seeded_with_classic_plan(&tmp).await;
         {
             let mut t = GraphTracker::load(tmp.path()).unwrap().unwrap();
             t.state.nodes.get_mut("world-bible").unwrap().status = NodeStatus::Achieved;
@@ -696,7 +888,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let flag = Arc::new(AtomicBool::new(false));
         let flag2 = Arc::clone(&flag);
-        let mut c = seeded(&tmp).await;
+        let mut c = seeded_with_classic_plan(&tmp).await;
         c.on_graph_state_changed = Some(Arc::new(move || {
             flag2.store(true, Ordering::SeqCst);
         }));
@@ -728,5 +920,95 @@ mod tests {
             flag.load(Ordering::SeqCst),
             "save_tracker must notify on_graph_state_changed"
         );
+    }
+
+    // GraphApplyTemplate / GraphCommitPlan boundaries:
+    // - apply: no plan → write; exists without force → soft message; force → replace + callback
+    // - commit: success + callback; exists without replace → err; invalid JSON → err; replace ok
+    fn minimal_valid_plan_json() -> String {
+        r#"{
+          "version":"1",
+          "nodes":[{"id":"a","title":"A","spec":"do a","artifacts":[{"path":"a.md","role":"primary_deliverable"}]}],
+          "loops":[]
+        }"#
+        .into()
+    }
+
+    #[tokio::test]
+    async fn graph_apply_template_create_skip_and_force() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let tmp = TempDir::new().unwrap();
+        let c = ctx(&tmp);
+        let out = GraphApplyTemplateTool.call(json!({}), &c).await.unwrap();
+        assert!(out.content.contains("Applied"));
+        assert!(novel_graph::plan_exists(tmp.path()));
+
+        let skip = GraphApplyTemplateTool.call(json!({}), &c).await.unwrap();
+        assert!(skip.content.contains("already exists"));
+
+        let flag = Arc::new(AtomicBool::new(false));
+        let flag2 = Arc::clone(&flag);
+        let mut c2 = ctx(&tmp);
+        c2.on_graph_plan_committed = Some(Arc::new(move || {
+            flag2.store(true, Ordering::SeqCst);
+        }));
+        let forced = GraphApplyTemplateTool
+            .call(json!({"force": true}), &c2)
+            .await
+            .unwrap();
+        assert!(forced.content.contains("Applied"));
+        assert!(flag.load(Ordering::SeqCst));
+        assert_eq!(GraphApplyTemplateTool.name(), "GraphApplyTemplate");
+        assert!(!GraphApplyTemplateTool.is_read_only());
+    }
+
+    #[tokio::test]
+    async fn graph_commit_plan_success_replace_and_errors() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let tmp = TempDir::new().unwrap();
+        let flag = Arc::new(AtomicBool::new(false));
+        let flag2 = Arc::clone(&flag);
+        let mut c = ctx(&tmp);
+        c.on_graph_plan_committed = Some(Arc::new(move || {
+            flag2.store(true, Ordering::SeqCst);
+        }));
+
+        let out = GraphCommitPlanTool
+            .call(json!({"plan_json": minimal_valid_plan_json()}), &c)
+            .await
+            .unwrap();
+        assert!(out.content.contains("Committed"));
+        assert!(flag.load(Ordering::SeqCst));
+        assert!(novel_graph::plan_exists(tmp.path()));
+
+        let err = GraphCommitPlanTool
+            .call(json!({"plan_json": minimal_valid_plan_json()}), &c)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("already exists"));
+
+        let replaced = GraphCommitPlanTool
+            .call(
+                json!({
+                    "plan_json": minimal_valid_plan_json(),
+                    "replace": true
+                }),
+                &c,
+            )
+            .await
+            .unwrap();
+        assert!(replaced.content.contains("Committed"));
+
+        let bad = GraphCommitPlanTool
+            .call(
+                json!({"plan_json": "{\"version\":\"1\",\"nodes\":[]}", "replace": true}),
+                &c,
+            )
+            .await
+            .unwrap_err();
+        assert!(bad.to_string().contains("no nodes") || bad.to_string().contains("Validation"));
+        assert_eq!(GraphCommitPlanTool.name(), "GraphCommitPlan");
+        assert!(!GraphCommitPlanTool.is_read_only());
+        let _ = GraphCommitPlanTool.input_schema();
     }
 }

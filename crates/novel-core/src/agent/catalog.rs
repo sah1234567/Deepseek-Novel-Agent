@@ -1,8 +1,9 @@
 //! Declarative catalog for forkable sub-agents (SSOT for loops + suggested tools).
 //!
 //! `AgentType::definition()` is built from [`FORK_AGENT_CATALOG`].
-//! LLM API `tools` schemas use the full main registry (`main_tool_schemas`); entries here
-//! only drive `format_fork_task` tools_line and documentation.
+//! Main-agent LLM `tools` use [`crate::hooks::tool_schemas_for_visibility`] (Interview /
+//! Orchestrator / NodeExecution). Catalog entries declare fork allowlists; fork schemas use
+//! [`crate::hooks::tool_schemas_for_agent`]. Entries also drive `format_fork_task` tools_line.
 //!
 //! `agent_type` names and default loop limits: `novel_config::fork_agents` (re-exported as
 //! [`super::FORKABLE_AGENT_TYPE_NAMES`]).

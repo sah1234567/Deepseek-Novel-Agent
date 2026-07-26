@@ -168,7 +168,18 @@ mod tests {
     #[tokio::test]
     async fn marks_audited_with_node_verifying() {
         let tmp = TempDir::new().expect("tmpdir");
-        let plan = novel_graph::default_plan().unwrap();
+        let plan = novel_graph::PlanGraph {
+            version: "1".into(),
+            max_parallel_nodes: 4,
+            nodes: vec![novel_graph::PlanNode {
+                id: "world-bible".into(),
+                title: "WB".into(),
+                spec: Some("x".into()),
+                tags: vec!["world_bible".into()],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
         novel_graph::save_plan(tmp.path(), &plan).unwrap();
         let mut t = novel_graph::GraphTracker::new(plan);
         t.state.nodes.get_mut("world-bible").unwrap().status = novel_graph::NodeStatus::Running;

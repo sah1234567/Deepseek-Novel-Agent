@@ -1,7 +1,9 @@
 use crate::tauri::engine_loop::{AppStatus, EngineCommand};
 use crate::tauri::state::CommandContext;
 
-use super::engine_ipc::{emit_permission_mode_changed, send_engine_reply};
+use super::engine_ipc::{
+    emit_interaction_mode_changed, emit_permission_mode_changed, send_engine_reply,
+};
 use super::open_db;
 use crate::tauri::events::SessionTodosUpdatedPayload;
 use tauri::Emitter;
@@ -30,6 +32,24 @@ pub async fn set_permission_mode(ctx: &CommandContext, mode: String) -> Result<(
     })
     .await?;
     emit_permission_mode_changed(ctx, &mode);
+    Ok(())
+}
+
+pub async fn set_interaction_mode(ctx: &CommandContext, mode: String) -> Result<(), String> {
+    use std::sync::atomic::Ordering;
+    if ctx.turn_in_progress.load(Ordering::Acquire) {
+        return Err("当前轮次进行中，请等待结束或中断后再切换编排/互动模式".into());
+    }
+    send_engine_reply(ctx, |reply| EngineCommand::SetInteractionMode {
+        mode: mode.clone(),
+        reply,
+    })
+    .await?;
+    // Normalize aliases to canonical label for UI.
+    let canonical = novel_core::InteractionMode::parse(&mode)
+        .map(|m| m.as_str().to_string())
+        .unwrap_or(mode);
+    emit_interaction_mode_changed(ctx, &canonical);
     Ok(())
 }
 

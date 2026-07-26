@@ -49,7 +49,15 @@ bash scripts/ci-security-audit.sh
 | `ci-rust-test.sh` | nextest（含 `concurrent_writes` 压测） |
 | `ci-crap.sh` / `ci-crap.ps1` | **仅** `cargo crap --fail-above`（读已有 `lcov.info`） |
 | `ci-lcov.sh` / `ci-lcov.ps1` | 生成 `lcov.info`（`llvm-cov nextest`；重构后须先跑再 `ci-crap`） |
+| `ci-lcov-needed.sh` | 判断是否需重跑 lcov（供 `ci-rust-gate`；见下） |
 | （本地 CRAP 全流程） | `bash scripts/ci-lcov.sh && bash scripts/ci-crap.sh`；Windows：`.\scripts\ci-lcov.ps1; .\scripts\ci-crap.ps1` |
+
+### 本地提速（相对 GHA）
+
+| 机制 | 行为 |
+|------|------|
+| **`CARGO_BUILD_JOBS`** | **GHA** workflow 固定 `1`（防 OOM）。**本地**入口脚本不再写死 `1`，未设置时用 cargo 默认多核。需要限流时自行 `$env:CARGO_BUILD_JOBS=1`。 |
+| **跳过新鲜 lcov** | `ci-rust-gate` 若 `lcov.info` 仍新于 `crates/` / `src-tauri/` / `tests/integration/` 源码，则**跳过** `ci-lcov`，只跑 `ci-crap`。强制重跑：`CI_FORCE_LCOV=1`；强制跳过：`CI_SKIP_LCOV=1`（须已有 `lcov.info`）。 |
 | `ci-tauri-check.sh` | `cargo check` novel-agent |
 | `ci-tauri.sh` | check + `cargo build` novel-agent |
 | `ci-linux-tauri-deps.sh` | GHA Ubuntu：WebKit/GTK apt |

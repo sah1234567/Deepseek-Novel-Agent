@@ -436,3 +436,110 @@ fn clear_read_file_cache_removes_all_entries() {
     engine.shared.clear_read_file_cache();
     assert!(engine.shared.read_file_cache.is_empty());
 }
+
+fn seed_plan_with_focus(root: &std::path::Path, focused: Option<&str>) {
+    let plan_json = r#"{
+      "version":"1",
+      "nodes":[{"id":"n1","title":"N1","spec":"do n1","artifacts":[{"path":"a.md","role":"primary_deliverable"}]}],
+      "loops":[]
+    }"#;
+    let plan = novel_graph::parse_plan(plan_json).expect("plan");
+    novel_graph::save_plan(root, &plan).unwrap();
+    let mut t = novel_graph::GraphTracker::new(plan);
+    if let Some(id) = focused {
+        t.set_focus(Some(id.into())).unwrap();
+    }
+    t.save(root).unwrap();
+}
+
+#[test]
+fn apply_interaction_mode_work_requires_focus() {
+    let tmp = TempDir::new().unwrap();
+    std::fs::create_dir_all(tmp.path().join("skills")).unwrap();
+    seed_plan_with_focus(tmp.path(), None);
+    let mut engine = AgentEngine::new(test_config(&tmp)).unwrap();
+    let err = engine
+        .apply_interaction_mode_change(crate::InteractionMode::Work)
+        .unwrap_err();
+    assert!(matches!(err, AgentError::Validation(_)));
+    assert_eq!(
+        engine.effective_interaction_mode(),
+        crate::InteractionMode::Orchestrate
+    );
+}
+
+#[test]
+fn apply_interaction_mode_work_with_focus_and_orchestrate_clears() {
+    let tmp = TempDir::new().unwrap();
+    std::fs::create_dir_all(tmp.path().join("skills")).unwrap();
+    seed_plan_with_focus(tmp.path(), Some("n1"));
+    let mut engine = AgentEngine::new(test_config(&tmp)).unwrap();
+
+    engine
+        .apply_interaction_mode_change(crate::InteractionMode::Work)
+        .unwrap();
+    assert_eq!(
+        engine.effective_interaction_mode(),
+        crate::InteractionMode::Work
+    );
+    assert_eq!(engine.status_snapshot().interaction_mode, "work");
+
+    engine
+        .apply_interaction_mode_change(crate::InteractionMode::Orchestrate)
+        .unwrap();
+    assert_eq!(
+        engine.effective_interaction_mode(),
+        crate::InteractionMode::Orchestrate
+    );
+    let t = novel_graph::GraphTracker::load(tmp.path())
+        .unwrap()
+        .expect("tracker");
+    assert!(t.state.focused_node_id.is_none());
+}
+
+#[test]
+fn apply_interaction_mode_rejects_during_turn() {
+    let tmp = TempDir::new().unwrap();
+    std::fs::create_dir_all(tmp.path().join("skills")).unwrap();
+    seed_plan_with_focus(tmp.path(), Some("n1"));
+    let mut engine = AgentEngine::new(test_config(&tmp)).unwrap();
+    engine.pending_user_question = Some("q".into());
+    let err = engine
+        .apply_interaction_mode_change(crate::InteractionMode::Work)
+        .unwrap_err();
+    assert!(matches!(err, AgentError::Validation(_)));
+}
+
+#[test]
+fn effective_interaction_mode_heals_stale_work_without_focus() {
+    let tmp = TempDir::new().unwrap();
+    std::fs::create_dir_all(tmp.path().join("skills")).unwrap();
+    seed_plan_with_focus(tmp.path(), None);
+    let engine = AgentEngine::new(test_config(&tmp)).unwrap();
+    {
+        let mut g = engine.shared.interaction_mode.lock().unwrap();
+        *g = crate::InteractionMode::Work;
+    }
+    assert_eq!(engine.raw_interaction_mode(), crate::InteractionMode::Work);
+    assert_eq!(
+        engine.effective_interaction_mode(),
+        crate::InteractionMode::Orchestrate
+    );
+    assert_eq!(
+        engine.raw_interaction_mode(),
+        crate::InteractionMode::Orchestrate
+    );
+}
+
+#[test]
+fn mark_interaction_work_after_focus_sets_work() {
+    let tmp = TempDir::new().unwrap();
+    std::fs::create_dir_all(tmp.path().join("skills")).unwrap();
+    seed_plan_with_focus(tmp.path(), Some("n1"));
+    let mut engine = AgentEngine::new(test_config(&tmp)).unwrap();
+    engine.mark_interaction_work_after_focus().unwrap();
+    assert_eq!(
+        engine.effective_interaction_mode(),
+        crate::InteractionMode::Work
+    );
+}

@@ -2,6 +2,7 @@
 //! Run: `DEEPSEEK_API_KEY=sk-... cargo test -p novel-deepseek -- --ignored --nocapture live_endpoints`
 
 #![allow(clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
 use novel_deepseek::{
     verify_endpoints, verify_web_search_endpoint, ChatClient, ChatStreamConfig, LlmChatMessage,
     StreamEvent, StreamOutcome,

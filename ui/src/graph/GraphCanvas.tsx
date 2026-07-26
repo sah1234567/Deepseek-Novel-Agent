@@ -98,13 +98,13 @@ export function GraphCanvas({ graph: g }: GraphCanvasProps) {
   if (!snap) {
     return <div className="graph-canvas">Loading graph…</div>;
   }
-  if (snap.hasPlan === false) {
+  if (snap.hasPlan === false || snap.nodes.length === 0) {
     return (
       <div className="graph-canvas graph-canvas--empty">
-        <p>尚未落正式 Plan Graph。</p>
+        <p>尚无工作流计划。</p>
         <p style={{ opacity: 0.8, fontSize: 13 }}>
-          用状态栏「模板」预览默认骨架，或与 Agent 访谈后由{" "}
-          <code>GraphApplyTemplate</code> / <code>GraphCommitPlan</code> 写入。
+          在聊天中告诉 Agent 你的需求，Agent 会使用{" "}
+          <code>PlanBuilder</code> 增量构建工作流图（add_node → add_loop → set_dep → commit）。
         </p>
       </div>
     );
@@ -208,8 +208,8 @@ function buildFlowGraph(
 
     const frameData: LoopFrameData = {
       loopId: lp.loopId,
-      chapter: lp.cursor.chapter,
-      targetChapters: lp.targetChapters,
+      cursor: lp.cursor,
+      settings: lp.settings,
       phase: lp.phase,
       onPause: () => void onPause(lp.loopId),
       onResume: () => void onResume(lp.loopId),

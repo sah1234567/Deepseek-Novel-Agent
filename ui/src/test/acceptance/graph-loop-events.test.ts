@@ -12,11 +12,13 @@ describe("graph loop / hitl events", () => {
     const raw = readFileSync(resolve(fixtureDir, "event_graph_loop_changed.json"), "utf8");
     const ev = JSON.parse(raw) as {
       loopId: string;
-      chapter: number;
+      snapshotKey: string;
+      counters: Record<string, number>;
       resetNodeIds: string[];
     };
     expect(ev.loopId).toBe("book-body");
-    expect(ev.chapter).toBe(38);
+    expect(ev.snapshotKey).toBe("chapter=38");
+    expect(ev.counters.chapter).toBe(38);
     expect(ev.resetNodeIds).toContain("write-chapter");
   });
 

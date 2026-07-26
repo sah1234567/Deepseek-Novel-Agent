@@ -6,9 +6,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
+# Do not default CARGO_BUILD_JOBS=1 — GHA sets it; local uses cargo's default parallelism.
 export CARGO_TERM_COLOR="${CARGO_TERM_COLOR:-always}"
 export RUST_BACKTRACE="${RUST_BACKTRACE:-1}"
+if [[ -n "${CARGO_BUILD_JOBS:-}" ]]; then
+  echo "=== CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS} ==="
+fi
 
 bash "$ROOT/scripts/ci-check-node.sh"
 

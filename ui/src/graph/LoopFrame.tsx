@@ -1,10 +1,10 @@
 import type { NodeProps } from "@xyflow/react";
-import type { LoopPhase } from "./types";
+import type { Cursor, LoopPhase } from "./types";
 
 export type LoopFrameData = {
   loopId: string;
-  chapter: number;
-  targetChapters?: number | null;
+  cursor: Cursor;
+  settings: Record<string, unknown>;
   phase: LoopPhase;
   onPause: () => void;
   onResume: () => void;
@@ -19,9 +19,17 @@ const PHASE_COLOR: Record<LoopPhase, string> = {
 };
 
 export function LoopFrame({ data }: NodeProps & { data: LoopFrameData }) {
-  const target = data.targetChapters ?? null;
+  const chapterVal = data.cursor.counters.chapter;
+  const targetVal = data.settings.targetChapters as number | undefined;
+  const target = targetVal ?? null;
   const progress =
-    target && target > 0 ? Math.min(100, Math.round((data.chapter / target) * 100)) : null;
+    target && target > 0 ? Math.min(100, Math.round(((chapterVal ?? 0) / target) * 100)) : null;
+
+  const cursorLabel = data.cursor.counters.chapter != null
+    ? `Ch.${data.cursor.counters.chapter}`
+    : Object.entries(data.cursor.counters)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(", ");
 
   return (
     <div
@@ -51,7 +59,7 @@ export function LoopFrame({ data }: NodeProps & { data: LoopFrameData }) {
       >
         <strong style={{ fontSize: 12 }}>{data.loopId}</strong>
         <span style={{ color: "#94a3b8" }}>
-          Ch.{data.chapter}
+          {cursorLabel}
           {target != null ? ` / ${target}` : ""}
         </span>
         <span

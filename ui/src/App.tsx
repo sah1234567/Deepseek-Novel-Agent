@@ -12,7 +12,6 @@ import { GraphCanvas } from "./graph/GraphCanvas";
 import { GraphHitlModal } from "./graph/GraphHitlModal";
 import { GraphPanelOverlay } from "./graph/GraphPanelOverlay";
 import { NodeSessionHeader } from "./graph/NodeSessionHeader";
-import { TemplatePreviewModal } from "./graph/TemplatePreviewModal";
 import { useGraphState } from "./graph/useGraphState";
 import { ReactFlowProvider } from "@xyflow/react";
 
@@ -35,6 +34,7 @@ function AppShell({
     refresh,
     initProject,
     setPermissionMode,
+    setInteractionMode,
     resumeSession,
     createSession,
     createWork,
@@ -157,8 +157,24 @@ function AppShell({
           setStatusBarError(message);
           setErrorDismissed(false);
         }}
-        onOpenGraph={graph.openGraph}
-        onPreviewTemplate={() => void graph.previewTemplate()}
+        onOpenGraph={() => {
+          void graph.backToChat().finally(() => {
+            graph.openGraph();
+          });
+        }}
+        onSetInteractionMode={async (mode) => {
+          try {
+            if (mode === "orchestrate") {
+              await graph.backToChat();
+            } else {
+              await setInteractionMode(mode);
+            }
+            await refresh();
+            setErrorDismissed(false);
+          } catch {
+            setErrorDismissed(false);
+          }
+        }}
         graphHitlCount={graph.snapshot?.hitl?.length ?? status?.graphHitlCount ?? 0}
         hasPlan={hasPlan}
       />
@@ -178,7 +194,7 @@ function AppShell({
             <NodeSessionHeader
               node={sessionNode}
               snapshot={sessionSnap}
-              onBack={graph.backToChat}
+              onBack={() => void graph.backToChat()}
               onStart={() => void graph.start(sessionNode.id)}
               onApprove={() => void graph.approve(sessionNode.id)}
               onReject={() => void graph.reject(sessionNode.id, "needs revision")}
@@ -229,15 +245,6 @@ function AppShell({
           onApprove={(id) => void graph.approve(id)}
           onReject={(id) => void graph.reject(id, "needs revision")}
           onDismiss={graph.dismissHitlModal}
-        />
-      ) : null}
-      {graph.templatePreview !== null ? (
-        <TemplatePreviewModal
-          json={graph.templatePreview}
-          busy={graph.templateBusy}
-          hasPlan={hasPlan}
-          onClose={graph.closeTemplatePreview}
-          onApply={(force) => void graph.applyTemplate(force)}
         />
       ) : null}
       <SettingsPanel

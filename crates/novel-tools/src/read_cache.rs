@@ -192,9 +192,9 @@ fn coalesce_committed_spans(spans: &mut Vec<(usize, usize)>) {
     spans.sort_by_key(|(s, _)| *s);
     let mut merged = vec![spans[0]];
     for &(s, e) in spans.iter().skip(1) {
-        let last = merged.last_mut().expect("merged non-empty");
-        if last.1.saturating_add(1) >= s {
-            last.1 = last.1.max(e);
+        let idx = merged.len() - 1;
+        if merged[idx].1.saturating_add(1) >= s {
+            merged[idx].1 = merged[idx].1.max(e);
         } else {
             merged.push((s, e));
         }

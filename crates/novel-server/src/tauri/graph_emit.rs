@@ -1,6 +1,7 @@
 //! Shared Tauri emits for graph UI (IPC mutate path + tool Event forwarder).
 
 use novel_graph::GraphStateSnapshot;
+use std::collections::HashMap;
 use tauri::{AppHandle, Emitter};
 
 /// `graph-state-changed` plus HITL hints when present.
@@ -28,17 +29,19 @@ pub fn emit_graph_hitl(app: &AppHandle, snapshot: &GraphStateSnapshot) {
     }
 }
 
-/// Book Loop advance — same shape as IPC `graph_approve` when a loop rolls.
+/// Loop advance — same shape as IPC `graph_approve` when a loop rolls.
 pub fn emit_graph_loop_advanced(
     app: &AppHandle,
     loop_id: &str,
-    chapter: u32,
+    snapshot_key: &str,
+    counters: &HashMap<String, i64>,
     reset_node_ids: &[String],
     snapshot: &GraphStateSnapshot,
 ) {
     let payload = serde_json::json!({
         "loopId": loop_id,
-        "chapter": chapter,
+        "snapshotKey": snapshot_key,
+        "counters": counters,
         "resetNodeIds": reset_node_ids,
         "loops": snapshot.loops,
     });
@@ -51,7 +54,7 @@ pub fn emit_graph_loop_advanced(
             serde_json::json!({
                 "nodeId": id,
                 "reason": "loop_advance",
-                "chapter": chapter,
+                "snapshotKey": snapshot_key,
             }),
         );
     }

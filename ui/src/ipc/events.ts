@@ -9,6 +9,7 @@ export const IPC_EVENTS = {
   sessionTodosUpdated: "session-todos-updated",
   sessionResumed: "session-resumed",
   permissionModeChanged: "permission-mode-changed",
+  interactionModeChanged: "interaction-mode-changed",
   compactionProgress: "compaction-progress",
   subAgentStarted: "sub-agent-started",
   subAgentStream: "sub-agent-stream",

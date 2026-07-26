@@ -246,8 +246,13 @@ impl AgentEngine {
         let agents = store
             .read_file("AGENTS.md")
             .unwrap_or_else(|_| "默认：第三人称限知，2000-3000字/章".into());
-        let (prompt, dynamic) =
-            Self::assemble_system_prompt(config, session, &agents, &settings.permissions.mode)?;
+        let (prompt, dynamic) = Self::assemble_system_prompt(
+            config,
+            session,
+            &agents,
+            &settings.permissions.mode,
+            crate::InteractionMode::Orchestrate,
+        )?;
         Ok((prompt, agents, dynamic))
     }
 }
@@ -380,12 +385,14 @@ fn build_engine_shared(bootstrap: EngineSharedBootstrap<'_>) -> EngineShared {
         context_manager,
         abort_controller,
         permission_mode_override: Arc::new(Mutex::new(permission_mode)),
+        interaction_mode: Arc::new(Mutex::new(crate::InteractionMode::Orchestrate)),
         read_file_cache: Arc::new(DashMap::new()),
         read_cache_dirty_paths: Arc::new(Mutex::new(HashSet::new())),
         graph_state_dirty: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         author_turn_graph_intervention: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         graph_plan_committed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         graph_loop_advance_pending: Arc::new(Mutex::new(None)),
+        plan_builder_draft: Arc::new(Mutex::new(None)),
         file_op_locks: Arc::new(DashMap::new()),
         subagent_queue: Arc::new(Mutex::new(Vec::new())),
         session_llm,

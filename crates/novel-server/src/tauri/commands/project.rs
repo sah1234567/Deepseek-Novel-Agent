@@ -53,7 +53,7 @@ pub async fn create_work(ctx: &CommandContext, name: String) -> Result<String, S
     if !work.exists() {
         novel_knowledge::init_project_scaffold(&work, templates.as_path())
             .map_err(|e| e.to_string())?;
-        // Formal plan is applied later (GraphApplyTemplate / GraphCommitPlan).
+        // Formal plan is built later via PlanBuilder / GraphCommitPlan.
     }
     switch_project_and_create_session(ctx, work).await
 }
@@ -67,8 +67,11 @@ pub async fn open_work(ctx: &CommandContext, name: String) -> Result<String, Str
         return Err(format!("work not found: {name}"));
     }
     // Load state only if a formal plan already exists — never silent-seed a template plan.
+    // Legacy/corrupt plans must not block opening the work (banner spam); Agent can migrate.
     if novel_graph::plan_exists(&work) {
-        novel_graph::ensure_graph_initialized(&work).map_err(|e| e.to_string())?;
+        if let Err(e) = novel_graph::ensure_graph_initialized(&work) {
+            tracing::warn!(error = %e, work = %name, "open_work: graph init skipped");
+        }
     }
     switch_project_and_create_session(ctx, work).await
 }

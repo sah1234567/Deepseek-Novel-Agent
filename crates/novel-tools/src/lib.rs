@@ -1,5 +1,6 @@
 #![deny(clippy::unwrap_used)]
 #![cfg_attr(test, allow(clippy::unwrap_used))]
+#![cfg_attr(test, allow(clippy::expect_used))]
 
 mod abort;
 mod blocking;
@@ -87,5 +88,6 @@ pub fn default_registry() -> ToolRegistry {
     reg.register(Box::new(novel::GraphReopenTool));
     reg.register(Box::new(novel::GraphApplyTemplateTool));
     reg.register(Box::new(novel::GraphCommitPlanTool));
+    reg.register(Box::new(novel::PlanBuilderTool));
     reg
 }

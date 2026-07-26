@@ -1,4 +1,6 @@
-//! Plan and runtime types for graph-primary orchestration.
+//! Generic DAG+Loop workflow execution engine types.
+//!
+//! Zero domain knowledge — no assumptions about chapters, volumes, outlines, or novels.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -8,20 +10,100 @@ pub const GRAPH_STATE_REL: &str = "knowledge/meta/graph-state.json";
 pub const GRAPH_JSONL_REL: &str = "knowledge/meta/graph.jsonl";
 pub const HANDOFFS_DIR_REL: &str = "knowledge/meta/handoffs";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum NodeKind {
-    WorldBible,
-    Outline,
-    FineOutlineBatch,
-    ChapterBody,
-    VolumeReview,
-    Research,
-    IntentRouter,
-    SyncCanon,
-    EnsureFineOutline,
-    Custom,
+// ── Cursor (generic key-value counters + tags) ──────────────────────
+
+/// Generic execution cursor. `counters` and `tags` keys are defined by the plan JSON;
+/// Rust code makes zero assumptions about their names or semantics.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct Cursor {
+    pub counters: HashMap<String, i64>,
+    #[serde(default)]
+    pub tags: HashMap<String, String>,
 }
+
+// ── Advance rule (configurable loop progression) ────────────────────
+
+fn one_i64() -> i64 {
+    1
+}
+
+/// Describes how a loop cursor advances when `advance_after` station achieves.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct AdvanceRule {
+    /// Which counter to increment on advance.
+    pub increment: String,
+    /// How much to increment (default 1).
+    #[serde(default = "one_i64")]
+    pub step: i64,
+    /// Side-effects applied to other counters after the primary increment.
+    #[serde(default)]
+    pub side_effects: Vec<CounterOp>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum CounterOp {
+    Increment {
+        counter: String,
+        #[serde(default = "one_i64")]
+        by: i64,
+    },
+    Decrement {
+        counter: String,
+        #[serde(default = "one_i64")]
+        by: i64,
+    },
+    Set {
+        counter: String,
+        value: i64,
+    },
+    Reset {
+        counter: String,
+    },
+}
+
+// ── Loop termination condition ──────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Until {
+    /// counter > value (or resolved value_from)
+    CounterGt {
+        counter: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        value: Option<i64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        value_from: Option<String>,
+    },
+    /// counter >= value
+    CounterGe {
+        counter: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        value: Option<i64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        value_from: Option<String>,
+    },
+    /// counter < value
+    CounterLt {
+        counter: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        value: Option<i64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        value_from: Option<String>,
+    },
+    /// counter == value
+    CounterEq {
+        counter: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        value: Option<i64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        value_from: Option<String>,
+    },
+    /// Never auto-complete; only stopped via manual command.
+    Manual,
+}
+
+// ── Artifact role ───────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -41,6 +123,8 @@ pub struct ArtifactRef {
     #[serde(default)]
     pub role: ArtifactRole,
 }
+
+// ── Acceptance / gate ───────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -80,6 +164,8 @@ pub struct Acceptance {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub human: Option<HumanGate>,
 }
+
+// ── Rollback / iterate ─────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -133,7 +219,9 @@ pub struct Iterate {
     pub until: IterateUntil,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+// ── Plan node ──────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct PlanNode {
     pub id: String,
     pub title: String,
@@ -143,8 +231,10 @@ pub struct PlanNode {
     pub spec_template: Option<String>,
     #[serde(default)]
     pub deps: Vec<String>,
-    #[serde(default = "default_node_kind")]
-    pub kind: NodeKind,
+    /// Domain tags (e.g. "chapter_body", "world_bible", "review").
+    /// Replaces the old `NodeKind` enum — any string is valid.
+    #[serde(default)]
+    pub tags: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub artifacts: Vec<ArtifactRef>,
     #[serde(default)]
@@ -155,33 +245,10 @@ pub struct PlanNode {
     pub iterate: Option<Iterate>,
 }
 
-fn default_node_kind() -> NodeKind {
-    NodeKind::Custom
-}
+// ── Loop definition ────────────────────────────────────────────────
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub struct LoopCursor {
-    #[serde(default = "one")]
-    pub chapter: u32,
-    #[serde(default = "one")]
-    pub volume: u32,
-    #[serde(default)]
-    pub fine_outline_through: u32,
-    #[serde(default = "one")]
-    pub round: u32,
-}
-
-fn one() -> u32 {
-    1
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LoopUntil {
-    pub op: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub value_from: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub value: Option<u32>,
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -193,49 +260,65 @@ pub struct LoopOnAdvance {
     /// Clear cached `effective_spec` so the next start re-renders NodeObjective (default true).
     #[serde(default = "default_true")]
     pub reinject_objectives: bool,
-    /// When true (default), loop advance must not delete `world_state_board` files (KeepFiles).
+    /// When true (default), loop advance must not delete `world_state_board` files.
     #[serde(default = "default_true")]
     pub preserve_canon_files: bool,
 }
 
-fn default_true() -> bool {
-    true
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BookLoop {
+pub struct WorkflowLoop {
     pub id: String,
     pub stations: Vec<String>,
     pub entry: String,
     pub advance_after: String,
     #[serde(default)]
-    pub cursor: LoopCursor,
-    pub until: LoopUntil,
+    pub cursor: Cursor,
+    /// How the cursor advances when `advance_after` achieves.
+    #[serde(default = "default_advance")]
+    pub advance: AdvanceRule,
+    /// Termination condition.
+    pub until: Until,
     pub on_advance: LoopOnAdvance,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub world_state_board: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Default advance rule: increment first counter by 1, no side effects.
+/// Plan authors should override with domain-specific counters.
+fn default_advance() -> AdvanceRule {
+    AdvanceRule {
+        increment: String::new(),
+        step: 1,
+        side_effects: vec![],
+    }
+}
+
+// ── Plan graph ─────────────────────────────────────────────────────
+
+fn default_max_parallel() -> usize {
+    4
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct PlanGraph {
     pub version: String,
     #[serde(default)]
     pub nodes: Vec<PlanNode>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub loops: Vec<BookLoop>,
+    pub loops: Vec<WorkflowLoop>,
     #[serde(default)]
     pub enforce_gates: bool,
     #[serde(default = "default_max_parallel")]
     pub max_parallel_nodes: usize,
+    /// Generic key-value settings (e.g. targetChapters, targetSections, …).
+    /// Replaces the old `target_chapters: Option<u32>`.
     #[serde(default)]
-    pub target_chapters: Option<u32>,
+    pub settings: HashMap<String, serde_json::Value>,
     #[serde(default)]
     pub auto_start_ready: bool,
 }
 
-fn default_max_parallel() -> usize {
-    4
-}
+// ── Status / phase enums ───────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -260,6 +343,8 @@ pub enum LoopPhase {
     Paused,
     Completed,
 }
+
+// ── Runtime state types ────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileTouch {
@@ -311,7 +396,7 @@ pub struct GraphNodeRuntime {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct GraphLoopRuntime {
     #[serde(default)]
-    pub cursor: LoopCursor,
+    pub cursor: Cursor,
     #[serde(default)]
     pub phase: LoopPhase,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -330,8 +415,9 @@ pub struct GraphSettings {
     pub max_parallel_nodes: usize,
     #[serde(default)]
     pub auto_start_ready: bool,
+    /// Generic key-value settings.
     #[serde(default)]
-    pub target_chapters: Option<u32>,
+    pub settings: HashMap<String, serde_json::Value>,
 }
 
 impl Default for GraphSettings {
@@ -340,7 +426,7 @@ impl Default for GraphSettings {
             enforce_gates: false,
             max_parallel_nodes: default_max_parallel(),
             auto_start_ready: false,
-            target_chapters: None,
+            settings: HashMap::new(),
         }
     }
 }
@@ -361,7 +447,8 @@ pub struct GraphState {
     pub settings: GraphSettings,
 }
 
-/// IPC / UI snapshot DTOs
+// ── IPC / UI snapshot DTOs ─────────────────────────────────────────
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphHitlHint {
@@ -383,7 +470,8 @@ pub struct GraphEdgeView {
 pub struct GraphNodeView {
     pub id: String,
     pub title: String,
-    pub kind: NodeKind,
+    /// Domain tags (replaces old `kind: NodeKind`).
+    pub tags: Vec<String>,
     pub status: NodeStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub loop_id: Option<String>,
@@ -400,9 +488,10 @@ pub struct GraphNodeView {
 pub struct GraphLoopView {
     pub loop_id: String,
     pub station_ids: Vec<String>,
-    pub cursor: LoopCursor,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_chapters: Option<u32>,
+    pub cursor: Cursor,
+    /// Generic settings snapshot for this loop.
+    #[serde(default)]
+    pub settings: HashMap<String, serde_json::Value>,
     pub phase: LoopPhase,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_station_id: Option<String>,
@@ -437,7 +526,7 @@ pub struct GraphStateSnapshot {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub loop_summaries: Vec<LoopSummary>,
     pub enforce_gates: bool,
-    /// False when work has no formal plan-graph yet (interview / template-not-applied).
+    /// False when work has no formal plan-graph yet.
     #[serde(default = "default_true")]
     pub has_plan: bool,
 }

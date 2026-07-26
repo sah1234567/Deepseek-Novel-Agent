@@ -29,7 +29,7 @@
 | 改 UI / IPC | [novel-server](crates/novel-server.md) · [FRAMEWORK §2.5](../FRAMEWORK.md#25-前端状态与-ipc) |
 | 改 Agent 循环 / 流式 Tool / Subagent | [novel-core](crates/novel-core.md) §1.2 · [novel-tools](crates/novel-tools.md) · [FRAMEWORK §2.3](../FRAMEWORK.md#23-fork-子-agent) |
 | 改知识库 / 脚手架 | [novel-knowledge](crates/novel-knowledge.md) · `templates/` 目录 |
-| 改 Skill / Prompt | [novel-skills](crates/novel-skills.md) · [prompt/system.md](../prompt/system.md) |
+| 改 Skill / Prompt | [novel-skills](crates/novel-skills.md) · [prompt/shared-base.md](../prompt/shared-base.md) · [prompt/orchestrator.md](../prompt/orchestrator.md) |
 | 改持久化 / 会话列表 / Token | [novel-state](crates/novel-state.md)（`accumulate_session_tokens` / `context_tokens` / `total_turns` / `api_call_count` / `last_active_at`） |
 
 ## 运行时资产（非 crate 代码）
@@ -56,10 +56,10 @@ Skill 文件夹格式：`skills/<id>/SKILL.md` + 可选 `references/`。
 
 | 主题 | 位置 |
 |------|------|
-| 创作顺序（大纲→细纲→正文） | `prompt/system.md` §1 |
-| **读盘经济**（Grep 优先、分段 Read） | `prompt/system.md` §2.3、§5.1 |
-| 细纲后 **PlanAuditor**；正文后 **2 项 Subagent** 并行 Fork | `prompt/system.md` §1.2、§3.2 |
-| 权限四模式 | `prompt/system.md` §2.1 |
+| 创作顺序（大纲→细纲→正文） | `skills/chapter-writing/SKILL.md` |
+| **读盘经济**（Grep 优先、分段 Read） | `prompt/shared-base.md` §2 |
+| 细纲后 **PlanAuditor**；正文后 **2 项 Subagent** 并行 Fork | `prompt/orchestrator.md`（子 Agent 调度） |
+| 权限四模式 | `prompt/shared-base.md` §1 |
 
 引擎仅 enforce sandbox、Plan 路径、嵌套 fork 等；写后审计顺序由 prompt 约束，非 Rust 硬编码。
 

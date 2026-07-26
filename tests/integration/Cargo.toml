@@ -13,7 +13,6 @@ novel-knowledge = { path = "../../crates/novel-knowledge" }
 novel-skills = { path = "../../crates/novel-skills" }
 novel-state = { path = "../../crates/novel-state" }
 novel-tools = { path = "../../crates/novel-tools" }
-novel-server = { path = "../../crates/novel-server" }
 novel-graph = { path = "../../crates/novel-graph" }
 rstest = { workspace = true }
 serde_json = { workspace = true }
@@ -47,3 +46,7 @@ path = "graph_orchestration.rs"
 [[test]]
 name = "graph_ipc"
 path = "graph_ipc.rs"
+
+[[test]]
+name = "interaction_mode"
+path = "interaction_mode.rs"

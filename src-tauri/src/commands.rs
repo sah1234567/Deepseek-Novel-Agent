@@ -74,6 +74,16 @@ pub async fn set_permission_mode(
 }
 
 #[tauri::command]
+pub async fn set_interaction_mode(
+    state: State<'_, AppState>,
+    app: AppHandle,
+    mode: String,
+) -> Result<(), String> {
+    let ctx = state.command_context(app);
+    novel_server::tauri::set_interaction_mode(&ctx, mode).await
+}
+
+#[tauri::command]
 pub async fn init_novel_project(state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
     let ctx = state.command_context(app);
     novel_server::tauri::init_novel_project(&ctx).await
@@ -290,6 +300,12 @@ pub async fn graph_activate_node(
 }
 
 #[tauri::command]
+pub async fn graph_clear_focus(state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
+    let ctx = state.command_context(app);
+    novel_server::tauri::graph_clear_focus(&ctx).await
+}
+
+#[tauri::command]
 pub async fn graph_start_node(
     state: State<'_, AppState>,
     app: AppHandle,
@@ -357,10 +373,11 @@ pub async fn graph_loop_set_target(
     state: State<'_, AppState>,
     app: AppHandle,
     loop_id: String,
-    target_chapters: u32,
+    key: String,
+    value: serde_json::Value,
 ) -> Result<novel_server::tauri::GraphMutateResult, String> {
     let ctx = state.command_context(app);
-    novel_server::tauri::graph_loop_set_target(&ctx, loop_id, target_chapters).await
+    novel_server::tauri::graph_loop_set_target(&ctx, loop_id, key, value).await
 }
 
 #[tauri::command]
@@ -368,10 +385,10 @@ pub async fn graph_loop_set_cursor(
     state: State<'_, AppState>,
     app: AppHandle,
     loop_id: String,
-    chapter: u32,
+    counters: std::collections::HashMap<String, i64>,
 ) -> Result<novel_server::tauri::GraphMutateResult, String> {
     let ctx = state.command_context(app);
-    novel_server::tauri::graph_loop_set_cursor(&ctx, loop_id, chapter).await
+    novel_server::tauri::graph_loop_set_cursor(&ctx, loop_id, counters).await
 }
 
 #[tauri::command]

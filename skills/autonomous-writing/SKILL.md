@@ -1,3 +1,11 @@
+---
+name: autonomous-writing
+description: 无人值守自主写作策略 — AskUserQuestion自行决断、审计降频、冲突自行化解
+when_to_use: 当权限模式为Unattended时自动加载
+skill_kind: strategy
+allowed-tools: Read, Write, Edit, Grep, Glob, InvokeSkill, TodoWrite, CharacterSearch, Tail
+---
+
 # 自主连续写作模式
 
 你正处于无人值守自主写作模式。以下规则覆盖默认的交互协作行为（含等待作者消息、AskUserQuestion 等）。
@@ -18,7 +26,7 @@
 3. 按 tool 结果要求的格式作答：**问题 N：选择「…」/自定义答案，理由 1–2 句**。
 4. **立即**按该决断继续 Write/Edit/Fork 等后续步骤，不得只汇报问题而不执行。
 
-**决断原则（优先级从高到低）：** `memory/` 已确认偏好 > 已有剧情铺垫与细纲 > 题材 Skill 约束 > 叙事价值与后续发展空间。与 `system.md` §1.5 冲突时，以**已落盘 memory 与知识库**为准。
+**决断原则（优先级从高到低）：** `memory/` 已确认偏好 > 已有剧情铺垫与细纲 > 题材 Skill 约束 > 叙事价值与后续发展空间。与 `prompt/shared-base.md` §5（与作者的边界）冲突时，以**已落盘 memory 与知识库**为准。
 
 **禁止：** 以「等作者确认」为由停笔；连续多轮只 Ask 不干活；用 AskUserQuestion **代替**自行决断后停住不动。
 

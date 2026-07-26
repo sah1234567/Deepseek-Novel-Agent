@@ -1,4 +1,5 @@
 #![allow(clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
 
 use novel_tools::{
     default_registry, PendingSubagentWork, PermissionMode, ToolCallSpec, ToolContext, ToolExecutor,

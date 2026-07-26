@@ -8,6 +8,7 @@ exclude = [
   "**/tauri/commands/**",
   "**/tauri/engine_loop.rs",
   "**/tauri/events.rs",
+  "**/tauri/graph_emit.rs",
   "**/tauri/mod.rs",
   "**/build.rs",
   "**/tests/**",

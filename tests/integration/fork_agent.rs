@@ -1,4 +1,5 @@
 #![allow(clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
 
 use novel_core::{AgentEngine, AgentType, EngineConfig};
 use tempfile::TempDir;
@@ -56,9 +57,22 @@ async fn fork_from_system_only_deepseek_cache() {
         )
         .await
         .unwrap();
-    // 始终从 system prompt 开始
+    // Sub-agent prompt = shared-base (+ audit skill body), not the parent's orchestrator role.
+    // Within the child, system is a fixed prefix so DeepSeek KV cache can hit across its turns.
     assert_eq!(child.messages.len(), 2);
-    assert_eq!(child.messages[0].content, engine.messages[0].content);
+    assert_eq!(child.messages[0].role, "system");
+    assert!(child.messages[0]
+        .content
+        .contains("\u{5171}\u{4eab}\u{5e95}\u{5ea7}")); // 共享底座
+    assert!(!child.messages[0]
+        .content
+        .contains("\u{56fe}\u{7f16}\u{6392}\u{5668}")); // 图编排器
+    assert!(
+        child.messages[0]
+            .content
+            .contains("\u{77e5}\u{8bc6}\u{5e93}") // 知识库
+            || child.messages[0].content.contains("\u{5ba1}\u{8ba1}") // 审计
+    );
 }
 
 #[tokio::test]

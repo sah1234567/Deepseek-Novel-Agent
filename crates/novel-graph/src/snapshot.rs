@@ -25,11 +25,11 @@ pub fn build_snapshot(tracker: &GraphTracker) -> GraphStateSnapshot {
             let cursor_badge = rt
                 .and_then(|r| r.loop_id.as_ref())
                 .and_then(|lid| tracker.state.loops.get(lid))
-                .map(|l| format!("Ch.{}", l.cursor.chapter));
+                .map(|l| serialize_cursor_badge(&l.cursor));
             GraphNodeView {
                 id: n.id.clone(),
                 title: n.title.clone(),
-                kind: n.kind,
+                tags: n.tags.clone(),
                 status,
                 loop_id: rt.and_then(|r| r.loop_id.clone()),
                 cursor_badge,
@@ -62,11 +62,7 @@ pub fn build_snapshot(tracker: &GraphTracker) -> GraphStateSnapshot {
                 cursor: rt
                     .map(|r| r.cursor.clone())
                     .unwrap_or_else(|| lp.cursor.clone()),
-                target_chapters: tracker
-                    .state
-                    .settings
-                    .target_chapters
-                    .or(tracker.plan.target_chapters),
+                settings: tracker.state.settings.settings.clone(),
                 phase: rt.map(|r| r.phase).unwrap_or_default(),
                 active_station_id: rt.and_then(|r| r.active_station_id.clone()),
                 last_advance_at: rt.and_then(|r| r.last_advance_at.clone()),
@@ -81,10 +77,7 @@ pub fn build_snapshot(tracker: &GraphTracker) -> GraphStateSnapshot {
     let loop_summaries: Vec<LoopSummary> = loops
         .iter()
         .map(|l| {
-            let label = match l.target_chapters {
-                Some(t) => format!("Ch.{}/{}", l.cursor.chapter, t),
-                None => format!("Ch.{}", l.cursor.chapter),
-            };
+            let label = serialize_cursor_summary(&l.cursor, &l.settings);
             LoopSummary {
                 loop_id: l.loop_id.clone(),
                 cursor_label: label,
@@ -103,7 +96,8 @@ pub fn build_snapshot(tracker: &GraphTracker) -> GraphStateSnapshot {
         hitl,
         loop_summaries,
         enforce_gates: tracker.state.settings.enforce_gates,
-        has_plan: true,
+        // Empty skeleton (no nodes) is not a formal plan — guides LLM into PlanBuilder flow.
+        has_plan: !tracker.plan.nodes.is_empty(),
     }
 }
 
@@ -120,5 +114,52 @@ pub fn empty_snapshot() -> GraphStateSnapshot {
         loop_summaries: Vec::new(),
         enforce_gates: false,
         has_plan: false,
+    }
+}
+
+/// Build a compact badge string from cursor counters.
+/// Sorts keys alphabetically for deterministic output.
+fn serialize_cursor_badge(cursor: &crate::types::Cursor) -> String {
+    let mut keys: Vec<&String> = cursor.counters.keys().collect();
+    keys.sort();
+    if let Some(key) = keys.first() {
+        let val = cursor.counters.get(*key).copied().unwrap_or(0);
+        format!("{key}={val}")
+    } else {
+        String::new()
+    }
+}
+
+/// Build a human-readable cursor summary, optionally with target.
+/// Sorts keys alphabetically for deterministic output.
+fn serialize_cursor_summary(
+    cursor: &crate::types::Cursor,
+    settings: &std::collections::HashMap<String, serde_json::Value>,
+) -> String {
+    let mut keys: Vec<&String> = cursor.counters.keys().collect();
+    keys.sort();
+    let parts: Vec<String> = keys
+        .iter()
+        .map(|k| {
+            let v = cursor.counters.get(*k).copied().unwrap_or(0);
+            format!("{k}={v}")
+        })
+        .collect();
+    let base = parts.join(", ");
+    // Try to find a matching target for the first counter (alphabetically)
+    if let Some(key) = keys.first() {
+        let target_key = format!("target{}", capitalize(key));
+        if let Some(target) = settings.get(&target_key).and_then(|v| v.as_i64()) {
+            return format!("{base}/{target}");
+        }
+    }
+    base
+}
+
+fn capitalize(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
     }
 }

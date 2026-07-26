@@ -11,10 +11,17 @@ export type NodeStatus =
 
 export type LoopPhase = "idle" | "running" | "advancing" | "paused" | "completed";
 
+/** Generic cursor — counters and tags are defined by the plan JSON. */
+export type Cursor = {
+  counters: Record<string, number>;
+  tags: Record<string, string>;
+};
+
 export type GraphNodeView = {
   id: string;
   title: string;
-  kind: string;
+  /** Domain tags (replaces old `kind: string`). */
+  tags: string[];
   status: NodeStatus;
   loopId?: string | null;
   cursorBadge?: string | null;
@@ -31,8 +38,9 @@ export type GraphEdgeView = {
 export type GraphLoopView = {
   loopId: string;
   stationIds: string[];
-  cursor: { chapter: number; volume: number; fineOutlineThrough: number; round: number };
-  targetChapters?: number | null;
+  cursor: Cursor;
+  /** Generic settings (replaces old `targetChapters?: number`). */
+  settings: Record<string, unknown>;
   phase: LoopPhase;
   activeStationId?: string | null;
   lastAdvanceAt?: string | null;
@@ -69,7 +77,8 @@ export type GraphStateSnapshot = {
 };
 
 export type LoopHistoryRow = {
-  chapter: number;
+  /** Generic snapshot key (replaces old `chapter: number`). */
+  snapshotKey: string;
   artifactPath: string;
   handoffSummaryPreview: string;
   achievedAt?: string | null;

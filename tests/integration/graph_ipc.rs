@@ -1,3 +1,6 @@
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
+
 //! Graph IPC / snapshot shape checks (no Tauri AppHandle).
 
 use novel_graph::{build_snapshot, parse_plan, GraphTracker};
@@ -27,7 +30,7 @@ fn snapshot_matches_fixture_shape() {
     .expect("golden");
     let g: serde_json::Value = serde_json::from_str(&golden).expect("parse golden");
     assert_eq!(g["loops"][0]["loopId"], "book-body");
-    assert_eq!(g["loops"][0]["cursor"]["chapter"], 37);
+    assert_eq!(g["loops"][0]["cursor"]["counters"]["chapter"], 37);
 }
 
 #[test]
@@ -39,8 +42,8 @@ fn loop_changed_fixture_deserializes() {
     .expect("fixture");
     let v: serde_json::Value = serde_json::from_str(&raw).expect("json");
     assert_eq!(v["loopId"], "book-body");
-    assert_eq!(v["chapter"], 38);
-    assert!(v["resetNodeIds"].as_array().unwrap().len() >= 1);
+    assert_eq!(v["counters"]["chapter"], 38);
+    assert!(!v["resetNodeIds"].as_array().unwrap().is_empty());
 }
 
 #[test]

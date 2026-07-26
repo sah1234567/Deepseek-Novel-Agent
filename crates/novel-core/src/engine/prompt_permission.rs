@@ -2,7 +2,7 @@ use super::types::{AgentEngine, EngineConfig, EngineStatus};
 use crate::context::dynamic_context::{
     build_dynamic_context, load_frozen_static_from_metadata, refresh_system_dynamic_context,
 };
-use crate::{AgentError, DynamicContext, SessionHandle, SystemPromptBuilder};
+use crate::{AgentError, DynamicContext, InteractionMode, SessionHandle, SystemPromptBuilder};
 use std::sync::atomic::Ordering;
 
 use novel_tools::PermissionMode;
@@ -44,6 +44,7 @@ impl AgentEngine {
         session: &SessionHandle,
         agents_md: &str,
         permission_mode: &str,
+        interaction: InteractionMode,
     ) -> Result<(String, DynamicContext), AgentError> {
         let dynamic = build_dynamic_context(
             &config.project_root,
@@ -53,7 +54,7 @@ impl AgentEngine {
             &config.skills_dir,
         );
         let is_unattended = permission_mode == "unattended";
-        let prompt = SystemPromptBuilder::new().build(&dynamic, is_unattended);
+        let prompt = SystemPromptBuilder::new().build(&dynamic, is_unattended, interaction);
         Ok((prompt, dynamic))
     }
 
@@ -75,7 +76,8 @@ impl AgentEngine {
             .lock()
             .map(|g| matches!(*g, PermissionMode::Unattended))
             .unwrap_or(false);
-        let prompt = SystemPromptBuilder::new().build(&ctx, is_unattended);
+        let interaction = self.effective_interaction_mode();
+        let prompt = SystemPromptBuilder::new().build(&ctx, is_unattended, interaction);
         self.shared.system_prompt = prompt.clone();
         if let Some(m0) = self.messages.first_mut() {
             if m0.role == "system" {
@@ -93,9 +95,11 @@ impl AgentEngine {
     /// Snapshot for Tauri / frontend status bar.
     pub fn status_snapshot(&self) -> EngineStatus {
         let mode = self.tool_context().effective_permission_mode();
+        let interaction = self.effective_interaction_mode();
         EngineStatus {
             session_id: self.shared.session.id.clone(),
             permission_mode: mode.label().to_string(),
+            interaction_mode: interaction.as_str().to_string(),
             hook_running: self.shared.drain_in_progress.load(Ordering::SeqCst),
             pending_user_question: self.pending_user_question.is_some(),
             turn_in_progress: self.is_turn_in_progress(),
@@ -103,6 +107,90 @@ impl AgentEngine {
             project_initialized: self.shared.session.project_root.join("AGENTS.md").is_file(),
             has_interruptible_tool_in_progress: self.has_interruptible_tool_in_progress,
         }
+    }
+
+    /// Raw stored mode (may be Work even if focus was cleared by loop advance).
+    pub fn raw_interaction_mode(&self) -> InteractionMode {
+        self.shared
+            .interaction_mode
+            .lock()
+            .map(|g| *g)
+            .unwrap_or(InteractionMode::Orchestrate)
+    }
+
+    /// Effective mode: Work only when raw is Work **and** a node is focused.
+    pub fn effective_interaction_mode(&self) -> InteractionMode {
+        let raw = self.raw_interaction_mode();
+        if raw == InteractionMode::Work {
+            let focused = novel_graph::GraphTracker::load(&self.shared.session.project_root)
+                .ok()
+                .flatten()
+                .and_then(|t| t.state.focused_node_id);
+            if focused.is_some() {
+                return InteractionMode::Work;
+            }
+            // Heal stale Work after focus loss (loop advance / clear).
+            if let Ok(mut g) = self.shared.interaction_mode.lock() {
+                *g = InteractionMode::Orchestrate;
+            }
+            return InteractionMode::Orchestrate;
+        }
+        InteractionMode::Orchestrate
+    }
+
+    /// Set interaction mode. `Work` requires a focused node; `Orchestrate` clears focus.
+    pub fn apply_interaction_mode_change(
+        &mut self,
+        new_mode: InteractionMode,
+    ) -> Result<(), AgentError> {
+        if self.is_turn_in_progress() {
+            return Err(AgentError::Validation(
+                "cannot change interaction mode while turn in progress".into(),
+            ));
+        }
+
+        match new_mode {
+            InteractionMode::Work => {
+                let focused = novel_graph::GraphTracker::load(&self.shared.session.project_root)
+                    .ok()
+                    .flatten()
+                    .and_then(|t| t.state.focused_node_id);
+                if focused.is_none() {
+                    return Err(AgentError::Validation(
+                        "互动模式需要先 focus 一个节点（Graph 中点击节点或 Start）".into(),
+                    ));
+                }
+            }
+            InteractionMode::Orchestrate => {
+                if let Ok(Some(mut t)) =
+                    novel_graph::GraphTracker::load(&self.shared.session.project_root)
+                {
+                    if t.state.focused_node_id.is_some() {
+                        t.set_focus(None)
+                            .map_err(|e| AgentError::Validation(e.to_string()))?;
+                        t.save(&self.shared.session.project_root)
+                            .map_err(|e| AgentError::Validation(e.to_string()))?;
+                        self.shared.graph_state_dirty.store(true, Ordering::SeqCst);
+                    }
+                }
+            }
+        }
+
+        if let Ok(mut g) = self.shared.interaction_mode.lock() {
+            *g = new_mode;
+        }
+        self.refresh_system_dynamic_sections()?;
+        tracing::debug!(mode = new_mode.as_str(), "interaction_mode_changed");
+        Ok(())
+    }
+
+    /// Mark Work after graph activate/start (focus already set on disk).
+    pub fn mark_interaction_work_after_focus(&mut self) -> Result<(), AgentError> {
+        if let Ok(mut g) = self.shared.interaction_mode.lock() {
+            *g = InteractionMode::Work;
+        }
+        self.refresh_system_dynamic_sections()?;
+        Ok(())
     }
 
     pub(crate) fn set_permission_mode_override(&self, mode: novel_tools::PermissionMode) {

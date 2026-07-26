@@ -1,0 +1,38 @@
+{
+  "version": "1",
+  "target_chapters": 200,
+  "enforce_gates": true,
+  "max_parallel_nodes": 4,
+  "auto_start_ready": false,
+  "loops": [
+    {
+      "id": "book-body",
+      "stations": ["ensure-fine-outline", "write-chapter", "sync-canon"],
+      "entry": "ensure-fine-outline",
+      "advance_after": "sync-canon",
+      "cursor": { "chapter": 1, "volume": 1, "fine_outline_through": 0, "round": 1 },
+      "until": { "op": "chapter_gt", "value_from": "work_meta.target_chapters" },
+      "on_advance": {
+        "reopen": ["ensure-fine-outline", "write-chapter", "sync-canon"],
+        "clear_node_sessions": true,
+        "reinject_objectives": true,
+        "preserve_canon_files": true
+      },
+      "world_state_board": ["knowledge/characters/", "knowledge/INDEX.md"]
+    }
+  ],
+  "nodes": [
+    {
+      "id": "world-bible", "title": "世界观", "spec": "build world bible",
+      "kind": "world_bible",
+      "artifacts": [{ "path": "knowledge/shared-systems/背景设定.md", "role": "primary_deliverable" }],
+      "acceptance": { "human": { "required": true, "on_reject": "continue" } }
+    },
+    {
+      "id": "outline", "title": "大纲", "spec": "write outline", "deps": ["world-bible"],
+      "kind": "outline",
+      "artifacts": [{ "path": "knowledge/plot/大纲.md", "role": "primary_deliverable" }],
+      "acceptance": { "machine": "auditor", "human": { "required": true, "on_reject": "continue" } }
+    }
+  ]
+}

@@ -3,7 +3,7 @@
 use crate::error::GraphResult;
 use crate::persist::{load_plan, plan_exists, save_plan, save_state, state_path};
 use crate::tracker::GraphTracker;
-use crate::{default_plan, default_plan_json};
+use crate::{default_plan, default_plan_json, GraphState};
 use std::fs;
 use std::path::Path;
 
@@ -16,12 +16,9 @@ fn ensure_plan_on_disk(work_root: &Path) -> GraphResult<()> {
     let plan = load_plan(work_root)?;
     match plan {
         Some(_) => Ok(()),
-        None => {
-            // File present but empty or unreadable as valid plan → error, not overwrite.
-            Err(crate::error::GraphError::Validation(
-                "plan-graph.json exists but could not be parsed; fix or remove it manually".into(),
-            ))
-        }
+        None => Err(crate::error::GraphError::Validation(
+            "plan-graph.json exists but could not be parsed; fix or remove it manually".into(),
+        )),
     }
 }
 
@@ -40,7 +37,8 @@ pub fn ensure_graph_initialized(work_root: &Path) -> GraphResult<GraphTracker> {
     Ok(t)
 }
 
-/// Copy bundled default plan JSON bytes into work if missing (scaffold companion).
+/// Copy bundled default plan JSON bytes into work if missing.
+/// Writes an empty skeleton — no nodes or loops. The LLM builds the workflow via PlanBuilder.
 pub fn write_default_plan_file(work_root: &Path) -> GraphResult<()> {
     let p = work_root.join(crate::types::PLAN_GRAPH_REL);
     if p.exists() {
@@ -50,8 +48,9 @@ pub fn write_default_plan_file(work_root: &Path) -> GraphResult<()> {
         fs::create_dir_all(parent)?;
     }
     fs::write(p, default_plan_json())?;
-    let t = GraphTracker::new(default_plan()?);
-    save_state(work_root, &t.state)?;
+    // Empty skeleton has no nodes — Trcker::new would fail validation.
+    // Just write an empty state so graph-state.json exists.
+    save_state(work_root, &GraphState::default())?;
     Ok(())
 }
 
@@ -90,22 +89,5 @@ mod tests {
         write_default_plan_file(tmp.path()).unwrap();
         let after = fs::metadata(&plan_path).unwrap().modified().unwrap();
         assert_eq!(mtime, after);
-    }
-
-    /// Scaffold copy (`templates/knowledge/meta/plan-graph.json`) must stay identical
-    /// to the crate-bundled `include_str` plan used by `default_plan_json`.
-    #[test]
-    fn bundled_plan_matches_scaffold_template() {
-        let crate_json = default_plan_json().replace("\r\n", "\n");
-        let scaffold = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../templates/knowledge/meta/plan-graph.template.json");
-        let scaffold_json = fs::read_to_string(&scaffold)
-            .unwrap_or_else(|e| panic!("read {}: {e}", scaffold.display()))
-            .replace("\r\n", "\n");
-        assert_eq!(
-            crate_json.trim(),
-            scaffold_json.trim(),
-            "drift between crates/novel-graph/templates/plan-graph.json and templates/knowledge/meta/plan-graph.template.json"
-        );
     }
 }

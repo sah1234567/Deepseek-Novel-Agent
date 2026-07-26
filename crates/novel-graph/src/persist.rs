@@ -1,6 +1,6 @@
 //! Persist plan-graph.json / graph-state.json / graph.jsonl / handoffs.
 
-use crate::error::GraphResult;
+use crate::error::{GraphError, GraphResult};
 use crate::types::{
     GraphState, NodeHandoff, PlanGraph, GRAPH_JSONL_REL, GRAPH_STATE_REL, HANDOFFS_DIR_REL,
     PLAN_GRAPH_REL,
@@ -24,7 +24,21 @@ pub fn load_plan(work_root: &Path) -> GraphResult<Option<PlanGraph>> {
         return Ok(None);
     }
     let s = fs::read_to_string(&p)?;
-    Ok(Some(crate::validate::parse_plan(&s)?))
+    // Deserialize only — validation is deferred to commit-time (GraphCommitPlan / PlanBuilder.commit).
+    // Empty skeleton is a valid state (no workflow defined yet).
+    let plan: PlanGraph = serde_json::from_str(&s).map_err(|e| {
+        // Detect legacy format (old NodeKind, LoopCursor, LoopUntil, target_chapters) and give a clear message.
+        if s.contains("\"kind\"") || s.contains("\"chapter\":") && s.contains("\"volume\":") {
+            GraphError::Validation(
+                "plan-graph.json uses deprecated format (NodeKind/LoopCursor/LoopUntil/target_chapters). \
+                 Please ask the Agent to migrate it: '请帮我迁移旧版计划到新格式' — the Agent will read \
+                 the old plan and rebuild it with PlanBuilder.".into(),
+            )
+        } else {
+            GraphError::Validation(format!("plan-graph.json parse error: {e}"))
+        }
+    })?;
+    Ok(Some(plan))
 }
 
 pub fn save_plan(work_root: &Path, plan: &PlanGraph) -> GraphResult<()> {
@@ -74,15 +88,15 @@ pub fn save_handoff(work_root: &Path, handoff: &NodeHandoff) -> GraphResult<()> 
     Ok(())
 }
 
-/// Save a per-chapter copy of the handoff so history survives loop advance overwrites.
-pub fn save_handoff_chapter(
+/// Save a snapshot copy of the handoff so history survives loop advance overwrites.
+pub fn save_handoff_snapshot(
     work_root: &Path,
     handoff: &NodeHandoff,
-    chapter: u32,
+    snapshot_key: &str,
 ) -> GraphResult<()> {
     let dir = work_root.join(HANDOFFS_DIR_REL);
     fs::create_dir_all(&dir)?;
-    let p = dir.join(format!("{}-ch-{:03}.json", handoff.node_id, chapter));
+    let p = dir.join(format!("{}-snap-{}.json", handoff.node_id, snapshot_key));
     fs::write(p, serde_json::to_string_pretty(handoff)?)?;
     Ok(())
 }
@@ -97,17 +111,17 @@ pub fn load_handoff(work_root: &Path, node_id: &str) -> GraphResult<Option<NodeH
     Ok(Some(serde_json::from_str(&fs::read_to_string(p)?)?))
 }
 
-/// List per-chapter handoff files for a node, newest first.
-pub fn list_handoff_chapters(
+/// List snapshot handoff files for a node, newest first.
+pub fn list_handoff_snapshots(
     work_root: &Path,
     node_id: &str,
     limit: usize,
-) -> GraphResult<Vec<(u32, NodeHandoff)>> {
+) -> GraphResult<Vec<(String, NodeHandoff)>> {
     let dir = work_root.join(HANDOFFS_DIR_REL);
     if !dir.is_dir() {
         return Ok(Vec::new());
     }
-    let prefix = format!("{node_id}-ch-");
+    let prefix = format!("{node_id}-snap-");
     let suffix = ".json";
     let mut entries = Vec::new();
     for e in std::fs::read_dir(&dir)? {
@@ -116,17 +130,14 @@ pub fn list_handoff_chapters(
         if !name.starts_with(&prefix) || !name.ends_with(suffix) {
             continue;
         }
-        let ch_str = &name[prefix.len()..name.len() - suffix.len()];
-        let Ok(chapter) = ch_str.parse::<u32>() else {
-            continue;
-        };
+        let snap_key = name[prefix.len()..name.len() - suffix.len()].to_string();
         let raw = std::fs::read_to_string(e.path())?;
         let Ok(handoff) = serde_json::from_str::<NodeHandoff>(&raw) else {
             continue;
         };
-        entries.push((chapter, handoff));
+        entries.push((snap_key, handoff));
     }
-    entries.sort_by_key(|(ch, _)| std::cmp::Reverse(*ch));
+    entries.sort_by(|(a, _), (b, _)| b.cmp(a));
     entries.truncate(limit);
     Ok(entries)
 }

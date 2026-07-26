@@ -33,3 +33,12 @@ pub(crate) fn emit_permission_mode_changed(ctx: &CommandContext, mode: &str) {
         tracing::warn!(mode, error = %e, "permission-mode-changed emit failed");
     }
 }
+
+pub(crate) fn emit_interaction_mode_changed(ctx: &CommandContext, mode: &str) {
+    if let Err(e) = ctx.app_handle.emit(
+        "interaction-mode-changed",
+        serde_json::json!({ "mode": mode }),
+    ) {
+        tracing::warn!(mode, error = %e, "interaction-mode-changed emit failed");
+    }
+}

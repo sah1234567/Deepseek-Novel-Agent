@@ -1,16 +1,27 @@
+//! System prompt assembly.
+
+use crate::interaction_mode::InteractionMode;
+
 /// Static + dynamic system prompt assembly.
-/// Prompt text loaded from `prompt/system.md` and `prompt/autonomous-writing.md`
-/// at compile time via `include_str!`.
+///
+/// Prompt layers (in order):
+/// - `shared_base` — tool conventions, permissions, memory, prohibitions (all agents)
+/// - role layer — `orchestrator` (编排) **or** `node_execution` (互动/节点内)
+///
+/// Domain knowledge (writing SOPs, autonomous strategy) is loaded via InvokeSkill at runtime
+/// (`skills/…`), not compiled into the static prompt.
 pub struct StaticPrompt {
-    pub body: String,
-    pub autonomous_body: String,
+    pub shared_base: String,
+    pub orchestrator: String,
+    pub node_execution: String,
 }
 
 impl Default for StaticPrompt {
     fn default() -> Self {
         Self {
-            body: include_str!("../../../../prompt/system.md").into(),
-            autonomous_body: include_str!("../../../../prompt/autonomous-writing.md").into(),
+            shared_base: include_str!("../../../../prompt/shared-base.md").into(),
+            orchestrator: include_str!("../../../../prompt/orchestrator.md").into(),
+            node_execution: include_str!("../../../../prompt/node-execution.md").into(),
         }
     }
 }
@@ -37,13 +48,40 @@ impl SystemPromptBuilder {
         }
     }
 
-    /// Build the full system prompt. When `is_unattended` is true, the autonomous
-    /// writing mode instructions are appended after the static system.md body.
-    pub fn build(&self, dynamic: &DynamicContext, is_unattended: bool) -> String {
-        let mut parts = vec![self.static_layer.body.clone()];
+    /// Build the main-agent system prompt.
+    /// Layers: shared_base → role (orchestrator | node_execution) → dynamic sections.
+    pub fn build(
+        &self,
+        dynamic: &DynamicContext,
+        is_unattended: bool,
+        interaction: InteractionMode,
+    ) -> String {
+        let role = match interaction {
+            InteractionMode::Orchestrate => self.static_layer.orchestrator.clone(),
+            InteractionMode::Work => self.static_layer.node_execution.clone(),
+        };
+        let mut parts = vec![self.static_layer.shared_base.clone(), role];
         if is_unattended {
-            parts.push(self.static_layer.autonomous_body.clone());
+            parts.push(
+                "## Mode: Unattended\n请 InvokeSkill('autonomous-writing') 加载自主写作策略。"
+                    .into(),
+            );
         }
+        self.append_dynamic(&mut parts, dynamic);
+        parts.join("\n\n")
+    }
+
+    /// Build a sub-agent system prompt (minimal: shared_base only, plus optional skill body).
+    /// Sub-agents do NOT receive orchestrator or node-domain prompts.
+    pub fn build_subagent(&self, skill_body: Option<&str>) -> String {
+        let mut parts = vec![self.static_layer.shared_base.clone()];
+        if let Some(body) = skill_body {
+            parts.push(body.to_string());
+        }
+        parts.join("\n\n")
+    }
+
+    fn append_dynamic(&self, parts: &mut Vec<String>, dynamic: &DynamicContext) {
         if !dynamic.agents_md.is_empty() {
             parts.push(format!("## AGENTS.md\n{}", dynamic.agents_md));
         }
@@ -65,31 +103,31 @@ impl SystemPromptBuilder {
             parts.push(format!("## Skills\n{}", skills.join("\n")));
         }
         if !dynamic.workspace_path.is_empty() {
-            parts.push(format!(
-                "## Workspace\n当前作品目录: {}\n其他作品目录: {}/../\nAgent 技能目录: {}/../../skills/",
-                dynamic.workspace_path,
-                dynamic.workspace_path,
-                dynamic.workspace_path
-            ));
+            parts.push(workspace_section(&dynamic.workspace_path));
         }
-        parts.join("\n\n")
     }
 
     /// Static-only system prompt (AGENTS + Workspace frozen; other sections empty).
-    /// Autonomous mode is not included — this is used for hash computation, not agent context.
+    /// Uses orchestrator role — hash is computed at session birth (default Orchestrate).
     pub fn build_static_only(&self, dynamic: &DynamicContext) -> String {
-        self.build(
-            &DynamicContext {
-                agents_md: dynamic.agents_md.clone(),
-                knowledge_index: String::new(),
-                memory: String::new(),
-                progress: String::new(),
-                skill_summaries: Vec::new(),
-                workspace_path: dynamic.workspace_path.clone(),
-            },
-            false,
-        )
+        let mut parts = vec![
+            self.static_layer.shared_base.clone(),
+            self.static_layer.orchestrator.clone(),
+        ];
+        if !dynamic.agents_md.is_empty() {
+            parts.push(format!("## AGENTS.md\n{}", dynamic.agents_md));
+        }
+        if !dynamic.workspace_path.is_empty() {
+            parts.push(workspace_section(&dynamic.workspace_path));
+        }
+        parts.join("\n\n")
     }
+}
+
+fn workspace_section(path: &str) -> String {
+    format!(
+        "## Workspace\n当前作品目录: {path}\n其他作品目录: {path}/../\nAgent 技能目录: {path}/../../skills/"
+    )
 }
 
 /// Hash of the static system segment for metadata validation.
@@ -114,9 +152,18 @@ mod tests {
     #[test]
     fn static_prompt_loaded() {
         let b = SystemPromptBuilder::new();
-        let prompt = b.build(&DynamicContext::default(), false);
-        assert!(prompt.contains("小说创作 Agent"));
-        assert!(prompt.contains("题材可选文件"));
+        let prompt = b.build(
+            &DynamicContext::default(),
+            false,
+            InteractionMode::Orchestrate,
+        );
+        assert!(prompt.contains("共享底座"), "expected shared-base");
+        assert!(prompt.contains("图编排器"), "expected orchestrator");
+        // Domain knowledge (system.md) is no longer embedded — loaded via InvokeSkill
+        assert!(
+            !prompt.contains("小说创作 Agent"),
+            "node-domain must NOT be embedded in orchestrator prompt"
+        );
     }
 
     #[test]
@@ -128,8 +175,17 @@ mod tests {
                 ..Default::default()
             },
             false,
+            InteractionMode::Orchestrate,
         );
         assert!(prompt.contains("林若烟 Ch31"));
+    }
+
+    #[test]
+    fn work_mode_uses_node_execution_role() {
+        let b = SystemPromptBuilder::new();
+        let prompt = b.build(&DynamicContext::default(), false, InteractionMode::Work);
+        assert!(prompt.contains("节点执行") || prompt.contains("互动（Work）"));
+        assert!(!prompt.contains("图编排器"));
     }
 
     #[test]
@@ -147,21 +203,60 @@ mod tests {
                 ..Default::default()
             },
             false,
+            InteractionMode::Orchestrate,
         );
         assert!(prompt.contains("## Skills"));
         assert!(prompt.contains("- xianxia: 仙侠规范"));
-        assert!(prompt.contains("- post-change: 修改后清单 - 代码改动完成后执行"));
     }
 
     #[test]
     fn autonomous_prompt_injected_when_unattended() {
         let b = SystemPromptBuilder::new();
-        let unattended = b.build(&DynamicContext::default(), true);
-        assert!(unattended.contains("自主连续写作模式"));
-        assert!(unattended.contains("审计降频"));
+        let unattended = b.build(
+            &DynamicContext::default(),
+            true,
+            InteractionMode::Orchestrate,
+        );
+        assert!(unattended.contains("Mode: Unattended"));
+        assert!(unattended.contains("InvokeSkill('autonomous-writing')"));
 
-        let normal = b.build(&DynamicContext::default(), false);
-        assert!(!normal.contains("自主连续写作模式"));
+        let normal = b.build(
+            &DynamicContext::default(),
+            false,
+            InteractionMode::Orchestrate,
+        );
+        assert!(!normal.contains("Mode: Unattended"));
+    }
+
+    #[test]
+    fn subagent_prompt_excludes_orchestrator_and_node_domain() {
+        let b = SystemPromptBuilder::new();
+        let prompt = b.build_subagent(Some("audit instructions here"));
+        assert!(
+            prompt.contains("共享底座"),
+            "sub-agent must have shared-base"
+        );
+        assert!(
+            prompt.contains("audit instructions here"),
+            "sub-agent must have skill body"
+        );
+        assert!(
+            !prompt.contains("图编排器"),
+            "sub-agent must NOT have orchestrator"
+        );
+        assert!(
+            !prompt.contains("小说创作 Agent"),
+            "sub-agent must NOT have node-domain"
+        );
+    }
+
+    #[test]
+    fn subagent_prompt_without_skill_body() {
+        let b = SystemPromptBuilder::new();
+        let prompt = b.build_subagent(None);
+        assert!(prompt.contains("共享底座"));
+        assert!(!prompt.contains("图编排器"));
+        assert!(!prompt.contains("小说创作 Agent"));
     }
 
     #[test]

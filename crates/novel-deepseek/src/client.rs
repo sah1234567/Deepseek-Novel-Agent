@@ -760,92 +760,15 @@ pub(crate) fn parse_web_search_response(json: &Value) -> Result<WebSearchRespons
     for block in blocks {
         match block.get("type").and_then(|t| t.as_str()) {
             Some("web_search_tool_result") => {
-                match block.get("content") {
-                    Some(Value::Array(items)) => {
-                        for item in items {
-                            let title = item
-                                .get("title")
-                                .and_then(|t| t.as_str())
-                                .unwrap_or("")
-                                .to_string();
-                            let result_url = item
-                                .get("url")
-                                .and_then(|u| u.as_str())
-                                .unwrap_or("")
-                                .to_string();
-                            let page_age = item
-                                .get("page_age")
-                                .and_then(|p| p.as_str())
-                                .map(str::to_string);
-                            if title.is_empty() && result_url.is_empty() {
-                                continue;
-                            }
-                            sources.push(WebSearchResult {
-                                title,
-                                url: result_url,
-                                page_age,
-                                excerpts: Vec::new(),
-                            });
-                        }
-                    }
-                    Some(Value::Object(err))
-                        if err.get("type").and_then(|t| t.as_str())
-                            == Some("web_search_tool_result_error") =>
-                    {
-                        let code = err
-                            .get("error_code")
-                            .and_then(|c| c.as_str())
-                            .unwrap_or("unknown");
-                        tracing::warn!(error_code = %code, "deepseek_web_search_tool_error");
-                        return Err(LlmError::Api(format!(
-                            "web_search tool error: {code}"
-                        )));
-                    }
-                    _ => {}
-                }
+                ingest_web_search_tool_result(block, &mut sources)?;
             }
             Some("text") => {
-                if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
-                    let trimmed = text.trim();
-                    if !trimmed.is_empty() {
-                        answer_parts.push(trimmed.to_string());
-                    }
-                }
-                if let Some(citations) = block.get("citations").and_then(|c| c.as_array()) {
-                    for cite in citations {
-                        let cite_url = cite
-                            .get("url")
-                            .and_then(|u| u.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        let cited = cite
-                            .get("cited_text")
-                            .and_then(|t| t.as_str())
-                            .unwrap_or("")
-                            .trim()
-                            .to_string();
-                        if cite_url.is_empty() || cited.is_empty() {
-                            continue;
-                        }
-                        excerpts_by_url
-                            .entry(cite_url.clone())
-                            .or_default()
-                            .push(cited);
-                        let title = cite
-                            .get("title")
-                            .and_then(|t| t.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        if !sources.iter().any(|s| s.url == cite_url) {
-                            sources.push(WebSearchResult {
-                                title,
-                                url: cite_url,
-                                page_age: None,
-                                excerpts: Vec::new(),
-                            });
-                        }
-                    }
-                }
+                ingest_web_search_text_block(
+                    block,
+                    &mut answer_parts,
+                    &mut sources,
+                    &mut excerpts_by_url,
+                );
             }
             _ => {}
         }
@@ -864,6 +787,103 @@ pub(crate) fn parse_web_search_response(json: &Value) -> Result<WebSearchRespons
         "deepseek_web_search_parsed"
     );
     Ok(WebSearchResponse { answer, sources })
+}
+
+fn ingest_web_search_tool_result(
+    block: &Value,
+    sources: &mut Vec<WebSearchResult>,
+) -> Result<(), LlmError> {
+    match block.get("content") {
+        Some(Value::Array(items)) => {
+            for item in items {
+                let title = item
+                    .get("title")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let result_url = item
+                    .get("url")
+                    .and_then(|u| u.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let page_age = item
+                    .get("page_age")
+                    .and_then(|p| p.as_str())
+                    .map(str::to_string);
+                if title.is_empty() && result_url.is_empty() {
+                    continue;
+                }
+                sources.push(WebSearchResult {
+                    title,
+                    url: result_url,
+                    page_age,
+                    excerpts: Vec::new(),
+                });
+            }
+            Ok(())
+        }
+        Some(Value::Object(err))
+            if err.get("type").and_then(|t| t.as_str()) == Some("web_search_tool_result_error") =>
+        {
+            let code = err
+                .get("error_code")
+                .and_then(|c| c.as_str())
+                .unwrap_or("unknown");
+            tracing::warn!(error_code = %code, "deepseek_web_search_tool_error");
+            Err(LlmError::Api(format!("web_search tool error: {code}")))
+        }
+        _ => Ok(()),
+    }
+}
+
+fn ingest_web_search_text_block(
+    block: &Value,
+    answer_parts: &mut Vec<String>,
+    sources: &mut Vec<WebSearchResult>,
+    excerpts_by_url: &mut HashMap<String, Vec<String>>,
+) {
+    if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+        let trimmed = text.trim();
+        if !trimmed.is_empty() {
+            answer_parts.push(trimmed.to_string());
+        }
+    }
+    let Some(citations) = block.get("citations").and_then(|c| c.as_array()) else {
+        return;
+    };
+    for cite in citations {
+        let cite_url = cite
+            .get("url")
+            .and_then(|u| u.as_str())
+            .unwrap_or("")
+            .to_string();
+        let cited = cite
+            .get("cited_text")
+            .and_then(|t| t.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if cite_url.is_empty() || cited.is_empty() {
+            continue;
+        }
+        excerpts_by_url
+            .entry(cite_url.clone())
+            .or_default()
+            .push(cited);
+        let title = cite
+            .get("title")
+            .and_then(|t| t.as_str())
+            .unwrap_or("")
+            .to_string();
+        if !sources.iter().any(|s| s.url == cite_url) {
+            sources.push(WebSearchResult {
+                title,
+                url: cite_url,
+                page_age: None,
+                excerpts: Vec::new(),
+            });
+        }
+    }
 }
 
 // ── JSON helpers ────────────────────────────────────────────────
@@ -1288,6 +1308,35 @@ mod tests {
         });
         let err = parse_web_search_response(&body).expect_err("tool error");
         assert!(err.to_string().contains("max_uses_exceeded"));
+    }
+
+    #[test]
+    fn parse_web_search_response_edge_skips_and_citation_only() {
+        // missing content array
+        assert!(parse_web_search_response(&json!({})).is_err());
+        // empty title+url skipped; unknown block ignored; empty text skipped;
+        // citation without matching source creates source; empty citation skipped
+        let body = json!({
+            "content": [
+                {"type": "web_search_tool_result", "content": [
+                    {"title": "", "url": ""},
+                    {"title": "Keep", "url": "https://keep.example/"}
+                ]},
+                {"type": "web_search_tool_result", "content": "not-array-or-error"},
+                {"type": "text", "text": "   "},
+                {"type": "text", "text": "Answer.", "citations": [
+                    {"url": "", "cited_text": "x"},
+                    {"url": "https://cite-only.example/", "title": "Cite", "cited_text": " excerpt "}
+                ]},
+                {"type": "other"}
+            ]
+        });
+        let parsed = parse_web_search_response(&body).expect("parse");
+        assert_eq!(parsed.answer, "Answer.");
+        assert_eq!(parsed.sources.len(), 2);
+        assert_eq!(parsed.sources[0].url, "https://keep.example/");
+        assert_eq!(parsed.sources[1].url, "https://cite-only.example/");
+        assert_eq!(parsed.sources[1].excerpts, vec!["excerpt".to_string()]);
     }
 
     #[tokio::test]

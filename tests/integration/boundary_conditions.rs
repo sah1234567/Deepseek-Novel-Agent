@@ -1,6 +1,7 @@
-//! Integration tests covering FRAMEWORK.md §10 boundary conditions.
-
 #![allow(clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
+
+//! Integration tests covering FRAMEWORK.md §10 boundary conditions.
 
 use novel_config::load_project_settings;
 use novel_core::{AgentEngine, AgentType, EngineConfig, ForkError};

@@ -1,5 +1,11 @@
-import type { GraphNodeView, GraphStateSnapshot, NodeStatus } from "./types";
+import type { Cursor, GraphNodeView, GraphStateSnapshot, NodeStatus } from "./types";
 import "./NodeSessionHeader.css";
+
+function cursorLabel(cursor: Cursor): string {
+  if (cursor.counters.chapter != null) return `Ch.${cursor.counters.chapter}`;
+  const entry = Object.entries(cursor.counters)[0];
+  return entry != null ? `${entry[0]}=${entry[1]}` : "";
+}
 
 type Props = {
   node: GraphNodeView;
@@ -53,7 +59,7 @@ export function NodeSessionHeader({
 
   const crumbs = [
     node.loopId ? `Loop · ${node.loopId}` : null,
-    loop != null ? `Ch.${loop.cursor.chapter}` : null,
+    loop != null ? cursorLabel(loop.cursor) : null,
     node.title,
   ].filter(Boolean);
 

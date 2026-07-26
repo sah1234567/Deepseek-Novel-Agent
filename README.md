@@ -4,19 +4,7 @@
 
 基于 Rust + Tauri + React 构建，对接 **DeepSeek V4 Pro / V4 Flash**（百万上下文、流式工具调用）。前端一键切换模型，无需重启。
 
-**核心特点：**
-
-- **Graph-Primary 编排：** `plan-graph.json` + `GraphTracker` 决定工位顺序与 Book Loop 游标；作者聊天绑定当前 focus 节点，不存在与 graph 并行的全局自由编排会话
-- **审计主路径 = InvokeSkill：** `audit-plan` / `audit-knowledge` / `audit-craft` + `AuditStatusUpdate` 台账闭环；ForkSubAgent 仅可选隔离
-- **Workflow Skill = 节点内 SOP：** `novel-planning` / `chapter-writing` / `revision` 等是工位操作手册，顺序由 graph deps/loop 决定，不替代 plan-graph
-- **Book Loop 轮转：** 少节点游标循环一口气连写多章
-- **扇出并行：** 多下游可同时 Running（写路径不相交），fan-in 等齐
-
-详见 [FRAMEWORK.md](FRAMEWORK.md)。
-
----
-
-## 能做什么
+## 核心能力
 
 | 能力 | 说明 |
 |------|------|
@@ -24,152 +12,104 @@
 | **策划** | 大纲 → 细纲 → 人物卡 → 伏笔与因果链，逐级细化 |
 | **写章** | 按细纲撰写正文，写后自动同步角色/场景/伏笔追踪表 |
 | **改稿** | 影响分析 + 级联修改正文与关联设定 |
-| **质量检查** | 细纲后 `audit-plan`；正文后 `audit-knowledge` + `audit-craft`（可选 Fork 隔离） |
+| **质量检查** | 策划后 `audit-plan`；正文后 `audit-knowledge` + `audit-craft` |
 | **流派扩展** | 30+ 题材 Skill（仙侠、科幻、快穿等）按需加载 |
 | **权限模式** | 常规 / 策划 / 自动 / 无人值守，控制写操作是否需确认 |
 
-Agent 在作品目录 sandbox 内读写 `knowledge/`、`chapters/`、`memory/`；Graph deps/loop 约束创作顺序，节点内 Workflow Skill 提供 SOP，确保先大纲后正文、写后必审计。
+Agent 在作品目录 sandbox 内读写 `knowledge/`、`chapters/`、`memory/`。Graph 编排约束创作顺序，节点内 Workflow Skill 提供 SOP，确保先大纲后正文、写后必审计。
 
----
-
-## 目录概览
-
-```
-novel_agent/
-├── works/{作品名}/               # 用户作品（知识库、章节、settings）
-│   ├── knowledge/meta/            # 编排契约与运行时
-│   │   ├── plan-graph.json       # Graph 节点、deps、Book Loop 定义
-│   │   ├── graph-state.json      # 运行时状态（游标、节点状态、handoff）
-│   │   ├── graph.jsonl           # 事件日志（Achieved/advance/demote）
-│   │   └── handoffs/             # 节点交接包归档（summary + files_touched + artifacts）
-│   └── .novel-agent/state.db     # 该作品的 sessions / messages / todos（每作品独立）
-├── skills/                       # Agent 级 Skill（作品可在 works/{名}/skills/ 覆盖同 id）
-├── templates/                    # 新建作品脚手架（必填）
-├── prompt/                       # System 与子 Agent 提示词
-└── .novel-agent/                 # 全局 API 配置等
-```
-
-作品数据在 `works/` 下，与 Agent 代码分离。切换作品时前端同步切换会话库与文件树。Graph 编排 SSOT 为 `knowledge/meta/plan-graph.json` + `graph-state.json`（详见 [novel-graph](docs/crates/novel-graph.md)）。跨会话**审计台账**在 `{作品}/knowledge/meta/audit-status.md`（Agent 可读）；引擎调试 JSONL 在 `{作品}/.novel/logs/`（非 Agent 知识层）。
-
-### 清理作品会话库
-
-需要清空对话历史时，可删除 `works/**/.novel-agent/state.db*`（不影响 `knowledge/`、`chapters/`、`settings.json` 与审计日志）：
-
-```powershell
-# Windows
-.\scripts\reset-work-databases.ps1
-
-# Git Bash / Linux / macOS
-./scripts/reset-work-databases.sh
-```
-
-运行后重启应用，在 StatusBar 用 `+` 新建 session 即可。
-
----
+架构细节（Graph-Primary 编排、Book Loop、Fork 子 Agent、IPC 事件流等）见 **[FRAMEWORK.md](FRAMEWORK.md)**。
 
 ## 快速开始
 
-**前置**
+### 前置
 
 - [Rust](https://rustup.rs)（含 `cargo`）
-- **Node.js 24**（见 `ui/.nvmrc`；在 `ui/` 下执行 `nvm use` 或 `fnm use`）
+- **Node.js 24**（见 `ui/.nvmrc`）
 - [Tauri 系统依赖](https://v2.tauri.app/start/prerequisites/)（Windows 需 WebView2）
 
-以下命令均在**仓库根目录**执行（需含 `skills/`、`templates/` 目录，克隆后即存在）。
+以下命令均在**仓库根目录**执行。
 
-**首次**安装前端依赖（`cargo tauri dev` 不会自动执行 `pnpm install`）：
+### 安装与运行
 
 ```bash
+# 首次：安装前端依赖（cargo tauri dev 不会自动执行）
 pnpm --prefix ui install
-```
 
-**开发模式（推荐）：** 依赖装好后，日常只需：
-
-```bash
+# 开发模式（Vite HMR，改 ui/ 无需重启）
 cargo tauri dev
 ```
 
-自动编译 Rust、启动 Vite 并打开桌面窗口。修改 `crates/` 或 `src-tauri/` 后需重启；仅改 `ui/` 由 Vite 热更新，无需重启。
-
-**仅编译可执行文件（不打安装包）：**
+### 构建
 
 ```bash
-pnpm --prefix ui run build   # 首次或改 ui 后需要
+# 仅编译可执行文件
+pnpm --prefix ui run build
 cargo build --release -p novel-agent
-```
+# 产物：target/release/novel-agent.exe
 
-产物：`target/release/novel-agent.exe`（workspace 根目录下的 `target/`，非 `src-tauri/target/`）。请在仓库根目录启动，并保留 `skills/`、`templates/` 布局。
-
-**构建安装包：**
-
-```bash
+# 构建安装包（NSIS）
 cargo tauri build --bundles nsis
 ```
 
-安装包输出于 `target/release/bundle/`（如 `nsis/*-setup.exe`）。默认 `cargo tauri build`（`targets: all`）在 Windows 还会打 MSI，需从 GitHub 下载 WiX/NSIS；国内网络易出现 `timeout: global`。可只打 NSIS（上式），或配置 `HTTP_PROXY`/`HTTPS_PROXY` 后重试；仅需本地运行时直接用上面的 `novel-agent.exe` 即可。
+请在仓库根目录启动，确保 `skills/`、`templates/` 目录存在。
 
-**API Key（任选其一）：**
+### API Key
 
-- 环境变量 `DEEPSEEK_API_KEY`（优先级最高）
+任选其一（优先级从高到低）：
+
+- 环境变量 `DEEPSEEK_API_KEY`
 - 应用内 Settings → 自动写入 `.novel-agent/api_config.json`
 - 均未配置时使用离线 mock（无真实 LLM 调用）
 
 可选环境变量：`DEEPSEEK_API_BASE`、`NOVEL_MODEL`、`NOVEL_COMPACTION_THRESHOLD` 等，详见 [novel-config](docs/crates/novel-config.md)。
 
-**测试与 CI：**
+### 测试
 
 ```powershell
-.\scripts\ci-windows.ps1  # Windows 本地全量（含 audit；GHA 见 docs/README.md CI 矩阵）
-.\scripts\ci-local.ps1    # 跨平台本地 CI 入口
+.\scripts\ci-windows.ps1   # Windows 本地全量
+.\scripts\ci-local.ps1     # 跨平台本地 CI 入口
 ```
 
 详见 [scripts/README.md](scripts/README.md) 与 [docs/README.md](docs/README.md) CI 节。
 
----
+## 文档导航
 
-## 文档
-
-| 文档 | 内容 |
+| 文档 | 适合 |
 |------|------|
-| [FRAMEWORK.md](FRAMEWORK.md) | 架构分层、数据流、Graph-Primary、Fork/压缩/IPC 等技术细节 |
-| [docs/README.md](docs/README.md) | Crate 专题索引与阅读路径 |
+| [FRAMEWORK.md](FRAMEWORK.md) | 架构分层、数据流、Graph-Primary、Fork/压缩/IPC、前端状态管理 |
+| [docs/README.md](docs/README.md) | Crate 专题索引、阅读路径、UI 概要、CI/CD |
 | [docs/crates/novel-graph.md](docs/crates/novel-graph.md) | Graph 编排 SSOT：plan schema、GraphTracker、Book Loop、handoff、gate |
-| [prompt/system.md](prompt/system.md) | Agent 行为与创作规范（运行时嵌入） |
+| [prompt/shared-base.md](prompt/shared-base.md) | 共享底座：工具约定、权限、Memory（所有 Agent 共用） |
+| [prompt/orchestrator.md](prompt/orchestrator.md) | 图编排器：PlanBuilder、节点激活协议、Gate 评估 |
 
----
+## 项目结构
 
-## 界面简述
+```
+novel_agent/
+├── crates/                # Rust 后端（10 个业务 crate + novel-server）
+├── src-tauri/             # Tauri 桌面壳
+├── ui/                    # React 18 + TypeScript + Vite 8 前端
+├── skills/                # Agent 级 Workflow + 流派 Skill
+├── templates/             # 新建作品脚手架（运行时必填）
+├── prompt/                # System 与子 Agent 提示词
+├── works/{作品名}/         # 用户作品实例（gitignore）
+│   ├── knowledge/         # 知识库 + plan-graph.json 编排
+│   ├── chapters/          # 章节正文
+│   ├── memory/            # 跨会话记忆
+│   └── .novel-agent/      # 作品级 state.db
+├── docs/                  # Crate 专题文档
+└── scripts/               # CI / 构建 / 工具脚本
+```
 
-**布局：** 左侧**文件树**浏览作品目录；主舞台默认 **Chat**。状态栏提供 **Graph**（画布 overlay）与 **模板**（预览默认 plan，确认后才落盘）。点击 Graph 节点后进入该节点会话（顶栏 Start / Approve / Reject / Reopen）。正式图经 `GraphApplyTemplate` / `GraphCommitPlan`（或 UI「应用模板」）写入后会**自动打开一次 Graph**。Graph 关闭时若有 HITL，弹出确认框。顶部状态栏另有**待办**、作品与会话切换、Token 用量、**Book Loop 摘要**；右侧为**设置**。
+完整目录布局与数据归属见 [FRAMEWORK.md §1.2](FRAMEWORK.md#12-agent-根目录与数据归属)。
 
-**Graph 画布：**
+## 界面一览
 
-- 节点按 **Waiting → Ready → Running → Verifying → AwaitingApproval → Achieved** 显示不同状态色；点击节点进入该节点会话，顶栏按状态提供 Start / Approve / Reject / Reopen
-- 作者在节点内实质性改稿后，即使 plan 未要求 human gate，提交出门也会进入 **AwaitingApproval**（`human_intervened`，本节点本轮）
-- **Book Loop 帧**包住轮转工位组，帧头显示 Ch.N/M、phase（Idle/Running/Paused/Completed）、进度条与暂停/继续按钮；游标前进时徽章即时更新，无需刷新整页
-- **HITL 角标**在需要人类反馈时立即出现在节点上（待审批 / 待回答），无需先点开节点
-- deps 实线 vs **轮转虚线回流**（粉色 dashed，纯装饰，不入库）颜色/线型可区分
-- **HistoryDrawer** 查看往章 handoff 摘要与产物路径，历史章不进入画布节点列表
+左侧**文件树**浏览作品目录；主舞台为 **Chat** 聊天区。状态栏提供作品/会话切换、待办事项、Token 用量、Graph 画布入口。点击 Graph 节点进入该节点专属会话，按 Waiting → Running → Achieved 状态流转。审计 Skill 在节点内 Invoke 执行，可选 Fork 隔离查看。
 
-**聊天区（节点会话覆盖）：**
+UI 交互细节（Graph 画布、聊天区布局、Turn 懒加载、Compaction 横幅等）见 [FRAMEWORK.md §2.5](FRAMEWORK.md#25-前端状态与-ipc) 与 [docs/README.md §前端 UI 概要](docs/README.md#前端-ui-概要)。
 
-- 你与 Agent、审计 Skill 的回复均以气泡展示；需要确认的工具操作、选择题会单独成卡片
-- 审计 Skill（`audit-plan` 等）在节点内 Invoke 执行；可选 Fork 隔离在独立浮层中查看
-- 当前这一轮对话占满可视区域，往上滚可看更早记录
-- 历史消息按需加载，长会话不会一次占满内存；回到底部后只保留最近几轮在内存中
-- 回复边生成边显示；Agent 要向你提问时，会暂停并等你作答
-- Loop advance 后重置工位 session，并经 `node-session-reset` 清掉节点会话顶栏（工具路径与 IPC `graph_approve` 对齐）
+## 其他
 
-**待办（状态栏）：** Agent 写入待办后会即时出现在「待办事项」里。有未完成项时按钮高亮并显示数量，新增待办时自动展开、全部完成后自动收起。列表按**进行中 / 未进行 / 已完成**分组，已完成项显示删除线。点击条目可在三种状态间切换。
-
-Turn 进行中（流式、待批准工具、待回答问题）时模型与权限选择器禁用。
-
-**会话（StatusBar）：**
-
-| 操作 | 说明 |
-|------|------|
-| 下拉切换 | `resume_session` 恢复历史；**仅查看/切换不会刷新「最后活跃」时间** |
-| `+` 新建 | `create_session`，当前作品下空白会话 |
-| 标签 | `{标题} · 对话 N 轮 · {相对时间} · {模型}` |
-
-会话列表按最近 LLM 活跃时间降序排列。StatusBar 展示会话累计 token 三分类与当前上下文（DB `context_tokens`，最近一次 API 快照）；运行中由 **`session-tokens-updated` 事件驱动**（主/SubAgent 每次 LLM 调用后推送），初始与切 session 经 `get_app_status`。详见 [FRAMEWORK.md §2.2](FRAMEWORK.md#22-作品与会话)。
+**清理作品会话库：** 删除 `works/**/.novel-agent/state.db*`（不影响正文与知识库）。脚本：`scripts/reset-work-databases.ps1`（或 `.sh`）。详见 [docs/README.md §清理](docs/README.md#清理作品会话库)。

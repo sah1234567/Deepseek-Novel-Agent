@@ -30,7 +30,7 @@ React (ui/) ──invoke/listen──► src-tauri/commands.rs
 | `event_payload/` | `stream` / `tool` / `compaction` / `subagent` 子模块；含 `Event::GraphStateChanged` → `graph-state-changed` |
 | `events.rs` | Tauri 事件名与 serde payload 类型 |
 
-**Graph UI：** Chat-first；状态栏 **Graph** / **模板** 按钮。Graph 为 overlay（建图成功 `graph-plan-committed` 后自动打开一次）；点击节点 → 节点会话（顶栏 Start/Approve/Reject/Reopen）。Graph 关闭时 HITL 弹窗。IPC：`graph_get_state` / `graph_get_node` / `graph_get_loop` / activate / start / approve / reject / reopen / `graph_loop_{pause,resume,set_target,set_cursor,list_history}` / `graph_preview_template` / `graph_apply_template`。事件：`graph-state-changed`、`graph-loop-changed`、`graph-hitl`、`graph-approval-required`、`graph-plan-committed`、`node-session-reset`。工具路径 Book Loop advance 发 `Event::GraphLoopAdvanced` → 与 IPC 相同的 `graph-loop-changed`（含 `resetNodeIds`/`chapter`）+ `node-session-reset`。新建/打开作品**不**静默落正式图；`graph_get_state` 无 plan 时返回 `hasPlan: false` 空快照。AppStatus 含 `focusedNodeId` / `runningNodeIds` / `graphHitlCount` / `loopSummaries`。
+**Graph UI：** Chat-first；状态栏 **编排 | 互动** + **Graph**。Graph 为 overlay（建图成功 `graph-plan-committed` 后自动打开一次）；点击节点 → 节点会话（顶栏 Start/Approve/Reject/Reopen）并进入**互动**（`interactionMode=work`）。返回 Graph / 清 focus → **编排**。IPC：`set_interaction_mode` / `graph_clear_focus` / `graph_get_state` / activate / start / approve / reject / reopen / loop_* / template。事件：含 `interaction-mode-changed`、`graph-state-changed`、…、`node-session-reset`。AppStatus 含 `interactionMode` / `focusedNodeId` / `runningNodeIds` / `graphHitlCount` / `loopSummaries`。
 
 **启动校验（`main.rs` setup）：** 创建 `works/`、`.novel-agent/`；校验 `templates/` 存在；若 `works/default` 不存在则自动 scaffold；注册 `AppState`。
 
@@ -49,6 +49,8 @@ React (ui/) ──invoke/listen──► src-tauri/commands.rs
 | `AnswerQuestion` | AskUserQuestion 回答 + `event_tx` 续跑 |
 | `GetStatus` | 返回 `AppStatus`（含 `activeWorkName`） |
 | `SetPermissionMode` | 切换权限模式 |
+| `SetInteractionMode` | 切换编排/互动（`orchestrate` \| `work`；work 需 focus） |
+| `MarkInteractionWork` | Graph activate/start 后标记互动 |
 | `ResumeSession` | 恢复历史会话（替换 engine；`abort_controller.clear()`） |
 | `CreateSession` | 当前作品下新建 session（替换 engine；`abort_controller.clear()`） |
 | `SwitchProjectAndCreateSession` | 切换 `active_project` + 新建 session（`create_work` / `open_work`） |
@@ -61,6 +63,7 @@ React (ui/) ──invoke/listen──► src-tauri/commands.rs
 {
   "sessionId": "...",
   "permissionMode": "normal|plan|auto|unattended",
+  "interactionMode": "orchestrate|work",
   "hookRunning": false,
   "pendingUserQuestion": false,
   "turnNumber": 0,

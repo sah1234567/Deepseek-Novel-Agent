@@ -109,14 +109,17 @@ pub struct ToolContext {
     pub mark_graph_intervention_on_write: bool,
     /// Optional hook when a formal plan-graph is committed/applied.
     pub on_graph_plan_committed: Option<Arc<dyn Fn() + Send + Sync>>,
-    /// Optional hook when Book Loop advances (chapter roll + station reopen).
+    /// Optional hook when Loop advances (counter increment + station reopen).
     pub on_graph_loop_advanced: Option<GraphLoopAdvancedHook>,
     /// Memory-extraction fork: allow Write/Edit only under `memory/` (see `novel_memory::guard`).
     pub memory_fork_mode: bool,
+    /// PlanBuilder in-memory draft (shared across ToolContext clones in a session).
+    pub plan_builder_draft: Arc<Mutex<Option<novel_graph::PlanGraph>>>,
 }
 
-/// `(loop_id, chapter, reset_node_ids)` after Book Loop advance.
-pub type GraphLoopAdvancedHook = Arc<dyn Fn(String, u32, Vec<String>) + Send + Sync>;
+/// `(loop_id, snapshot_key, counters, reset_node_ids)` after Loop advance.
+pub type GraphLoopAdvancedHook =
+    Arc<dyn Fn(String, String, std::collections::HashMap<String, i64>, Vec<String>) + Send + Sync>;
 
 impl ToolContext {
     pub fn new(project_root: PathBuf) -> Self {
@@ -146,6 +149,7 @@ impl ToolContext {
             on_graph_plan_committed: None,
             on_graph_loop_advanced: None,
             memory_fork_mode: false,
+            plan_builder_draft: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -175,6 +179,7 @@ impl ToolContext {
             on_graph_plan_committed: None,
             on_graph_loop_advanced: None,
             memory_fork_mode: false,
+            plan_builder_draft: Arc::new(Mutex::new(None)),
         }
     }
 

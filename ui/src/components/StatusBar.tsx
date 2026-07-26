@@ -16,7 +16,7 @@ interface StatusBarProps {
   onCycleTodo: (todoId: string, nextStatus: string) => void;
   onSessionError?: (message: string) => void;
   onOpenGraph?: () => void;
-  onPreviewTemplate?: () => void;
+  onSetInteractionMode?: (mode: "orchestrate" | "work") => void | Promise<void>;
   graphHitlCount?: number;
   hasPlan?: boolean;
 }
@@ -150,7 +150,7 @@ export function StatusBar({
   onCycleTodo,
   onSessionError,
   onOpenGraph,
-  onPreviewTemplate,
+  onSetInteractionMode,
   graphHitlCount = 0,
   hasPlan = false,
 }: StatusBarProps) {
@@ -406,15 +406,30 @@ export function StatusBar({
           </span>
         ) : null}
 
-        {onPreviewTemplate ? (
-          <button
-            type="button"
-            className="status-action-btn"
-            onClick={onPreviewTemplate}
-            title="预览默认 plan-graph 模板（不自动写入）"
-          >
-            模板
-          </button>
+        {onSetInteractionMode ? (
+          <div className="interaction-mode-toggle" role="group" aria-label="编排或互动">
+            <button
+              type="button"
+              className={`interaction-mode-btn${(status?.interactionMode ?? "orchestrate") === "orchestrate" ? " is-active" : ""}`}
+              onClick={() => void onSetInteractionMode("orchestrate")}
+              title="编排：建图 / 调度 / Gate（无节点写工具）"
+            >
+              编排
+            </button>
+            <button
+              type="button"
+              className={`interaction-mode-btn${status?.interactionMode === "work" ? " is-active" : ""}`}
+              onClick={() => void onSetInteractionMode("work")}
+              title={
+                hasPlan
+                  ? "互动：在已 focus 的节点内写作（需先点选节点）"
+                  : "互动需要正式 plan 且已 focus 节点"
+              }
+              disabled={!hasPlan && status?.interactionMode !== "work"}
+            >
+              互动
+            </button>
+          </div>
         ) : null}
 
         {onOpenGraph ? (
@@ -422,7 +437,7 @@ export function StatusBar({
             type="button"
             className={`status-action-btn${graphHitlCount > 0 ? " has-hitl" : ""}${hasPlan ? "" : " is-muted"}`}
             onClick={onOpenGraph}
-            title={hasPlan ? "打开 Plan Graph" : "尚未落正式图 — 可先预览模板或与 Agent 访谈后 Commit"}
+            title={hasPlan ? "打开 Plan Graph" : "尚无工作流 — 与 Agent 对话，使用 PlanBuilder 构建"}
           >
             Graph{graphHitlCount > 0 ? ` · HITL ${graphHitlCount}` : ""}
           </button>

@@ -9,6 +9,7 @@ mod fork_sub_agent;
 mod graph_tools;
 mod impact_analysis;
 mod knowledge_derive;
+mod plan_builder;
 mod plot_graph;
 mod plot_grid;
 mod relation_query;
@@ -28,6 +29,7 @@ pub use graph_tools::{
 };
 pub use impact_analysis::ImpactAnalysisTool;
 pub use knowledge_derive::KnowledgeDeriveTool;
+pub use plan_builder::PlanBuilderTool;
 pub use plot_graph::PlotGraphTool;
 pub use plot_grid::PlotGridTool;
 pub use relation_query::RelationQueryTool;

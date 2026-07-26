@@ -18,6 +18,7 @@ import { useAppStatus } from "../../hooks/useAppStatus";
 const baseAppStatus = {
   sessionId: "s1",
   permissionMode: "normal",
+  interactionMode: "orchestrate",
   hookRunning: false,
   pendingUserQuestion: false,
   turnInProgress: false,

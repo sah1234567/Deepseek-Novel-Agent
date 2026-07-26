@@ -78,14 +78,169 @@ pub fn tool_schemas_for_agent(
         .collect()
 }
 
-/// Full main-session tool list (sorted) — shared with fork subagents for DeepSeek tools-prefix cache.
+/// Full registry tool list (sorted). Test helper / legacy full-schema dump.
+#[cfg(test)]
 pub fn main_tool_names(registry: &ToolRegistry) -> Vec<String> {
     registry.names()
 }
 
-/// Tool schemas for the main agent and fork subagents (must stay identical for KV cache).
+/// All registered tool schemas (unfiltered). Prefer [`tool_schemas_for_visibility`] for the main agent.
+#[cfg(test)]
 pub fn main_tool_schemas(registry: &ToolRegistry) -> Vec<(String, String, serde_json::Value)> {
     tool_schemas_for_agent(registry, &main_tool_names(registry))
+}
+
+/// Main-agent tool visibility by plan / focus state (plan 2.1 layering).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolVisibility {
+    /// No formal plan (missing file or empty skeleton): build with PlanBuilder.
+    Interview,
+    /// Formal plan, no focused node: graph lifecycle + scheduling (no Write/Edit).
+    Orchestrator,
+    /// Focused on a running node: content tools + gate submit (no PlanBuilder / Advance / Fork).
+    NodeExecution,
+}
+
+/// Interview / 建图：PlanBuilder + 只读探测；无 Write/Edit/GraphAdvance/Fork。
+const INTERVIEW_TOOLS: &[&str] = &[
+    "PlanBuilder",
+    "GraphCommitPlan",
+    "GraphQuery",
+    "Read",
+    "Tail",
+    "Grep",
+    "Glob",
+    "InvokeSkill",
+    "AskUserQuestion",
+    "TodoWrite",
+    "WebSearch",
+    "CharacterSearch",
+    "PlotGraph",
+    "PlotGrid",
+    "ForeshadowTracker",
+    "Corkboard",
+    "Stats",
+    "AuditStatusQuery",
+    "TrackingQuery",
+    "RelationQuery",
+];
+
+/// 编排器：图生命周期 + Fork + 只读知识；无 Write/Edit/Bash。
+const ORCHESTRATOR_TOOLS: &[&str] = &[
+    "PlanBuilder",
+    "GraphQuery",
+    "GraphAdvance",
+    "GraphSubmitForApproval",
+    "GraphMarkVerified",
+    "GraphReopen",
+    "GraphCommitPlan",
+    "ForkSubAgent",
+    "InvokeSkill",
+    "Read",
+    "Tail",
+    "Grep",
+    "Glob",
+    "AskUserQuestion",
+    "TodoWrite",
+    "CharacterSearch",
+    "PlotGraph",
+    "ForeshadowTracker",
+    "TrackingQuery",
+    "RelationQuery",
+    "Corkboard",
+    "Stats",
+    "AuditStatusQuery",
+];
+
+/// 节点执行：写内容 + 全知识工具；保留出门闸工具；无 PlanBuilder / GraphAdvance / Fork。
+const NODE_EXECUTION_TOOLS: &[&str] = &[
+    "Write",
+    "Edit",
+    "Read",
+    "Tail",
+    "Grep",
+    "Glob",
+    "Bash",
+    "WebSearch",
+    "InvokeSkill",
+    "TodoWrite",
+    "AskUserQuestion",
+    "CharacterSearch",
+    "PlotGraph",
+    "PlotGrid",
+    "ForeshadowTracker",
+    "Stats",
+    "Corkboard",
+    "CharacterRotate",
+    "ImpactAnalysis",
+    "KnowledgeDerive",
+    "AuditStatusQuery",
+    "AuditStatusUpdate",
+    "TrackingQuery",
+    "RelationQuery",
+    // Gate tools while focused (submit / verify / reopen current node).
+    "GraphQuery",
+    "GraphSubmitForApproval",
+    "GraphMarkVerified",
+    "GraphReopen",
+];
+
+/// Resolve visibility from interaction mode + plan presence + focus.
+///
+/// - **Orchestrate**: Interview (no/empty plan) or Orchestrator — never NodeExecution,
+///   even if a stale focus remains.
+/// - **Work**: NodeExecution only when a node is focused; otherwise degrades to the
+///   orchestrate plan layer (defensive; UI/IPC should reject Work without focus).
+pub fn resolve_tool_visibility(
+    project_root: &std::path::Path,
+    interaction: crate::InteractionMode,
+) -> ToolVisibility {
+    let plan_layer = resolve_plan_tool_layer(project_root);
+    match interaction {
+        crate::InteractionMode::Orchestrate => plan_layer,
+        crate::InteractionMode::Work => {
+            if focused_node_id(project_root).is_some() {
+                ToolVisibility::NodeExecution
+            } else {
+                plan_layer
+            }
+        }
+    }
+}
+
+fn focused_node_id(project_root: &std::path::Path) -> Option<String> {
+    novel_graph::GraphTracker::load(project_root)
+        .ok()
+        .flatten()
+        .and_then(|t| t.state.focused_node_id)
+}
+
+fn resolve_plan_tool_layer(project_root: &std::path::Path) -> ToolVisibility {
+    if !novel_graph::plan_exists(project_root) {
+        return ToolVisibility::Interview;
+    }
+    let Some(tracker) = novel_graph::GraphTracker::load(project_root).ok().flatten() else {
+        return ToolVisibility::Interview;
+    };
+    if tracker.plan.nodes.is_empty() {
+        ToolVisibility::Interview
+    } else {
+        ToolVisibility::Orchestrator
+    }
+}
+
+/// Schemas for the main agent under the given visibility mode.
+pub fn tool_schemas_for_visibility(
+    registry: &ToolRegistry,
+    visibility: ToolVisibility,
+) -> Vec<(String, String, serde_json::Value)> {
+    let allow: &[&str] = match visibility {
+        ToolVisibility::Interview => INTERVIEW_TOOLS,
+        ToolVisibility::Orchestrator => ORCHESTRATOR_TOOLS,
+        ToolVisibility::NodeExecution => NODE_EXECUTION_TOOLS,
+    };
+    let names: Vec<String> = allow.iter().map(|s| (*s).to_string()).collect();
+    tool_schemas_for_agent(registry, &names)
 }
 
 fn matcher_matches(matcher: &str, tool_name: &str, tool_input: Option<&Value>) -> bool {
@@ -177,5 +332,84 @@ mod tests {
         let schemas = tool_schemas_for_agent(&reg, &["Read".into(), "NoSuch".into()]);
         assert_eq!(schemas.len(), 1);
         assert_eq!(schemas[0].0, "Read");
+    }
+
+    #[test]
+    fn visibility_interview_excludes_write_and_advance() {
+        let reg = novel_tools::default_registry();
+        let schemas = tool_schemas_for_visibility(&reg, ToolVisibility::Interview);
+        let names: Vec<_> = schemas.iter().map(|(n, _, _)| n.as_str()).collect();
+        assert!(names.contains(&"PlanBuilder"));
+        assert!(!names.contains(&"Write"));
+        assert!(!names.contains(&"Edit"));
+        assert!(!names.contains(&"GraphAdvance"));
+        assert!(!names.contains(&"ForkSubAgent"));
+    }
+
+    #[test]
+    fn visibility_orchestrator_excludes_write_includes_graph() {
+        let reg = novel_tools::default_registry();
+        let schemas = tool_schemas_for_visibility(&reg, ToolVisibility::Orchestrator);
+        let names: Vec<_> = schemas.iter().map(|(n, _, _)| n.as_str()).collect();
+        assert!(names.contains(&"GraphAdvance"));
+        assert!(names.contains(&"PlanBuilder"));
+        assert!(names.contains(&"ForkSubAgent"));
+        assert!(!names.contains(&"Write"));
+        assert!(!names.contains(&"Edit"));
+        assert!(!names.contains(&"Bash"));
+        assert!(!names.contains(&"GraphApplyTemplate"));
+    }
+
+    #[test]
+    fn visibility_node_includes_write_excludes_plan_builder() {
+        let reg = novel_tools::default_registry();
+        let schemas = tool_schemas_for_visibility(&reg, ToolVisibility::NodeExecution);
+        let names: Vec<_> = schemas.iter().map(|(n, _, _)| n.as_str()).collect();
+        assert!(names.contains(&"Write"));
+        assert!(names.contains(&"Edit"));
+        assert!(names.contains(&"GraphSubmitForApproval"));
+        assert!(!names.contains(&"PlanBuilder"));
+        assert!(!names.contains(&"GraphAdvance"));
+        assert!(!names.contains(&"ForkSubAgent"));
+    }
+
+    #[test]
+    fn resolve_visibility_empty_root_is_interview() {
+        let tmp = tempfile::TempDir::new().expect("tmp");
+        assert_eq!(
+            resolve_tool_visibility(tmp.path(), crate::InteractionMode::Orchestrate),
+            ToolVisibility::Interview
+        );
+        assert_eq!(
+            resolve_tool_visibility(tmp.path(), crate::InteractionMode::Work),
+            ToolVisibility::Interview
+        );
+    }
+
+    #[test]
+    fn resolve_orchestrate_ignores_stale_focus() {
+        let tmp = tempfile::TempDir::new().expect("tmp");
+        let plan = novel_graph::PlanGraph {
+            version: "1".into(),
+            nodes: vec![novel_graph::PlanNode {
+                id: "a".into(),
+                title: "A".into(),
+                spec: Some("s".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        novel_graph::save_plan(tmp.path(), &plan).unwrap();
+        let mut t = novel_graph::GraphTracker::new(plan);
+        t.set_focus(Some("a".into())).unwrap();
+        t.save(tmp.path()).unwrap();
+        assert_eq!(
+            resolve_tool_visibility(tmp.path(), crate::InteractionMode::Orchestrate),
+            ToolVisibility::Orchestrator
+        );
+        assert_eq!(
+            resolve_tool_visibility(tmp.path(), crate::InteractionMode::Work),
+            ToolVisibility::NodeExecution
+        );
     }
 }

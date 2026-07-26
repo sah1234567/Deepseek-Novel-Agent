@@ -123,10 +123,11 @@ pub enum Event {
     GraphStateChanged,
     /// Formal plan-graph was applied/committed; UI should open Graph panel once.
     GraphPlanCommitted,
-    /// Book Loop advanced (tool or engine path). UI should emit loop-changed + node-session-reset.
+    /// Loop advanced (tool or engine path). UI should emit loop-changed + node-session-reset.
     GraphLoopAdvanced {
         loop_id: String,
-        chapter: u32,
+        snapshot_key: String,
+        counters: std::collections::HashMap<String, i64>,
         reset_node_ids: Vec<String>,
     },
     /// Sub-agent lifecycle + scoped stream/tool events. `fork_run_id` keys overlay state; never merged into parent LLM messages.

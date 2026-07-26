@@ -2372,7 +2372,6 @@ dependencies = [
  "novel-graph",
  "novel-knowledge",
  "novel-logging",
- "novel-server",
  "novel-skills",
  "novel-state",
  "novel-tools",

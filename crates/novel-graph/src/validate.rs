@@ -23,34 +23,79 @@ pub fn validate_plan(plan: &PlanGraph) -> GraphResult<()> {
     }
     detect_cycle(plan)?;
     for lp in &plan.loops {
-        for s in &lp.stations {
-            if !ids.contains(s.as_str()) {
+        validate_loop(lp, &ids)?;
+    }
+    Ok(())
+}
+
+fn validate_loop(lp: &crate::types::WorkflowLoop, ids: &HashSet<&str>) -> GraphResult<()> {
+    for s in &lp.stations {
+        if !ids.contains(s.as_str()) {
+            return Err(GraphError::Validation(format!(
+                "loop {} station `{s}` not in nodes",
+                lp.id
+            )));
+        }
+    }
+    if !lp.stations.iter().any(|s| s == &lp.entry) {
+        return Err(GraphError::Validation(format!(
+            "loop {} entry `{}` not in stations",
+            lp.id, lp.entry
+        )));
+    }
+    if !lp.stations.iter().any(|s| s == &lp.advance_after) {
+        return Err(GraphError::Validation(format!(
+            "loop {} advance_after `{}` not in stations",
+            lp.id, lp.advance_after
+        )));
+    }
+    for r in &lp.on_advance.reopen {
+        if !ids.contains(r.as_str()) {
+            return Err(GraphError::Validation(format!(
+                "loop {} on_advance.reopen `{r}` not in nodes",
+                lp.id
+            )));
+        }
+    }
+    if lp.advance.increment.is_empty() {
+        return Err(GraphError::Validation(format!(
+            "loop {} advance.increment must be a non-empty counter name",
+            lp.id
+        )));
+    }
+    if !lp.cursor.counters.contains_key(&lp.advance.increment) {
+        return Err(GraphError::Validation(format!(
+            "loop {} advance.increment '{}' not found in cursor.counters",
+            lp.id, lp.advance.increment
+        )));
+    }
+    for op in &lp.advance.side_effects {
+        let counter = match op {
+            crate::types::CounterOp::Increment { counter, .. }
+            | crate::types::CounterOp::Decrement { counter, .. }
+            | crate::types::CounterOp::Set { counter, .. }
+            | crate::types::CounterOp::Reset { counter } => counter,
+        };
+        if !lp.cursor.counters.contains_key(counter) {
+            return Err(GraphError::Validation(format!(
+                "loop {} advance side_effect counter '{}' not found in cursor.counters",
+                lp.id, counter
+            )));
+        }
+    }
+    match &lp.until {
+        crate::types::Until::CounterGt { counter, value, .. }
+        | crate::types::Until::CounterGe { counter, value, .. }
+        | crate::types::Until::CounterLt { counter, value, .. }
+        | crate::types::Until::CounterEq { counter, value, .. } => {
+            if value.is_none() && !lp.cursor.counters.contains_key(counter) {
                 return Err(GraphError::Validation(format!(
-                    "loop {} station `{s}` not in nodes",
-                    lp.id
+                    "loop {} until references counter '{}' not in cursor.counters (and no explicit value)",
+                    lp.id, counter
                 )));
             }
         }
-        if !lp.stations.iter().any(|s| s == &lp.entry) {
-            return Err(GraphError::Validation(format!(
-                "loop {} entry `{}` not in stations",
-                lp.id, lp.entry
-            )));
-        }
-        if !lp.stations.iter().any(|s| s == &lp.advance_after) {
-            return Err(GraphError::Validation(format!(
-                "loop {} advance_after `{}` not in stations",
-                lp.id, lp.advance_after
-            )));
-        }
-        for r in &lp.on_advance.reopen {
-            if !ids.contains(r.as_str()) {
-                return Err(GraphError::Validation(format!(
-                    "loop {} on_advance.reopen `{r}` not in nodes",
-                    lp.id
-                )));
-            }
-        }
+        crate::types::Until::Manual => {}
     }
     Ok(())
 }
@@ -257,10 +302,30 @@ mod tests {
             "stations":["a"],
             "entry":"missing",
             "advance_after":"a",
-            "cursor":{"chapter":1,"volume":1,"fine_outline_through":0,"round":1},
-            "until":{"op":"chapter_gt","value":10},
+            "cursor":{"counters":{"chapter":1,"round":1}},
+            "advance":{"increment":"chapter","step":1},
+            "until":{"type":"counter_gt","counter":"chapter","value":10},
             "on_advance":{"reopen":["a"]},
             "world_state_board":[]
+          }]
+        }"#;
+        assert!(parse_plan(json).is_err());
+    }
+
+    #[test]
+    fn rejects_advance_counter_not_in_cursor() {
+        let json = r#"{
+          "version":"1",
+          "nodes":[{"id":"a","title":"A","spec":"x"}],
+          "loops":[{
+            "id":"L",
+            "stations":["a"],
+            "entry":"a",
+            "advance_after":"a",
+            "cursor":{"counters":{"round":1}},
+            "advance":{"increment":"missing_counter","step":1},
+            "until":{"type":"manual"},
+            "on_advance":{"reopen":["a"]}
           }]
         }"#;
         assert!(parse_plan(json).is_err());
@@ -288,5 +353,126 @@ mod tests {
           }]
         }"#;
         assert!(parse_plan(json).is_err());
+    }
+
+    fn loop_shell(extra: &str) -> String {
+        format!(
+            r#"{{
+          "version":"1",
+          "nodes":[
+            {{"id":"a","title":"A","spec":"x"}},
+            {{"id":"b","title":"B","spec":"y"}}
+          ],
+          "loops":[{{
+            "id":"L",
+            "stations":["a","b"],
+            "entry":"a",
+            "advance_after":"b",
+            {extra}
+          }}]
+        }}"#
+        )
+    }
+
+    #[test]
+    fn rejects_empty_advance_increment() {
+        let json = loop_shell(
+            r#""cursor":{"counters":{"n":1}},
+            "advance":{"increment":"","step":1},
+            "until":{"type":"manual"},
+            "on_advance":{"reopen":["a"]}"#,
+        );
+        let err = parse_plan(&json).unwrap_err().to_string();
+        assert!(err.contains("non-empty"), "{err}");
+    }
+
+    #[test]
+    fn rejects_advance_after_not_in_stations() {
+        let json = r#"{
+          "version":"1",
+          "nodes":[{"id":"a","title":"A","spec":"x"}],
+          "loops":[{
+            "id":"L",
+            "stations":["a"],
+            "entry":"a",
+            "advance_after":"ghost",
+            "cursor":{"counters":{"n":1}},
+            "advance":{"increment":"n","step":1},
+            "until":{"type":"manual"},
+            "on_advance":{"reopen":["a"]}
+          }]
+        }"#;
+        assert!(parse_plan(json)
+            .unwrap_err()
+            .to_string()
+            .contains("advance_after"));
+    }
+
+    #[test]
+    fn rejects_station_and_reopen_not_in_nodes() {
+        assert!(parse_plan(
+            r#"{
+          "version":"1",
+          "nodes":[{"id":"a","title":"A","spec":"x"}],
+          "loops":[{
+            "id":"L","stations":["ghost"],"entry":"ghost","advance_after":"ghost",
+            "cursor":{"counters":{"n":1}},"advance":{"increment":"n","step":1},
+            "until":{"type":"manual"},"on_advance":{"reopen":[]}
+          }]
+        }"#
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("station"));
+        assert!(parse_plan(
+            r#"{
+          "version":"1",
+          "nodes":[{"id":"a","title":"A","spec":"x"}],
+          "loops":[{
+            "id":"L","stations":["a"],"entry":"a","advance_after":"a",
+            "cursor":{"counters":{"n":1}},"advance":{"increment":"n","step":1},
+            "until":{"type":"manual"},"on_advance":{"reopen":["ghost"]}
+          }]
+        }"#
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("reopen"));
+    }
+
+    #[test]
+    fn rejects_side_effect_and_until_counter_missing() {
+        let side = loop_shell(
+            r#""cursor":{"counters":{"n":1}},
+            "advance":{"increment":"n","step":1,"side_effects":[{"op":"increment","counter":"missing","by":1}]},
+            "until":{"type":"manual"},
+            "on_advance":{"reopen":["a"]}"#,
+        );
+        assert!(parse_plan(&side)
+            .unwrap_err()
+            .to_string()
+            .contains("side_effect"));
+        let until = loop_shell(
+            r#""cursor":{"counters":{"n":1}},
+            "advance":{"increment":"n","step":1},
+            "until":{"type":"counter_gt","counter":"missing"},
+            "on_advance":{"reopen":["a"]}"#,
+        );
+        assert!(parse_plan(&until)
+            .unwrap_err()
+            .to_string()
+            .contains("until references"));
+    }
+
+    #[test]
+    fn accepts_until_with_explicit_value_even_if_counter_absent() {
+        // value is Some → validate_loop skips "counter must be in cursor" check
+        let json = loop_shell(
+            r#""cursor":{"counters":{"n":1}},
+            "advance":{"increment":"n","step":1},
+            "until":{"type":"counter_eq","counter":"other","value":0},
+            "on_advance":{"reopen":["a","b"]}"#,
+        );
+        assert!(parse_plan(&json).is_ok());
     }
 }

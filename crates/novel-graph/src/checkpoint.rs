@@ -1,7 +1,7 @@
 //! Loop checkpoint snapshots under `knowledge/meta/checkpoints/`.
 
 use crate::error::GraphResult;
-use crate::types::LoopCursor;
+use crate::types::Cursor;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -11,7 +11,7 @@ pub const CHECKPOINTS_DIR_REL: &str = "knowledge/meta/checkpoints";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GraphCheckpoint {
     pub loop_id: String,
-    pub cursor: LoopCursor,
+    pub cursor: Cursor,
     pub frozen_at: String,
     pub artifact_paths: Vec<String>,
 }

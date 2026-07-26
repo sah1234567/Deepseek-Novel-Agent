@@ -1,12 +1,13 @@
 //! Graph IPC commands (plan snapshot, approve/reject, loop controls).
 
-use crate::tauri::graph_emit::{
-    emit_graph_loop_advanced, emit_graph_loops_only, emit_graph_state,
-};
+use crate::tauri::engine_loop::EngineCommand;
+use crate::tauri::graph_emit::{emit_graph_loop_advanced, emit_graph_loops_only, emit_graph_state};
 use crate::tauri::state::CommandContext;
 use novel_graph::{build_snapshot, empty_snapshot, GraphStateSnapshot, GraphTracker};
 use serde::Serialize;
 use tauri::Emitter;
+
+use super::engine_ipc::{emit_interaction_mode_changed, send_engine_reply};
 
 async fn work_root(ctx: &CommandContext) -> std::path::PathBuf {
     ctx.config.read().await.active_project.clone()
@@ -15,9 +16,7 @@ async fn work_root(ctx: &CommandContext) -> std::path::PathBuf {
 fn load(ctx_root: &std::path::Path) -> Result<GraphTracker, String> {
     GraphTracker::load(ctx_root)
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| {
-            "no plan-graph.json — apply GraphApplyTemplate or GraphCommitPlan first".into()
-        })
+        .ok_or_else(|| "no plan-graph.json — use GraphCommitPlan or PlanBuilder first".into())
 }
 
 fn emit_loop_changed(
@@ -29,7 +28,8 @@ fn emit_loop_changed(
         emit_graph_loop_advanced(
             &ctx.app_handle,
             &adv.loop_id,
-            adv.chapter,
+            &adv.snapshot_key,
+            &adv.counters,
             &adv.reset_node_ids,
             snapshot,
         );
@@ -49,9 +49,15 @@ fn emit_after_mutate(
 
 pub async fn graph_get_state(ctx: &CommandContext) -> Result<GraphStateSnapshot, String> {
     let root = work_root(ctx).await;
-    match GraphTracker::load(&root).map_err(|e| e.to_string())? {
-        Some(t) => Ok(build_snapshot(&t)),
-        None => Ok(empty_snapshot()),
+    match GraphTracker::load(&root) {
+        Ok(Some(t)) => Ok(build_snapshot(&t)),
+        Ok(None) => Ok(empty_snapshot()),
+        // Legacy / corrupt plan must not fail IPC (would paint ErrorBanner on every boot).
+        // Author can migrate via PlanBuilder; Graph UI shows empty until then.
+        Err(e) => {
+            tracing::warn!(error = %e, "graph_get_state: plan load failed; empty snapshot");
+            Ok(empty_snapshot())
+        }
     }
 }
 
@@ -95,6 +101,24 @@ pub async fn graph_activate_node(ctx: &CommandContext, node_id: String) -> Resul
     t.set_focus(Some(node_id)).map_err(|e| e.to_string())?;
     t.save(&root).map_err(|e| e.to_string())?;
     emit_graph_state(&ctx.app_handle, &build_snapshot(&t));
+    send_engine_reply(ctx, |reply| EngineCommand::MarkInteractionWork { reply }).await?;
+    emit_interaction_mode_changed(ctx, "work");
+    Ok(())
+}
+
+pub async fn graph_clear_focus(ctx: &CommandContext) -> Result<(), String> {
+    let root = work_root(ctx).await;
+    if let Ok(Some(mut t)) = GraphTracker::load(&root) {
+        t.set_focus(None).map_err(|e| e.to_string())?;
+        t.save(&root).map_err(|e| e.to_string())?;
+        emit_graph_state(&ctx.app_handle, &build_snapshot(&t));
+    }
+    send_engine_reply(ctx, |reply| EngineCommand::SetInteractionMode {
+        mode: "orchestrate".into(),
+        reply,
+    })
+    .await?;
+    emit_interaction_mode_changed(ctx, "orchestrate");
     Ok(())
 }
 
@@ -105,6 +129,8 @@ pub async fn graph_start_node(ctx: &CommandContext, node_id: String) -> Result<(
     t.set_focus(Some(node_id)).map_err(|e| e.to_string())?;
     t.save(&root).map_err(|e| e.to_string())?;
     emit_graph_state(&ctx.app_handle, &build_snapshot(&t));
+    send_engine_reply(ctx, |reply| EngineCommand::MarkInteractionWork { reply }).await?;
+    emit_interaction_mode_changed(ctx, "work");
     Ok(())
 }
 
@@ -120,7 +146,8 @@ pub struct GraphMutateResult {
 #[serde(rename_all = "camelCase")]
 pub struct LoopAdvancedPayload {
     pub loop_id: String,
-    pub chapter: u32,
+    pub snapshot_key: String,
+    pub counters: std::collections::HashMap<String, i64>,
     pub reset_node_ids: Vec<String>,
 }
 
@@ -133,8 +160,9 @@ pub async fn graph_approve(
     let adv = t.approve(&root, &node_id).map_err(|e| e.to_string())?;
     t.save(&root).map_err(|e| e.to_string())?;
     let loop_advanced = adv.map(|a| LoopAdvancedPayload {
-        loop_id: a.loop_id,
-        chapter: a.chapter,
+        loop_id: a.loop_id.clone(),
+        snapshot_key: a.snapshot_key.clone(),
+        counters: a.counters.clone(),
         reset_node_ids: a.reset_node_ids,
     });
     let snapshot = build_snapshot(&t);
@@ -217,11 +245,12 @@ pub async fn graph_loop_resume(
 pub async fn graph_loop_set_target(
     ctx: &CommandContext,
     loop_id: String,
-    target_chapters: u32,
+    key: String,
+    value: serde_json::Value,
 ) -> Result<GraphMutateResult, String> {
     let root = work_root(ctx).await;
     let mut t = load(&root)?;
-    t.set_loop_target(&loop_id, target_chapters)
+    t.set_loop_setting(&loop_id, &key, value)
         .map_err(|e| e.to_string())?;
     t.save(&root).map_err(|e| e.to_string())?;
     let snapshot = build_snapshot(&t);
@@ -235,11 +264,11 @@ pub async fn graph_loop_set_target(
 pub async fn graph_loop_set_cursor(
     ctx: &CommandContext,
     loop_id: String,
-    chapter: u32,
+    counters: std::collections::HashMap<String, i64>,
 ) -> Result<GraphMutateResult, String> {
     let root = work_root(ctx).await;
     let mut t = load(&root)?;
-    t.set_loop_cursor(&loop_id, chapter)
+    t.set_loop_cursor(&loop_id, counters)
         .map_err(|e| e.to_string())?;
     t.save(&root).map_err(|e| e.to_string())?;
     let snapshot = build_snapshot(&t);
@@ -253,7 +282,7 @@ pub async fn graph_loop_set_cursor(
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LoopHistoryRow {
-    pub chapter: u32,
+    pub snapshot_key: String,
     pub artifact_path: String,
     pub handoff_summary_preview: String,
     pub achieved_at: Option<String>,
@@ -278,17 +307,13 @@ pub async fn graph_loop_list_history(
 
     let mut rows = Vec::new();
 
-    // Read chapter-archived handoffs for the write-chapter station.
-    if lp_plan.stations.contains(&"write-chapter".to_string()) {
-        if let Ok(archived) = novel_graph::list_handoff_chapters(&root, "write-chapter", lim) {
-            for (chapter, h) in archived {
+    // Read snapshot-archived handoffs for each station.
+    for station_id in &lp_plan.stations {
+        if let Ok(archived) = novel_graph::list_handoff_snapshots(&root, station_id, lim) {
+            for (snap_key, h) in archived {
                 rows.push(LoopHistoryRow {
-                    chapter,
-                    artifact_path: h
-                        .artifacts
-                        .first()
-                        .cloned()
-                        .unwrap_or_else(|| format!("chapters/chapter-{chapter:03}.md")),
+                    snapshot_key: snap_key,
+                    artifact_path: h.artifacts.first().cloned().unwrap_or_default(),
                     handoff_summary_preview: h.summary.chars().take(240).collect(),
                     achieved_at: h.achieved_at,
                 });
@@ -296,40 +321,7 @@ pub async fn graph_loop_list_history(
         }
     }
 
-    // Fallback: scan chapters/ dir for files not already covered by handoff history.
-    let chapters_dir = root.join("chapters");
-    if chapters_dir.is_dir() && rows.len() < lim {
-        let mut entries: Vec<_> = std::fs::read_dir(&chapters_dir)
-            .map_err(|e| e.to_string())?
-            .filter_map(|e| e.ok())
-            .collect();
-        entries.sort_by_key(|e| e.file_name());
-        for e in entries
-            .into_iter()
-            .rev()
-            .take(lim.saturating_sub(rows.len()))
-        {
-            let name = e.file_name().to_string_lossy().into_owned();
-            let chapter = name
-                .trim_start_matches("chapter-")
-                .trim_end_matches(".md")
-                .parse::<u32>()
-                .unwrap_or(0);
-            let path = format!("chapters/{name}");
-            if rows.iter().any(|r| r.artifact_path == path) {
-                continue;
-            }
-            rows.push(LoopHistoryRow {
-                chapter,
-                artifact_path: path,
-                handoff_summary_preview: String::new(),
-                achieved_at: None,
-            });
-        }
-    }
-
-    // Keep rows sorted by chapter desc, clamped to limit.
-    rows.sort_by_key(|r| std::cmp::Reverse(r.chapter));
+    rows.sort_by(|a, b| b.snapshot_key.cmp(&a.snapshot_key));
     rows.truncate(lim);
     Ok(rows)
 }

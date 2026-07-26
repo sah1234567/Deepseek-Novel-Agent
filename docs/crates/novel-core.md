@@ -50,7 +50,7 @@ SubAgent 与主 Agent 共用 `EngineShared.session_llm`（`SessionLlmSnapshot`�
 | `ForkSubAgent` 工具 | 一条摘要（`[子 Agent 完成: {type}]`） | `fork_messages` + UI overlay |
 | PostToolUse 自动触发 | **不 inject** | `fork_messages` + UI overlay |
 
-工具路径：本批 subagent 并行 spawn → join → 按 `subagent_queue` FIFO 逐条注入摘要报告。父 system prompt 不变，DeepSeek prefix cache 可命中 `[m0]`；**LLM `tools` schema 与主 Agent 同源**（`main_tool_schemas`）。子 Agent 的消息数组仅 `[system_prompt, task_message]` 2 条。Subagent **不共享** `read_file_cache`；Write/Edit/TodoWrite 由 `subagent_mutator_gate` 在 `subagent_queue` 未接线时拒绝。
+工具路径：本批 subagent 并行 spawn → join → 按 `subagent_queue` FIFO 逐条注入摘要报告。父 system prompt 不变，DeepSeek prefix cache 可命中 `[m0]`；**子 Agent LLM `tools` schema 按 catalog 过滤**（`tool_schemas_for_agent`），非主 Agent 全量。子 Agent 的消息数组仅 `[system_prompt, task_message]` 2 条。Subagent **不共享** `read_file_cache`；Write/Edit/TodoWrite 由 `subagent_mutator_gate` 在 `subagent_queue` 未接线时拒绝。
 
 子 Agent 报告末尾须含 `## 接下来（主 Agent 必读）` 自然语言建议，主 Agent 据此自行决定后续操作。
 
@@ -84,7 +84,7 @@ GeneralPurpose 的 `task` 即主 Agent 编写的完整自定义 prompt；审计�
 
 ### 1.4 System Prompt 与动态上下文
 
-**静态层：** `prompt/system.md` 经 `include_str!()` 编译期嵌入。`prompt/autonomous-writing.md` 为无人值守规则正文；`prompt/permission-mode-enter.md` / `permission-mode-exit.md` 为中途切换前后缀。**新会话 / 压缩重建**且 Unattended 时规则写入 system；**会话中途**切到/退出 Unattended 时将对应前缀 **prepend 到下一条用户消息**（单条 user），不修改 `messages[0]`。
+**静态层：** `prompt/shared-base.md` + `prompt/orchestrator.md` 经 `include_str!()` 编译期嵌入。无人值守策略在 `skills/autonomous-writing/SKILL.md`（新会话 Unattended 时 system 提示 `InvokeSkill`；会话中途切换时作为用户消息注入 skill 正文）。`prompt/permission-mode-enter.md` / `permission-mode-exit.md` 为中途切换前后缀。
 
 **权限模式切换门禁：** 输出阶段或 turn 未完整结束（待答题 / 待审批）时 `set_permission_mode` 立即拒绝；仅 turn 正常结束或中断后且 idle 时允许。`EngineStatus.turn_in_progress` / 前端 `AppStatus.turnInProgress` 与 `is_turn_in_progress()` 对齐。
 
@@ -98,7 +98,7 @@ GeneralPurpose 的 `task` 即主 Agent 编写的完整自定义 prompt；审计�
 
 **Skill 加载：** Agent 级 `skills/` + 可选作品级 `works/{名}/skills/`（同 id 覆盖）；system prompt 只含摘要（压缩时重读目录），body 经 InvokeSkill 按需加载，references 经 Read 渐进打开。
 
-**读盘经济：** `system.md` §2.3 + `novel-tools` pipeline 硬限（knowledge/memory/plan/** >80 行拒绝注入，Grep ≤80 行）；Grep 使用 ripgrep 后端，支持 `head_limit`/`offset` 分页；Read 256KB 硬限。
+**读盘经济：** `prompt/shared-base.md` §2 + `novel-tools` pipeline 硬限（knowledge/memory/plan/** >80 行拒绝注入，Grep ≤80 行）；Grep 使用 ripgrep 后端，支持 `head_limit`/`offset` 分页；Read 256KB 硬限。
 
 **术语：** **Session Turn**（`turn_number`）= 用户一条消息及其完整 inner loop；**ReAct loop** = Turn 内单次 LLM→工具循环；**API 调用**（`api_call_count`）= 一次 LLM 请求，一次 Session Turn 可含多次。达 Subagent ReAct 上限时注入提醒 + report-only 收尾轮（禁 tool），非硬截断。
 

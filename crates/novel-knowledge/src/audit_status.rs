@@ -61,9 +61,12 @@ pub struct AuditStatusSummary {
 
 fn chapter_num_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r"(?i)chapter[-_]?(\d+)|Ch(\d+)|第(\d+)章").expect("chapter regex")
-    })
+    RE.get_or_init(
+        || match Regex::new(r"(?i)chapter[-_]?(\d+)|Ch(\d+)|第(\d+)章") {
+            Ok(re) => re,
+            Err(e) => panic!("chapter regex: {e}"),
+        },
+    )
 }
 
 /// Extract unique sorted chapter numbers from free text (task paths, reports).

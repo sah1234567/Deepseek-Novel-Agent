@@ -29,6 +29,8 @@ pub struct WorkSummary {
 pub struct AppStatus {
     pub session_id: String,
     pub permission_mode: String,
+    /// `orchestrate` | `work`
+    pub interaction_mode: String,
     pub hook_running: bool,
     pub pending_user_question: bool,
     pub turn_in_progress: bool,
@@ -82,6 +84,14 @@ pub enum EngineCommand {
         mode: String,
         reply: oneshot::Sender<Result<(), String>>,
     },
+    SetInteractionMode {
+        mode: String,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+    /// After graph activate/start: mark Work without clearing focus.
+    MarkInteractionWork {
+        reply: oneshot::Sender<Result<(), String>>,
+    },
     ResumeSession {
         session_id: String,
         reply: oneshot::Sender<Result<String, String>>,
@@ -101,6 +111,7 @@ fn build_app_status(engine: &AgentEngine, active_work_name: &str) -> AppStatus {
     let EngineStatus {
         session_id,
         permission_mode,
+        interaction_mode,
         hook_running,
         pending_user_question,
         turn_in_progress,
@@ -126,6 +137,7 @@ fn build_app_status(engine: &AgentEngine, active_work_name: &str) -> AppStatus {
     AppStatus {
         session_id,
         permission_mode,
+        interaction_mode,
         hook_running,
         pending_user_question,
         turn_in_progress,
@@ -246,6 +258,22 @@ pub fn spawn_engine_loop(
                         });
                     let _ = reply.send(result);
                 }
+                EngineCommand::SetInteractionMode { mode, reply } => {
+                    tracing::debug!(%mode, "engine_command SetInteractionMode");
+                    let result = novel_core::InteractionMode::parse(&mode).and_then(|parsed| {
+                        engine
+                            .apply_interaction_mode_change(parsed)
+                            .map_err(|e| e.to_string())
+                    });
+                    let _ = reply.send(result);
+                }
+                EngineCommand::MarkInteractionWork { reply } => {
+                    tracing::debug!("engine_command MarkInteractionWork");
+                    let result = engine
+                        .mark_interaction_work_after_focus()
+                        .map_err(|e| e.to_string());
+                    let _ = reply.send(result);
+                }
                 EngineCommand::ResumeSession { session_id, reply } => {
                     tracing::debug!(%session_id, "engine_command ResumeSession");
                     abort_controller.clear();
@@ -341,4 +369,37 @@ pub fn spawn_engine_loop(
         }
         tracing::error!("engine_loop_exited: command channel closed");
     });
+}
+
+#[cfg(test)]
+mod app_status_tests {
+    use super::*;
+
+    #[test]
+    fn interaction_mode_serializes_camel_case() {
+        let status = AppStatus {
+            session_id: "s1".into(),
+            permission_mode: "normal".into(),
+            interaction_mode: "work".into(),
+            hook_running: false,
+            pending_user_question: false,
+            turn_in_progress: false,
+            turn_number: 1,
+            project_initialized: true,
+            has_interruptible_tool_in_progress: false,
+            todos: vec![],
+            session_cache_hit: 0,
+            session_cache_miss: 0,
+            session_completion: 0,
+            context_tokens: 0,
+            active_work_name: "default".into(),
+            focused_node_id: Some("n1".into()),
+            running_node_ids: vec![],
+            graph_hitl_count: 0,
+            loop_summaries: vec![],
+        };
+        let v = serde_json::to_value(&status).expect("json");
+        assert_eq!(v["interactionMode"], "work");
+        assert_eq!(v["focusedNodeId"], "n1");
+    }
 }

@@ -8,7 +8,7 @@ use state::setup_app_state;
 use tauri::Manager;
 
 fn main() {
-    tauri::Builder::default()
+    let result = tauri::Builder::default()
         .setup(|app| {
             let agent_root = resolve_agent_root();
             std::fs::create_dir_all(novel_config::works_dir(&agent_root)).ok();
@@ -45,6 +45,7 @@ fn main() {
             commands::answer_question,
             commands::get_app_status,
             commands::set_permission_mode,
+            commands::set_interaction_mode,
             commands::init_novel_project,
             commands::create_session,
             commands::create_work,
@@ -67,6 +68,7 @@ fn main() {
             commands::graph_get_node,
             commands::graph_get_loop,
             commands::graph_activate_node,
+            commands::graph_clear_focus,
             commands::graph_start_node,
             commands::graph_approve,
             commands::graph_reject,
@@ -79,6 +81,8 @@ fn main() {
             commands::graph_preview_template,
             commands::graph_apply_template,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .run(tauri::generate_context!());
+    if let Err(e) = result {
+        panic!("error while running tauri application: {e}");
+    }
 }

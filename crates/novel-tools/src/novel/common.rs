@@ -87,15 +87,19 @@ pub fn default_outline_column_map() -> &'static OutlineColumnMap {
 
 fn chapter_num_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r"(?i)chapter[-_]?(\d+)|Ch(\d+)|第(\d+)章").expect("valid chapter regex")
-    })
+    RE.get_or_init(
+        || match Regex::new(r"(?i)chapter[-_]?(\d+)|Ch(\d+)|第(\d+)章") {
+            Ok(re) => re,
+            Err(e) => panic!("chapter regex: {e}"),
+        },
+    )
 }
 
 fn table_row_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r"(?m)^\|([^|\n]+(?:\|[^|\n]+)*)\|$").expect("valid table row regex")
+    RE.get_or_init(|| match Regex::new(r"(?m)^\|([^|\n]+(?:\|[^|\n]+)*)\|$") {
+        Ok(re) => re,
+        Err(e) => panic!("table row regex: {e}"),
     })
 }
 

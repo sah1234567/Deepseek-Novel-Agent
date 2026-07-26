@@ -1,4 +1,5 @@
 #![allow(clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
 
 use novel_core::{AgentEngine, EngineConfig};
 use novel_state::Database;

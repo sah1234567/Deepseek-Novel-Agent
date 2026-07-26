@@ -76,14 +76,22 @@ fn work_root(app: &AppHandle) -> Option<std::path::PathBuf> {
 pub fn emit_core_event(app: &AppHandle, event: Event, message_id: &str) {
     if let Event::GraphLoopAdvanced {
         loop_id,
-        chapter,
+        snapshot_key,
+        counters,
         reset_node_ids,
     } = &event
     {
         if let Some(root) = work_root(app) {
             if let Ok(Some(t)) = novel_graph::GraphTracker::load(&root) {
                 let snap = novel_graph::build_snapshot(&t);
-                emit_graph_loop_advanced(app, loop_id, *chapter, reset_node_ids, &snap);
+                emit_graph_loop_advanced(
+                    app,
+                    loop_id,
+                    snapshot_key,
+                    counters,
+                    reset_node_ids,
+                    &snap,
+                );
             }
         }
         return;

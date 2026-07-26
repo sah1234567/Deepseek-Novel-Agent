@@ -14,15 +14,15 @@
 
 | 类型 | 字段要点 |
 |------|---------|
-| `PlanGraph` | `version`、`nodes`、`loops`、`enforce_gates`、`max_parallel_nodes`、`target_chapters`、`auto_start_ready` |
-| `PlanNode` | `id`、`title`、`spec` / `spec_template`、`deps`、`kind`、`artifacts`、`acceptance`、`rollback`、`iterate` |
-| `BookLoop` | `id`、`stations`、`entry`、`advance_after`、`cursor`、`until`、`on_advance`、`world_state_board` |
+| `PlanGraph` | `version`、`nodes`、`loops`、`enforce_gates`、`max_parallel_nodes`、`settings` (generic KV)、`auto_start_ready` |
+| `PlanNode` | `id`、`title`、`spec` / `spec_template`、`deps`、`tags` (Vec\<String\>, replaces old `kind` enum)、`artifacts`、`acceptance`、`rollback`、`iterate` |
+| `WorkflowLoop` | `id`、`stations`、`entry`、`advance_after`、`cursor` (generic `counters` + `tags`)、`advance` (AdvanceRule)、`until` (Until enum)、`on_advance`、`world_state_board` |
 | `Acceptance` | `machine`（None / Verifier / Auditor）+ 可选 `HumanGate { required, on_reject, prompt, review }` |
 | `Rollback` | `allowed_targets`、`explicit_ids`、`max_regates`（默认 3） |
 
 **校验（`parse_and_validate`）：** DAG 无环（循环须用 reopen policy，非 deps 边）、deps 节点存在、loop stations 引用存在、artifact path 不逃逸工作根、`human.required` 时建议含 `primary_deliverable`。
 
-**模板渲染：** `spec_template` / `path_template` 使用 `{{cursor.chapter}}`、`{{cursor.chapter | pad3}}` 等占位符；start_node 时由 harness 渲染为 `effective_spec`。
+**模板渲染：** `spec_template` / `path_template` 使用 `{{cursor.X}}`、`{{cursor.X | padN}}`、`{{cursor.X | sub N}}` 等占位符（X 为任意 counter 名）；start_node 时由 harness 渲染为 `effective_spec`。
 
 ### 1.2 GraphTracker
 
@@ -62,15 +62,16 @@ Waiting → Ready → Running ⇄ (作者对话/改产物)
 
 | 概念 | 说明 |
 |------|------|
-| `cursor` | `{ chapter, volume, fine_outline_through, round }` — 跨轮持久 |
+| `cursor` | `{ counters: HashMap<String, i64>, tags: HashMap<String, String> }` — 跨轮持久，key 由 plan 定义 |
+| `advance` | `AdvanceRule { increment, step, side_effects }` — 推进规则 |
 | `advance_after` | 当该 station Achieved 时触发 advance |
 | `on_advance.reopen` | 需重置的 station id 列表（clear session/effective_spec/handoff/human_intervened） |
-| `until` | `chapter_gt` + `value`（或 `value_from: work_meta.target_chapters`）→ 达上限 → Completed |
+| `until` | `CounterGt` / `CounterGe` / `CounterLt` / `CounterEq` / `Manual` — 终止条件 |
 | `world_state_board` | 正典板文件集：写这些路径不触发 demote_on_edit；loop advance 不清除 |
 
-**advance 流程：** `sync-canon` Achieved → chapter+1 → reopen stations → `recompute_ready` → force entry Ready（验 deps 满足）→ emit `graph-loop-changed` + `node-session-reset`。
+**advance 流程：** advance_after station Achieved → 执行 `AdvanceRule`（increment counter + side_effects）→ reopen stations → `recompute_ready` → force entry Ready（验 deps 满足）→ emit `graph-loop-changed` + `node-session-reset`。
 
-**章间隔离：** advance/reopen 清空 `human_intervened`、`pending_summary`、`files_touched_journal`、`handoff`。第 N 章的干预不影响 N+1。
+**迭代隔离：** advance/reopen 清空 `human_intervened`、`pending_summary`、`files_touched_journal`、`handoff`。第 N 次迭代的干预不影响 N+1。
 
 ### 1.4 门禁
 
@@ -92,7 +93,7 @@ Achieved 出门时固化 `NodeHandoff`：
 | `files_touched` | Write/Edit journal | 引擎侧工具成功记录 |
 | `artifacts` | plan `writable_paths` | 产物路径清单 |
 
-**落盘：** `knowledge/meta/handoffs/{node_id}.json`（最新）+ `knowledge/meta/handoffs/{node_id}-ch-{NNN}.json`（按章归档，供 LoopHistory 读取）。
+**落盘：** `knowledge/meta/handoffs/{node_id}.json`（最新）+ `knowledge/meta/handoffs/{node_id}-snap-{key}.json`（快照归档，供 LoopHistory 读取）。
 
 下游启动时注入 `node_objective_block`：
 ```
@@ -116,7 +117,7 @@ spec / effective_spec
 | `open_work` | 仅在 `plan_exists` 时才 `ensure_graph_initialized`——不静默落图 |
 | `init_novel_project` / `create_work` | 不 auto-seed plan |
 
-默认骨架两处同文：`templates/knowledge/meta/plan-graph.template.json`（scaffold 参考）与 `crates/novel-graph/templates/plan-graph.json`（`include_str!`）；由 `init` 单测防漂移。
+默认骨架仅 `crates/novel-graph/templates/plan-graph.json`（`include_str!`，空骨架）。领域工作流由 LLM 通过 PlanBuilder 构建。
 
 ### 1.7 出门闸
 
@@ -142,8 +143,8 @@ spec / effective_spec
 | `graph_start_node` | Ready → Running |
 | `graph_approve` / `graph_reject` / `graph_reopen` | 人审操作 |
 | `graph_loop_pause` / `graph_loop_resume` | 暂停/继续 auto advance |
-| `graph_loop_set_target` / `graph_loop_set_cursor` | 改目标章数 / 跳游标 |
-| `graph_loop_list_history` | 按章 handoff 历史（读归档 `{node_id}-ch-{NNN}.json` + chapters/ 目录） |
+| `graph_loop_set_target` / `graph_loop_set_cursor` | 改 settings / 跳游标 |
+| `graph_loop_list_history` | 快照 handoff 历史（读归档 `{node_id}-snap-{key}.json`） |
 | `graph_preview_template` / `graph_apply_template` | 模板预览 + 应用 |
 
 **IPC Events（7 个）：**
@@ -183,5 +184,5 @@ spec / effective_spec
 | `knowledge/meta/graph-state.json` | GraphState 运行时 | `save_state` / `load_state` |
 | `knowledge/meta/graph.jsonl` | 事件日志（achieved / loop_advanced / loop_completed / demote_on_edit） | `append_jsonl` |
 | `knowledge/meta/handoffs/{node_id}.json` | 节点最新 NodeHandoff | `save_handoff` |
-| `knowledge/meta/handoffs/{node_id}-ch-{NNN}.json` | 按章归档 NodeHandoff | `save_handoff_chapter` / `list_handoff_chapters` |
+| `knowledge/meta/handoffs/{node_id}-snap-{key}.json` | 快照归档 NodeHandoff | `save_handoff_snapshot` / `list_handoff_snapshots` |
 | `knowledge/meta/checkpoints/{loop_id}.json` | 赛季冻结 | `save_checkpoint` / `load_checkpoint` |

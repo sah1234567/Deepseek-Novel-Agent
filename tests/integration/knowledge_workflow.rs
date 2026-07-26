@@ -1,4 +1,5 @@
 #![allow(clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
 
 use novel_knowledge::{
     append_evolution_log, parse_frontmatter, CharacterFrontmatter, KnowledgeStore,
