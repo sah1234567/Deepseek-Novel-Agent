@@ -1,6 +1,9 @@
 ---
 name: research
-description: 自定义只读调研（Graph Research 节点 / 原 GeneralPurpose 调研映射）。Invoke 后在节点内执行 WebSearch/Read 并写报告正文。
+description: 自定义只读调研——在节点内执行 WebSearch/Read 并输出调研报告正文。Research 节点或作者临时调研时使用。触发词："调研"、"查资料"、"research"。
+when_to_use: Research 节点激活或作者要求外部调研时使用
+skill_kind: workflow
+allowed-tools: Read, Grep, Glob, WebSearch, Tail, Stats
 ---
 
 # research — 调研 Skill

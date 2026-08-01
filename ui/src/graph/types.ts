@@ -29,13 +29,13 @@ export type GraphNodeView = {
   humanIntervened?: boolean;
 };
 
-export type GraphEdgeView = {
+type GraphEdgeView = {
   source: string;
   target: string;
   kind: string;
 };
 
-export type GraphLoopView = {
+type GraphLoopView = {
   loopId: string;
   stationIds: string[];
   cursor: Cursor;
@@ -56,7 +56,7 @@ export type GraphHitlHint = {
   label: string;
 };
 
-export type LoopSummary = {
+type LoopSummary = {
   loopId: string;
   cursorLabel: string;
   phase: LoopPhase;

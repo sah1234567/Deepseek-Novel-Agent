@@ -5,7 +5,6 @@ use crate::tauri::graph_emit::{emit_graph_loop_advanced, emit_graph_loops_only, 
 use crate::tauri::state::CommandContext;
 use novel_graph::{build_snapshot, empty_snapshot, GraphStateSnapshot, GraphTracker};
 use serde::Serialize;
-use tauri::Emitter;
 
 use super::engine_ipc::{emit_interaction_mode_changed, send_engine_reply};
 
@@ -61,40 +60,6 @@ pub async fn graph_get_state(ctx: &CommandContext) -> Result<GraphStateSnapshot,
     }
 }
 
-pub async fn graph_get_node(
-    ctx: &CommandContext,
-    node_id: String,
-) -> Result<serde_json::Value, String> {
-    let root = work_root(ctx).await;
-    let t = load(&root)?;
-    let n = t.node_plan(&node_id).map_err(|e| e.to_string())?;
-    let rt = t.state.nodes.get(&node_id);
-    let objective = t
-        .node_objective_block(&node_id)
-        .map_err(|e| e.to_string())?;
-    Ok(serde_json::json!({
-        "plan": n,
-        "runtime": rt,
-        "objective": objective,
-    }))
-}
-
-pub async fn graph_get_loop(
-    ctx: &CommandContext,
-    loop_id: String,
-) -> Result<serde_json::Value, String> {
-    let root = work_root(ctx).await;
-    let t = load(&root)?;
-    let snap = build_snapshot(&t);
-    snap.loops
-        .into_iter()
-        .find(|l| l.loop_id == loop_id)
-        .map(serde_json::to_value)
-        .transpose()
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("loop not found: {loop_id}"))
-}
-
 pub async fn graph_activate_node(ctx: &CommandContext, node_id: String) -> Result<(), String> {
     let root = work_root(ctx).await;
     let mut t = load(&root)?;
@@ -125,7 +90,7 @@ pub async fn graph_clear_focus(ctx: &CommandContext) -> Result<(), String> {
 pub async fn graph_start_node(ctx: &CommandContext, node_id: String) -> Result<(), String> {
     let root = work_root(ctx).await;
     let mut t = load(&root)?;
-    t.start_node(&node_id, None).map_err(|e| e.to_string())?;
+    t.start_node(&node_id).map_err(|e| e.to_string())?;
     t.set_focus(Some(node_id)).map_err(|e| e.to_string())?;
     t.save(&root).map_err(|e| e.to_string())?;
     emit_graph_state(&ctx.app_handle, &build_snapshot(&t));
@@ -242,43 +207,6 @@ pub async fn graph_loop_resume(
     })
 }
 
-pub async fn graph_loop_set_target(
-    ctx: &CommandContext,
-    loop_id: String,
-    key: String,
-    value: serde_json::Value,
-) -> Result<GraphMutateResult, String> {
-    let root = work_root(ctx).await;
-    let mut t = load(&root)?;
-    t.set_loop_setting(&loop_id, &key, value)
-        .map_err(|e| e.to_string())?;
-    t.save(&root).map_err(|e| e.to_string())?;
-    let snapshot = build_snapshot(&t);
-    emit_after_mutate(ctx, &snapshot, &None);
-    Ok(GraphMutateResult {
-        snapshot,
-        loop_advanced: None,
-    })
-}
-
-pub async fn graph_loop_set_cursor(
-    ctx: &CommandContext,
-    loop_id: String,
-    counters: std::collections::HashMap<String, i64>,
-) -> Result<GraphMutateResult, String> {
-    let root = work_root(ctx).await;
-    let mut t = load(&root)?;
-    t.set_loop_cursor(&loop_id, counters)
-        .map_err(|e| e.to_string())?;
-    t.save(&root).map_err(|e| e.to_string())?;
-    let snapshot = build_snapshot(&t);
-    emit_after_mutate(ctx, &snapshot, &None);
-    Ok(GraphMutateResult {
-        snapshot,
-        loop_advanced: None,
-    })
-}
-
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LoopHistoryRow {
@@ -324,34 +252,4 @@ pub async fn graph_loop_list_history(
     rows.sort_by(|a, b| b.snapshot_key.cmp(&a.snapshot_key));
     rows.truncate(lim);
     Ok(rows)
-}
-
-/// Return bundled default plan JSON for UI template preview (does not write to disk).
-pub async fn graph_preview_template(_ctx: &CommandContext) -> Result<String, String> {
-    Ok(novel_graph::default_plan_json().to_string())
-}
-
-/// Apply bundled template as formal plan (UI button). Emits graph-state-changed + graph-plan-committed.
-pub async fn graph_apply_template(
-    ctx: &CommandContext,
-    force: Option<bool>,
-) -> Result<GraphStateSnapshot, String> {
-    let root = work_root(ctx).await;
-    let force = force.unwrap_or(false);
-    if novel_graph::plan_exists(&root) && !force {
-        return Err("plan-graph.json already exists — open Graph or pass force".into());
-    }
-    if force && novel_graph::plan_exists(&root) {
-        let _ = std::fs::remove_file(novel_graph::plan_path(&root));
-        let _ = std::fs::remove_file(novel_graph::state_path(&root));
-    }
-    novel_graph::write_default_plan_file(&root).map_err(|e| e.to_string())?;
-    let t = load(&root)?;
-    let snap = build_snapshot(&t);
-    emit_graph_state(&ctx.app_handle, &snap);
-    let _ = ctx.app_handle.emit(
-        "graph-plan-committed",
-        serde_json::json!({ "source": "ipc" }),
-    );
-    Ok(snap)
 }

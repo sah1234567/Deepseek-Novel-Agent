@@ -87,7 +87,7 @@ cargo tauri build --bundles nsis
 
 ```
 novel_agent/
-├── crates/                # Rust 后端（10 个业务 crate + novel-server）
+├── crates/                # Rust 后端（12 个 crate）
 ├── src-tauri/             # Tauri 桌面壳
 ├── ui/                    # React 18 + TypeScript + Vite 8 前端
 ├── skills/                # Agent 级 Workflow + 流派 Skill

@@ -4,7 +4,7 @@ description: >-
   重构或新增 feature（Rust / TypeScript）时遵循的软件工程基本原则：
   DRY（不要重复自己）、单一职责与高内聚、正交、最小暴露与接口隔离、
   开闭原则、里氏替换原则、依赖反转原则、清晰注释。
-  用于架构决策、代码拆分、接口设计、抽象边界审查。
+  架构决策、代码拆分、接口设计、抽象边界审查时必读。
 ---
 
 # 软件工程基本原则
@@ -18,6 +18,7 @@ ui (React 18 / Vite 8 / TypeScript) → Tauri IPC → novel-server → novel-cor
                                                               ├── novel-deepseek (LLM)
                                                               ├── novel-tools (tool dispatch)
                                                               ├── novel-knowledge (RAG/scaffold)
+                                                              ├── novel-graph (plan-graph 编排)
                                                               ├── novel-state (SQLite sessions)
                                                               ├── novel-compaction (context mgmt)
                                                               ├── novel-config (paths/settings)
@@ -26,8 +27,8 @@ ui (React 18 / Vite 8 / TypeScript) → Tauri IPC → novel-server → novel-cor
                                                               └── novel-logging (tracing)
 ```
 
-- **Crate DAG（硬规则）：** `novel-server → (novel-core | novel-deepseek | novel-tools | ...) → novel-config`。禁止反向依赖。`novel-core` 不可依赖任何 feature crate。
-- **IPC 拓扑：** `ui --Tauri invoke/listen--> novel-server/src/tauri/ --EngineCommand--> novel-core`。UI 不得直连 WebSocket 或 game 端口。
+- **Crate DAG（硬规则）：** `novel-server → (novel-core | novel-deepseek | novel-tools | ...) → novel-config`。禁止反向依赖。`novel-core` 不依赖 novel-server（feature crate = novel-server 与 novel-deepseek 之上不产生反向边；novel-knowledge 是最底层纯叶子）。
+- **IPC 拓扑：** `ui --Tauri invoke/listen--> novel-server/src/tauri/ --EngineCommand--> novel-core`。UI 只经 Tauri `invoke`/`listen`，不得直连 WebSocket。
 - **数据归属：** 每作品独立 `works/{name}/.novel-agent/state.db`；全局 API 配置在 `.novel-agent/api_config.json`。API Key 不写入 per-work DB。
 - **测试纪律：** Rust 全项目只用 `cargo nextest run`（禁止 `cargo test`）。Node 24+（`ui/.nvmrc`）。
 - **CRAP 阈值：** 20（`.cargo-crap.toml`），禁止调高。
@@ -440,9 +441,9 @@ if (loading) return <Spinner />;  // 如果正在加载，显示 Spinner
  */
 function useWorkStatus(workName: string): WorkStatusState { ... }
 
-// 空依赖数组：此 effect 仅需挂载时初始化一次 WebSocket，
-// 后续重连由 WebSocket 自身的 onclose 回调处理。
-useEffect(() => { connectWebSocket(url); }, []);
+// 空依赖数组：此 effect 仅需挂载时注册一次 Tauri 事件监听，
+// 后续事件由 invoke/listen 通道持续推送（重连由监听器生命周期管理）。
+useEffect(() => { subscribeToTauriEvents(); }, []);
 ```
 
 ---

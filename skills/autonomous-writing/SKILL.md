@@ -1,9 +1,9 @@
 ---
 name: autonomous-writing
-description: 无人值守自主写作策略 — AskUserQuestion自行决断、审计降频、冲突自行化解
+description: 无人值守自主写作策略——AskUserQuestion 自行决断、审计降频、冲突自行化解。当权限模式为 Unattended 时自动加载。触发词："无人值守"、"自动写"。
 when_to_use: 当权限模式为Unattended时自动加载
 skill_kind: strategy
-allowed-tools: Read, Write, Edit, Grep, Glob, InvokeSkill, TodoWrite, CharacterSearch, Tail
+allowed-tools: Read, Write, Edit, Grep, Glob, InvokeSkill, TodoWrite, CharacterSearch, Tail, Stats, TrackingQuery, RelationQuery, ForeshadowTracker, CharacterRotate, AuditStatusQuery, AuditStatusUpdate, AskUserQuestion
 ---
 
 # 自主连续写作模式
@@ -49,6 +49,16 @@ allowed-tools: Read, Write, Edit, Grep, Glob, InvokeSkill, TodoWrite, CharacterS
 | 全局知识审计 | 每 20 章一次 | 最近 20 章，额外检查伏笔回收率/人物弧线/战力一致性 |
 
 修复后 `AuditStatusUpdate` / 更新 `knowledge/meta/audit-status.md`：对应审计列标 `已通过`（见 system §4.5）。需要隔离上下文时再可选 Fork。
+
+**阶段自适应（按 Progress 段的「阶段」行调整；未标注时按「中期」执行）：**
+
+| 阶段 | `audit-knowledge` + `audit-craft` | 全局知识审计 |
+|------|----------------------------------|-------------|
+| 开局（<15%） | 每 3 章（不变） | 每 20 章（不变） |
+| 中期（默认） | 放宽至每 5 章 | 每 20 章 |
+| 收尾（>85%） | 恢复每 3 章 | 每 5 章一次（强制），伏笔回收率检查每次写章前做 |
+
+`audit-plan` 频率不受阶段影响（每批细纲一次）。
 
 降频的章仍需做轻量自检：Stats 字数 + Tail 上章衔接 + 细纲「写后记录」和「知识库更新确认」填写。
 

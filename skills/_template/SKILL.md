@@ -1,8 +1,8 @@
 ---
 name: <skill-id>
-description: <流派名称>——<核心约束一句话总结>。<何时使用：触发场景和条件>
-when_to_use: <触发场景描述。触发词："...", "...", "...">
-allowed-tools: Read, Write, Edit, Glob, Grep, Bash
+description: <流派名称>——<核心约束一句话总结>。<何时使用：触发场景和条件。触发词："...", "...", "...">
+when_to_use: <触发场景描述（不含触发词——触发词只在 description 单一来源，避免重复）>
+# allowed-tools: 可选。仅当需声明专用工具时添加（loader 不解析该字段，纯文档性；通用六工具组已省略）
 ---
 
 # <流派名>写作规范

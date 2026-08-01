@@ -1,6 +1,9 @@
 ---
 name: audit-plan
-description: "细纲写完且追踪已更新后 Invoke：只读审计大纲对齐、伏笔密度、因果闭合、人物轮换、字数与登记完整性；输出自然语言报告，节点 Agent 再 Edit / AuditStatusUpdate / GraphSubmitForApproval。原 PlanAuditor。"
+description: 细纲计划结构审计——只读审计大纲对齐、伏笔密度、因果闭合、人物轮换、字数与登记完整性；输出自然语言报告，节点 Agent 再 Edit / AuditStatusUpdate / GraphSubmitForApproval。细纲写完且追踪已更新后 Invoke。触发词："审计细纲"、"检查大纲"。
+when_to_use: 细纲写完且追踪文件更新后、需独立审计计划质量时使用
+skill_kind: workflow
+allowed-tools: Read, Grep, CharacterSearch, RelationQuery, TrackingQuery, ForeshadowTracker, PlotGraph, Corkboard, Stats, Tail, AuditStatusQuery
 ---
 # audit-plan — 细纲计划结构审计（只读）
 
@@ -12,6 +15,16 @@ description: "细纲写完且追踪已更新后 Invoke：只读审计大纲对�
 - **禁止 Write/Edit** 任何文件
 - 最终输出必须是自然语言，禁止 JSON / ```json 代码块
 - 此时**正文不存在**——只读细纲 + 大纲 + 知识库文件
+
+## 独立性原则（Fork 审计）
+
+当以 Fork 隔离方式执行本审计时（`ForkSubAgent(PlanAuditor)`），独立性是硬约束：
+
+- **只基于工件 + 本 Skill 的审计标准做判断**——工件 = 细纲/大纲/追踪文件本身；标准 = 本 Skill 的检查项
+- **不接收、不依赖主 Agent 的任何判断、分数、结论**（防止锚定偏差——审计结论必须来自你实际读到的文件）
+- 判断依据全部来自你实际 Read / 查询到的文件内容，不得假设
+
+主路径（节点内 InvokeSkill）审计由主 Agent 直接执行，本原则不适用。
 
 ## 工具使用铁律（违反即浪费 ReAct 轮次）
 
@@ -143,10 +156,11 @@ batch ≥5 章时，报告中增加 `## 跨章节奏总览` 节：汇总各章�
 
 ## 「接下来」写作参考
 
-1. 按「登记完整性」遗漏项，补充 Edit append（`old_string` = 表末行）
-2. 伏笔密度超标 → 建议将部分埋设/回收操作分摊到后续细纲
-3. 因果断头 → 建议在细纲中补充对应事件，或在因果链中添加跨章边
-4. 人物轮换告警 → 建议后续细纲调整 POV 或增加缺失角色戏份
-5. 大纲对齐问题 → **必须**在写正文前修改细纲，不可带着偏离动笔
-6. 全部修复后，才可进入正文写作阶段。**不要**建议节点 Agent 再次 InvokeSkill(`audit-plan`) 或 Fork 重复同类审计
-7. 修复完成后 → 节点 Agent 应 `AuditStatusUpdate`（或 Edit 台账）：对应章 `细纲PA=已通过`，再 `GraphSubmitForApproval`
+1. **报告落盘**：报告全文 Write 到 `knowledge/meta/audits/chapter-NNN-pa.md`（多章按章归档；重跑覆盖）。每条问题标注 `[可泛化]`（值得沉淀为规则的错误模式）或 `[一次性]`；仅 `[可泛化]` 项进入 `knowledge/meta/findings/`
+2. 按「登记完整性」遗漏项，补充 Edit append（`old_string` = 表末行）
+3. 伏笔密度超标 → 建议将部分埋设/回收操作分摊到后续细纲
+4. 因果断头 → 建议在细纲中补充对应事件，或在因果链中添加跨章边
+5. 人物轮换告警 → 建议后续细纲调整 POV 或增加缺失角色戏份
+6. 大纲对齐问题 → **必须**在写正文前修改细纲，不可带着偏离动笔
+7. 全部修复后，才可进入正文写作阶段。**不要**建议节点 Agent 再次 InvokeSkill(`audit-plan`) 或 Fork 重复同类审计
+8. 修复完成后 → 节点 Agent 应 `AuditStatusUpdate`（或 Edit 台账）：对应章 `细纲PA=已通过`，再 `GraphSubmitForApproval`

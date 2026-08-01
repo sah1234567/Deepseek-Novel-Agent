@@ -86,8 +86,10 @@ pub fn default_registry() -> ToolRegistry {
     reg.register(Box::new(novel::GraphSubmitForApprovalTool));
     reg.register(Box::new(novel::GraphMarkVerifiedTool));
     reg.register(Box::new(novel::GraphReopenTool));
-    reg.register(Box::new(novel::GraphApplyTemplateTool));
     reg.register(Box::new(novel::GraphCommitPlanTool));
     reg.register(Box::new(novel::PlanBuilderTool));
+    reg.register(Box::new(novel::ChapterLintTool));
+    reg.register(Box::new(novel::WorkHealthCheckTool));
+    reg.register(Box::new(novel::ChapterDiffTool));
     reg
 }

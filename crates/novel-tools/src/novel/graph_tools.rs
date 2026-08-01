@@ -139,7 +139,7 @@ impl Tool for GraphAdvanceTool {
     async fn call(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
         let id = require_str(&input, "node_id")?;
         let mut t = load_tracker(ctx)?;
-        t.start_node(&id, None)
+        t.start_node(&id)
             .map_err(|e| ToolError::Execution(e.to_string()))?;
         t.set_focus(Some(id.clone()))
             .map_err(|e| ToolError::Execution(e.to_string()))?;
@@ -278,7 +278,7 @@ impl Tool for GraphReopenTool {
                 },
                 "note": {
                     "type": "string",
-                    "description": "Optional REGATE: <id> / REASON: text (fail-closed if id mismatches)"
+                    "description": "Optional REGATE: <id> (fail-closed if id mismatches)"
                 }
             },
             "required": ["node_id"]
@@ -295,7 +295,7 @@ impl Tool for GraphReopenTool {
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
         if let Some(note) = input.get("note").and_then(|v| v.as_str()) {
-            if let Some((target, _)) = novel_graph::parse_regate_directive(note) {
+            if let Some(target) = novel_graph::parse_regate_directive(note) {
                 if target != id {
                     return Err(ToolError::Execution(format!(
                         "REGATE target `{target}` does not match node_id `{id}`"
@@ -347,61 +347,6 @@ impl Tool for GraphMarkVerifiedTool {
         save_tracker(ctx, &t)?;
         Ok(ToolOutput {
             content: format!("Node `{id}` → Verifying"),
-            is_error: false,
-        })
-    }
-}
-
-/// Apply the bundled default plan skeleton (no-op if a formal plan already exists, unless force).
-pub struct GraphApplyTemplateTool;
-
-#[async_trait]
-impl Tool for GraphApplyTemplateTool {
-    fn name(&self) -> &str {
-        "GraphApplyTemplate"
-    }
-    fn description(&self) -> &str {
-        "[DEPRECATED — use PlanBuilder instead] Write an empty plan-graph skeleton (no nodes/loops). After applying, use PlanBuilder to incrementally construct the workflow."
-    }
-    fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "force": {
-                    "type": "boolean",
-                    "description": "Replace existing plan-graph.json (destructive). Default false."
-                }
-            }
-        })
-    }
-    fn is_read_only(&self) -> bool {
-        false
-    }
-
-    async fn call(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
-        let force = input
-            .get("force")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        if novel_graph::plan_exists(&ctx.project_root) && !force {
-            return Ok(ToolOutput {
-                content: "plan-graph.json already exists — pass force=true to replace, or use GraphCommitPlan with a custom JSON.".into(),
-                is_error: false,
-            });
-        }
-        if force && novel_graph::plan_exists(&ctx.project_root) {
-            let p = novel_graph::plan_path(&ctx.project_root);
-            std::fs::remove_file(&p).map_err(|e| ToolError::Execution(e.to_string()))?;
-            let sp = novel_graph::state_path(&ctx.project_root);
-            let _ = std::fs::remove_file(sp);
-        }
-        novel_graph::write_default_plan_file(&ctx.project_root)
-            .map_err(|e| ToolError::Execution(e.to_string()))?;
-        if let Some(cb) = &ctx.on_graph_plan_committed {
-            cb();
-        }
-        Ok(ToolOutput {
-            content: "Applied default plan-graph template. Open Graph to review nodes; then Start Ready stations.".into(),
             is_error: false,
         })
     }
@@ -720,7 +665,7 @@ mod tests {
             let mut t = GraphTracker::load(tmp.path()).unwrap().unwrap();
             t.state.nodes.get_mut("world-bible").unwrap().status = NodeStatus::Achieved;
             t.recompute_ready();
-            t.start_node("outline", None).unwrap();
+            t.start_node("outline").unwrap();
             t.save(tmp.path()).unwrap();
         }
         GraphMarkVerifiedTool
@@ -773,7 +718,7 @@ mod tests {
                 t.state.nodes.get_mut(id).unwrap().pending_summary = Some("ok".into());
             }
             t.recompute_ready();
-            t.start_node("sync-canon", None).unwrap();
+            t.start_node("sync-canon").unwrap();
             t.record_file_touch("sync-canon", "knowledge/characters/hero.md", "update")
                 .unwrap();
             t.save(tmp.path()).unwrap();
@@ -814,7 +759,7 @@ mod tests {
                 t.state.nodes.get_mut(id).unwrap().pending_summary = Some("ok".into());
             }
             t.recompute_ready();
-            t.start_node("sync-canon", None).unwrap();
+            t.start_node("sync-canon").unwrap();
             t.record_file_touch("sync-canon", "knowledge/characters/hero.md", "update")
                 .unwrap();
             t.save(tmp.path()).unwrap();
@@ -854,7 +799,7 @@ mod tests {
                 .pending_summary = Some("ok".into());
             t.state.nodes.get_mut("outline").unwrap().pending_summary = Some("ok".into());
             t.recompute_ready();
-            t.start_node("ensure-fine-outline", None).unwrap();
+            t.start_node("ensure-fine-outline").unwrap();
             t.record_file_touch(
                 "ensure-fine-outline",
                 "knowledge/plot/细纲/chapter-001-细纲.md",
@@ -897,7 +842,7 @@ mod tests {
             t.state.nodes.get_mut("world-bible").unwrap().status = NodeStatus::Achieved;
             t.state.nodes.get_mut("outline").unwrap().status = NodeStatus::Achieved;
             t.recompute_ready();
-            t.start_node("ensure-fine-outline", None).unwrap();
+            t.start_node("ensure-fine-outline").unwrap();
             t.mark_human_intervened("ensure-fine-outline").unwrap();
             t.save(tmp.path()).unwrap();
         }
@@ -922,9 +867,7 @@ mod tests {
         );
     }
 
-    // GraphApplyTemplate / GraphCommitPlan boundaries:
-    // - apply: no plan → write; exists without force → soft message; force → replace + callback
-    // - commit: success + callback; exists without replace → err; invalid JSON → err; replace ok
+    // GraphCommitPlan boundaries: success + callback; exists without replace → err; invalid JSON → err; replace ok
     fn minimal_valid_plan_json() -> String {
         r#"{
           "version":"1",
@@ -932,34 +875,6 @@ mod tests {
           "loops":[]
         }"#
         .into()
-    }
-
-    #[tokio::test]
-    async fn graph_apply_template_create_skip_and_force() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        let tmp = TempDir::new().unwrap();
-        let c = ctx(&tmp);
-        let out = GraphApplyTemplateTool.call(json!({}), &c).await.unwrap();
-        assert!(out.content.contains("Applied"));
-        assert!(novel_graph::plan_exists(tmp.path()));
-
-        let skip = GraphApplyTemplateTool.call(json!({}), &c).await.unwrap();
-        assert!(skip.content.contains("already exists"));
-
-        let flag = Arc::new(AtomicBool::new(false));
-        let flag2 = Arc::clone(&flag);
-        let mut c2 = ctx(&tmp);
-        c2.on_graph_plan_committed = Some(Arc::new(move || {
-            flag2.store(true, Ordering::SeqCst);
-        }));
-        let forced = GraphApplyTemplateTool
-            .call(json!({"force": true}), &c2)
-            .await
-            .unwrap();
-        assert!(forced.content.contains("Applied"));
-        assert!(flag.load(Ordering::SeqCst));
-        assert_eq!(GraphApplyTemplateTool.name(), "GraphApplyTemplate");
-        assert!(!GraphApplyTemplateTool.is_read_only());
     }
 
     #[tokio::test]

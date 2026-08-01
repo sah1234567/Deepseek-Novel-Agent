@@ -41,11 +41,14 @@ description: >-
 
 通读本次 diff，沿代码链路逐段核对。先判断改动类别：
 
-- **Turn / 工具**：`novel-core/`、`novel-tools/`
-- **状态 / 知识库**：`novel-state/`、`novel-knowledge/`（含 scaffold、templates）
+- **Turn / 工具**：`novel-core/`（`engine/`、`turn/loop/`、`subagent/`）、`novel-tools/`
+- **Graph 编排**：`novel-graph/`（plan schema、GraphTracker、regate、Loop）
+- **状态 / 知识库**：`novel-state/`、`novel-knowledge/`（含 scaffold、templates、foreshadow/findings）
+- **记忆**：`novel-memory/`（类型、选择、提取、prefetch）
+- **LLM / 日志**：`novel-deepseek/`（ChatClient、SSE、tool_args）、`novel-logging/`
 - **配置 / 作品**：`novel-config/`（paths、agent_config）、`AppConfig`、`main.rs` setup
-- **Compaction / Prompt**：`novel-compaction/`、`prompt/`
-- **Skill 加载**：`novel-skills/` 及 `engine.rs` 中 system prompt 构建
+- **Compaction / Prompt**：`novel-compaction/`、`prompt/`、`skills/`
+- **Skill 加载**：`novel-skills/` 及 `novel-core/src/engine/lifecycle.rs` 中 system prompt 构建
 
 按范围核对：
 
@@ -95,9 +98,10 @@ description: >-
 
 | 模块 | 要点 |
 |------|------|
-| `engine_loop.rs` | 单队列串行；`SwitchProjectAndCreateSession` 后旧 engine drop |
+| `novel-server/src/tauri/engine_loop.rs` | 单队列串行；`SwitchProjectAndCreateSession` 后旧 engine drop |
 | `AppConfig` + IPC | 读 `config.read().await`，切换 `write()`；持锁期间不调用长耗时 turn |
-| `turn_loop.rs` | `build_chat_client` / per-turn override；compaction 后 DB sync 一致 |
+| `novel-core/src/turn/loop/` | `build_chat_client` / per-turn override；compaction 后 DB sync 一致 |
+| `novel-graph` | plan-graph / GraphTracker 状态机；regate 与 iteration 计数 |
 | `novel-logging` | `init_logging`；会话 `agent.jsonl` 与 stderr 分工 |
 
 #### 3.4 审查输出
@@ -111,18 +115,22 @@ description: >-
 ### 4. 后端验证
 
 ```bash
-bash scripts/ci-rust-static.sh   # cargo fmt --check + cargo check --workspace
+bash scripts/ci-rust-static.sh   # cargo fmt --check（check 由 ci-clippy 覆盖）
 bash scripts/ci-clippy.sh        # cargo clippy（-D warnings -D clippy::unwrap_used -D clippy::expect_used）
 bash scripts/ci-rust-test.sh     # cargo nextest run --workspace --profile ci
 bash scripts/ci-tauri.sh         # Tauri 壳 check + build
 bash scripts/ci-lcov.sh && bash scripts/ci-crap.sh  # CRAP 门禁（threshold 20）
 ```
 
-**硬性要求：** check / clippy **0 warning**（含 `unwrap_used` + `expect_used`）；nextest **0 failed**、**0 SLOW / TIMEOUT**；crap **none exceed CRAP threshold 20**。
+**硬性要求：** check / clippy **0 warning**（含 `unwrap_used` + `expect_used`）；nextest **0 failed**、**0 SLOW / TIMEOUT**；crap 必跑（threshold 20，见 [cargo-crap](../cargo-crap/SKILL.md)，禁止调高 threshold / `--allow` 绕过）。
 
 ### 5. 可选：IPC 冒烟
 
-若改动触及 `engine_loop.rs`、`turn_loop.rs` 的 Fork/子 Agent 逻辑，见 [`smoke-post-change`](../smoke-post-change/SKILL.md)。
+若改动触及 `novel-server/src/tauri/engine_loop.rs`、`novel-core/src/turn/loop/` 的 Fork/子 Agent 逻辑，见 [`smoke-post-change`](../smoke-post-change/SKILL.md)。
+
+### 6. Windows 编译崩溃排查（0xc0000409）
+
+rustc 偶发崩溃（`0xc0000409` / `E0786`），多发于大改动后全量重编译，**非代码问题**（check/clippy 全绿时勿改代码来修）。处理顺序：① 重跑一次 ② 仍失败清 `target/debug/incremental` ③ 反复出现加 `CARGO_BUILD_JOBS=2`。
 
 ### 汇报模板
 
@@ -134,6 +142,16 @@ bash scripts/ci-lcov.sh && bash scripts/ci-crap.sh  # CRAP 门禁（threshold 20
 - [x] 链路走查：<摘要>
 - [x] Rust 审查：<3.4 汇总行>
 - [x] 后端验证：ci-rust-static / ci-clippy / ci-rust-test — 通过
-- [x] CRAP（可选）：<通过 / 跳过>
+- [x] CRAP：<通过 / 跳过（未改 crates 生产代码时）>
 - [x] 文档已更新：<文件列表>
 ```
+
+### 关联 Skill
+
+| Skill | 用途 |
+|-------|------|
+| [`refactor-cleanup`](../refactor-cleanup/SKILL.md) | 步骤 1 委托：死代码/兼容层/注释清理 |
+| [`smoke-post-change`](../smoke-post-change/SKILL.md) | 步骤 5 可选：Fork/子 Agent 改动时 IPC 冒烟 |
+| [`engineering-principles`](../engineering-principles/SKILL.md) | 审查基准：Rust 编码规范与架构原则 |
+| [`cargo-crap`](../cargo-crap/SKILL.md) | CRAP 门禁权威参考（threshold 20，禁止调高） |
+| [`post-change-checklist`](../post-change-checklist/SKILL.md) | 跨层改动时改用本编排器 |

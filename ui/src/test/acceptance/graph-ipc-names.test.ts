@@ -21,11 +21,6 @@ describe("graph IPC contract", () => {
     expect(IPC_EVENTS.graphPlanCommitted).toBe("graph-plan-committed");
   });
 
-  it("exposes template IPC", () => {
-    expect(IPC_COMMANDS.graphPreviewTemplate).toBe("graph_preview_template");
-    expect(IPC_COMMANDS.graphApplyTemplate).toBe("graph_apply_template");
-  });
-
   it("plan fixture has book-body loop", () => {
     const raw = readFileSync(resolve(fixtureDir, "plan_book_loop.json"), "utf8");
     const plan = JSON.parse(raw) as {

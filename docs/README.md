@@ -13,6 +13,7 @@
 | novel-deepseek | [novel-deepseek.md](crates/novel-deepseek.md) |
 | novel-tools | [novel-tools.md](crates/novel-tools.md) |
 | novel-knowledge | [novel-knowledge.md](crates/novel-knowledge.md) |
+| novel-memory | [novel-memory.md](crates/novel-memory.md) |
 | novel-state | [novel-state.md](crates/novel-state.md) |
 | novel-compaction | [novel-compaction.md](crates/novel-compaction.md) |
 | novel-config | [novel-config.md](crates/novel-config.md) |

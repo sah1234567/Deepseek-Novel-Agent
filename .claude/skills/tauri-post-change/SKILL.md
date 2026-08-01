@@ -59,6 +59,10 @@ bash scripts/smoke-ipc-fork.sh
 .\scripts\smoke-ipc-fork.ps1
 ```
 
+### 文档同步
+
+改 command/event/DTO 后按改动范围更新：`docs/crates/novel-server.md`；IPC 命令/事件契约 → `FRAMEWORK.md` §2.5.1；能力概览 → `README.md`。
+
 ### 汇报模板
 
 ```markdown
@@ -71,3 +75,12 @@ bash scripts/smoke-ipc-fork.sh
 - [x] IPC 冒烟：smoke-ipc-fork — Phase 1 通过 / Phase 2 <通过/跳过>
 - [x] 文档已更新：<文件列表>
 ```
+
+### 关联 Skill
+
+| Skill | 用途 |
+|-------|------|
+| [`refactor-cleanup`](../refactor-cleanup/SKILL.md) | 步骤 1 委托：死代码/兼容层/注释清理 |
+| [`smoke-post-change`](../smoke-post-change/SKILL.md) | 步骤 5 必跑：command/event 改动后 IPC 冒烟 |
+| [`engineering-principles`](../engineering-principles/SKILL.md) | 审查基准：壳层架构原则 |
+| [`post-change-checklist`](../post-change-checklist/SKILL.md) | 跨层改动时改用本编排器 |

@@ -85,7 +85,6 @@
 - `AdvanceRule`：定义递增哪个 counter、步长、以及作用于其他 counter 的 side_effects
 - `Until`：定义终止条件（`CounterGt` / `CounterGe` / `CounterLt` / `CounterEq` / `Manual`）
 - 作者需要中途审阅时暂停 Loop，就绪后恢复
-- 通过 `graph_loop_set_cursor` 跳转到指定迭代位置
 
 ---
 
@@ -103,6 +102,14 @@
 | 自定义调研/分析 | **GeneralPurpose**（只读；优先 InvokeSkill `research`） |
 
 - 收到报告后：读 **`## 接下来（主 Agent 必读）`** → 按建议 Edit → `AuditStatusUpdate` 闭环 → `GraphSubmitForApproval`
+
+### 规则沉淀调度（每 10 章一次）
+
+审计闭环后，若 `AuditStatusUpdate` 使任一审计列通过至章号 N 且 **N % 10 == 0**：
+
+1. 将本次审计报告全文落盘 `knowledge/meta/audits/chapter-NNN-{pa|ka|cca}.md`（同文件覆盖；见 docs/crates/novel-knowledge.md §1.1.2）
+2. 调 `ForkSubAgent(GeneralPurpose)`：读最近 10 个 audit 报告 → 找出重复 ≥2 次的 `[可泛化]` 模式 → 报告"应沉淀为规则的清单"（类型：rejected_path / style / 其他）——**只读，不落盘**
+3. 主 Agent 按清单 Write 到 `memory/rejected_paths/` 或 `memory/style/`（具体原因必填），并把该模式在后续审计报告中标注「已沉淀」避免重复沉淀
 
 ---
 

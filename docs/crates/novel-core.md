@@ -60,6 +60,8 @@ SubAgent 与主 Agent 共用 `EngineShared.session_llm`（`SessionLlmSnapshot`�
 
 GeneralPurpose 的 `task` 即主 Agent 编写的完整自定义 prompt；审计类（PlanAuditor / KA / CCA）从 **`skills/audit-*/SKILL.md`** 运行时加载全文 + 运行时约束（不再 `include_str!` 内置角色 prompt）。
 
+所有子 Agent（含审计类）统一与主会话共用 `session_llm` 快照（`build_chat_client`，单模型）。Fork 审计的防锚定约束见 **`skills/audit-*/SKILL.md`「独立性原则」**：fork 任务只基于工件 + 审计标准做判断，不接收主 Agent 的判断/分数/结论。
+
 ### 1.3 Agent 类型与工具
 
 详细审计手册来自 **`skills/audit-plan` / `audit-knowledge` / `audit-craft`**（Fork 可选隔离时由 `format_fork_task` 加载；主路径为节点内 InvokeSkill）。GeneralPurpose 薄壳仍为 `prompt/agents/general_purpose.md`。子 Agent / 节点报告末尾须含 `## 接下来（主 Agent 必读）`。

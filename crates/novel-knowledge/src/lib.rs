@@ -8,6 +8,8 @@ mod character;
 mod derive;
 mod error;
 mod evolution_log;
+mod findings;
+mod foreshadow;
 mod index;
 mod parser;
 mod project_tree;
@@ -24,9 +26,15 @@ pub use causality::{parse_causality_markdown, CausalityGraph, CausalityNode};
 pub use character::{CharacterCategory, CharacterFrontmatter, CharacterStatus};
 pub use derive::{
     derive_character_snapshot, derive_foreshadow_categories, derive_relation_cross_index,
+    derive_work_digest,
 };
 pub use error::KnowledgeError;
 pub use evolution_log::{append_evolution_log, find_table_last_row, TableRow};
+pub use findings::{extract_generalizable_findings, Finding};
+pub use foreshadow::{
+    build_foreshadow_output, categorize_foreshadows, derive_foreshadow_digest, parse_chapter_num,
+    parse_pending_foreshadows, CategorizedForeshadow, CategorizedForeshadows,
+};
 pub use index::{ensure_index, rebuild_index};
 pub use parser::parse_frontmatter;
 pub use project_tree::{list_project_files, read_project_file, ProjectFileEntry};

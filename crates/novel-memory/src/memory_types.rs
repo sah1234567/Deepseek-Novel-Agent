@@ -1,18 +1,19 @@
-//! Memory type system: 5 closed types, frontmatter schema, status tracking,
+//! Memory type system: 6 closed types, frontmatter schema, status tracking,
 //! and shared body truncation.
 //!
-//! The 5-type classification is intentionally closed — new types require code changes
+//! The type classification is intentionally closed — new types require code changes
 //! (open-closed principle by design — new types require code changes).
 
 use serde::{Deserialize, Serialize};
 
-/// 5 closed memory types. Deprecated is NOT a type — it's a status.
+/// Closed memory types. Deprecated is NOT a type — it's a status.
 pub const MEMORY_TYPES: &[&str] = &[
     "style",
     "plot_decision",
     "character_guardrail",
     "feedback",
     "reference",
+    "rejected_path",
 ];
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -28,6 +29,9 @@ pub enum MemoryType {
     Feedback,
     /// External references, inspirations, benchmark works
     Reference,
+    /// Rejected creative paths (plot directions / writing patterns / settings the
+    /// author explicitly declined) — a no-go list to prevent re-proposing.
+    RejectedPath,
 }
 
 impl MemoryType {
@@ -39,6 +43,7 @@ impl MemoryType {
             MemoryType::CharacterGuardrail => "character_guardrail",
             MemoryType::Feedback => "feedback",
             MemoryType::Reference => "reference",
+            MemoryType::RejectedPath => "rejected_path",
         }
     }
 
@@ -50,6 +55,7 @@ impl MemoryType {
             MemoryType::CharacterGuardrail => "人物禁区",
             MemoryType::Feedback => "反馈",
             MemoryType::Reference => "参考",
+            MemoryType::RejectedPath => "被否方案",
         }
     }
 
@@ -63,6 +69,7 @@ impl MemoryType {
             "character_guardrails" => Some(MemoryType::CharacterGuardrail),
             "feedback" => Some(MemoryType::Feedback),
             "references" => Some(MemoryType::Reference),
+            "rejected_paths" => Some(MemoryType::RejectedPath),
             _ => None,
         }
     }
@@ -206,6 +213,7 @@ pub(crate) fn memory_type_description(type_name: &str) -> &str {
         "character_guardrail" => "人物塑造禁区",
         "feedback" => "外部反馈、读者意见、确认的模式",
         "reference" => "外部参考、灵感来源、对标作品",
+        "rejected_path" => "被作者否定的创作方案（禁区，勿重提）",
         _ => "",
     }
 }

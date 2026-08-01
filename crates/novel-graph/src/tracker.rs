@@ -193,7 +193,7 @@ impl GraphTracker {
         Ok(false)
     }
 
-    pub fn start_node(&mut self, node_id: &str, session_id: Option<String>) -> GraphResult<()> {
+    pub fn start_node(&mut self, node_id: &str) -> GraphResult<()> {
         let rt = self
             .state
             .nodes
@@ -225,7 +225,6 @@ impl GraphTracker {
             .get_mut(node_id)
             .ok_or_else(|| GraphError::NodeNotFound(node_id.into()))?;
         rt.status = NodeStatus::Running;
-        rt.session_id = session_id;
         rt.effective_spec = Some(effective);
         rt.files_touched_journal.clear();
         rt.pending_summary = None;
@@ -246,7 +245,7 @@ impl GraphTracker {
         Ok(())
     }
 
-    pub fn render_effective_spec(&self, node_id: &str) -> GraphResult<String> {
+    fn render_effective_spec(&self, node_id: &str) -> GraphResult<String> {
         let n = self.node_plan(node_id)?;
         let cursor = self
             .state
@@ -407,7 +406,7 @@ impl GraphTracker {
         Ok(())
     }
 
-    pub fn achieve_node(
+    fn achieve_node(
         &mut self,
         work_root: &Path,
         node_id: &str,
@@ -473,7 +472,6 @@ impl GraphTracker {
                 .ok_or_else(|| GraphError::NodeNotFound(node_id.into()))?;
             rt.status = NodeStatus::Achieved;
             rt.handoff = Some(handoff);
-            rt.session_id = None;
             rt.human_intervened = false;
             rt.pending_summary = None;
             rt.files_touched_journal.clear();
@@ -565,10 +563,18 @@ impl GraphTracker {
             .map(|l| l.cursor.counters.clone())
             .unwrap_or_default();
 
+        // Snapshot the advance_after handoff BEFORE clearing runtime state,
+        // so the next iteration's entry node receives continuity context.
+        let prev_handoff = self
+            .state
+            .nodes
+            .get(&lp_plan.advance_after)
+            .and_then(|r| r.handoff.clone());
+
         for sid in &lp_plan.on_advance.reopen {
             if let Some(n) = self.state.nodes.get_mut(sid) {
                 n.status = NodeStatus::Waiting;
-                clear_iteration_runtime(n, lp_plan.on_advance.clear_node_sessions);
+                clear_iteration_runtime(n);
                 if lp_plan.on_advance.reinject_objectives {
                     n.effective_spec = None;
                 }
@@ -607,6 +613,7 @@ impl GraphTracker {
                 .loops
                 .get_mut(loop_id)
                 .ok_or_else(|| GraphError::LoopNotFound(loop_id.into()))?;
+            l.prev_iteration_handoff = prev_handoff;
             l.phase = LoopPhase::Running;
         }
         // Cursor advanced — drop focus so next turn does not keep a reset station's NodeObjective.
@@ -661,89 +668,6 @@ impl GraphTracker {
         Ok(())
     }
 
-    pub fn set_loop_setting(
-        &mut self,
-        loop_id: &str,
-        key: &str,
-        value: serde_json::Value,
-    ) -> GraphResult<()> {
-        if !self.plan.loops.iter().any(|l| l.id == loop_id)
-            && !self.state.loops.contains_key(loop_id)
-        {
-            return Err(GraphError::LoopNotFound(loop_id.into()));
-        }
-        self.state.settings.settings.insert(key.into(), value);
-        Ok(())
-    }
-
-    pub fn set_loop_cursor(
-        &mut self,
-        loop_id: &str,
-        counters: HashMap<String, i64>,
-    ) -> GraphResult<()> {
-        // Demote all active loop stations so they re-render with the new cursor value.
-        let stations: Vec<String> = self
-            .plan
-            .loops
-            .iter()
-            .find(|l| l.id == loop_id)
-            .map(|lp| lp.on_advance.reopen.clone())
-            .unwrap_or_default();
-        for sid in &stations {
-            if let Some(n) = self.state.nodes.get_mut(sid) {
-                if matches!(
-                    n.status,
-                    NodeStatus::Running
-                        | NodeStatus::Ready
-                        | NodeStatus::Verifying
-                        | NodeStatus::AwaitingApproval
-                ) {
-                    n.status = NodeStatus::Waiting;
-                    clear_iteration_runtime(n, true);
-                    n.effective_spec = None;
-                }
-            }
-            self.state.running_node_ids.retain(|id| id != sid);
-        }
-        self.recompute_ready();
-        // After demoting, force the entry station Ready so the loop can start.
-        let entry = self
-            .plan
-            .loops
-            .iter()
-            .find(|l| l.id == loop_id)
-            .map(|lp| lp.entry.clone());
-        if let Some(ref eid) = entry {
-            // Check deps before taking mutable borrow on nodes.
-            let deps_ok = self
-                .node_plan(eid)
-                .map(|pn| {
-                    pn.deps.iter().all(|d| {
-                        self.state
-                            .nodes
-                            .get(d)
-                            .map(|r| r.status == NodeStatus::Achieved)
-                            .unwrap_or(false)
-                    })
-                })
-                .unwrap_or(true);
-            if deps_ok {
-                if let Some(n) = self.state.nodes.get_mut(eid) {
-                    n.status = NodeStatus::Ready;
-                }
-            }
-        }
-        {
-            let l = self
-                .state
-                .loops
-                .get_mut(loop_id)
-                .ok_or_else(|| GraphError::LoopNotFound(loop_id.into()))?;
-            l.cursor.counters = counters;
-        }
-        Ok(())
-    }
-
     pub fn reopen(&mut self, node_id: &str, cascade_downstream: bool) -> GraphResult<Vec<String>> {
         let max = self.node_plan(node_id)?.rollback.max_regates;
         let rt = self
@@ -758,7 +682,7 @@ impl GraphTracker {
         }
         rt.regate_count += 1;
         rt.status = NodeStatus::Ready;
-        clear_iteration_runtime(rt, true);
+        clear_iteration_runtime(rt);
         self.state.running_node_ids.retain(|id| id != node_id);
 
         let mut demoted = vec![node_id.to_string()];
@@ -776,7 +700,7 @@ impl GraphTracker {
                             | NodeStatus::Failed
                     ) {
                         n.status = NodeStatus::Waiting;
-                        clear_iteration_runtime(n, true);
+                        clear_iteration_runtime(n);
                         demoted.push(d.clone());
                     }
                 }
@@ -855,7 +779,7 @@ impl GraphTracker {
         demoted
     }
 
-    pub fn upstream_handoffs(&self, node_id: &str) -> GraphResult<Vec<NodeHandoff>> {
+    fn upstream_handoffs(&self, node_id: &str) -> GraphResult<Vec<NodeHandoff>> {
         let n = self.node_plan(node_id)?;
         let mut out = Vec::new();
         for d in &n.deps {
@@ -868,10 +792,8 @@ impl GraphTracker {
 
     pub fn node_objective_block(&self, node_id: &str) -> GraphResult<String> {
         let n = self.node_plan(node_id)?;
-        let spec = self
-            .state
-            .nodes
-            .get(node_id)
+        let rt = self.state.nodes.get(node_id);
+        let spec = rt
             .and_then(|r| r.effective_spec.clone())
             .unwrap_or_else(|| {
                 self.render_effective_spec(node_id)
@@ -880,48 +802,75 @@ impl GraphTracker {
         let mut parts = vec![
             format!("## NodeObjective [{id}]", id = n.id),
             format!("Title: {}", n.title),
-            spec,
         ];
-        if let Some(fb) = self
-            .state
-            .nodes
-            .get(node_id)
-            .and_then(|r| r.feedback.clone())
-        {
-            parts.push(format!("## Author feedback (reject continue)\n{fb}"));
-        }
+
+        // Stable upstream handoffs first: identical across loop iterations → KV-cache reuse.
         let handoffs = self.upstream_handoffs(node_id)?;
         if !handoffs.is_empty() {
             parts.push("## Upstream handoffs".into());
             for h in handoffs {
-                parts.push(format!("### From node {}", h.node_id));
-                parts.push("### What was done".into());
-                parts.push(h.summary);
-                parts.push("### Files written or modified".into());
-                for f in h.files_touched {
-                    parts.push(format!("- {} ({})", f.path, f.op));
-                }
-                parts.push("### Declared artifacts".into());
-                for a in h.artifacts {
-                    parts.push(format!("- {a}"));
-                }
+                parts.push(format_handoff(&h));
             }
         }
+
+        // Cursor-rendered spec: only the counter digit changes (ch1→ch2), minimal KV break.
+        parts.push(spec);
+
+        // Previous-iteration handoff: fully new each round, placed last so everything
+        // above benefits from KV-cache reuse.
+        if let Some(prev) = self.prev_iteration_handoff(rt, node_id) {
+            parts.push("## Previous iteration summary".into());
+            parts.push(format_handoff(&prev));
+        }
+
+        if let Some(fb) = rt.and_then(|r| r.feedback.clone()) {
+            parts.push(format!("## Author feedback (reject continue)\n{fb}"));
+        }
         Ok(parts.join("\n\n"))
+    }
+
+    /// If `node_id` is a loop entry station and the loop has advanced at least once,
+    /// return the previous iteration's advance_after handoff for continuity context.
+    fn prev_iteration_handoff(
+        &self,
+        rt: Option<&GraphNodeRuntime>,
+        node_id: &str,
+    ) -> Option<NodeHandoff> {
+        let lid = rt?.loop_id.as_ref()?;
+        let lp = self.plan.loops.iter().find(|l| &l.id == lid)?;
+        if lp.entry != node_id {
+            return None;
+        }
+        self.state.loops.get(lid)?.prev_iteration_handoff.clone()
     }
 }
 
 /// Clear per-iteration fields when a station is reset (loop advance / cursor / reopen).
 /// Always clears `human_intervened` so iteration N intervention does not leak to N+1.
-fn clear_iteration_runtime(rt: &mut GraphNodeRuntime, clear_session: bool) {
-    if clear_session {
-        rt.session_id = None;
-    }
+fn clear_iteration_runtime(rt: &mut GraphNodeRuntime) {
     rt.feedback = None;
     rt.pending_summary = None;
     rt.files_touched_journal.clear();
     rt.handoff = None;
     rt.human_intervened = false;
+}
+
+/// Format a single handoff block for prompt injection.
+fn format_handoff(h: &NodeHandoff) -> String {
+    let mut lines = vec![
+        format!("### From node {}", h.node_id),
+        "### What was done".into(),
+        h.summary.clone(),
+        "### Files written or modified".into(),
+    ];
+    for f in &h.files_touched {
+        lines.push(format!("- {} ({})", f.path, f.op));
+    }
+    lines.push("### Declared artifacts".into());
+    for a in &h.artifacts {
+        lines.push(format!("- {a}"));
+    }
+    lines.join("\n")
 }
 
 #[derive(Debug, Clone)]

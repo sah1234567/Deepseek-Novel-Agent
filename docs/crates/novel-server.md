@@ -30,7 +30,7 @@ React (ui/) ──invoke/listen──► src-tauri/commands.rs
 | `event_payload/` | `stream` / `tool` / `compaction` / `subagent` 子模块；含 `Event::GraphStateChanged` → `graph-state-changed` |
 | `events.rs` | Tauri 事件名与 serde payload 类型 |
 
-**Graph UI：** Chat-first；状态栏 **编排 | 互动** + **Graph**。Graph 为 overlay（建图成功 `graph-plan-committed` 后自动打开一次）；点击节点 → 节点会话（顶栏 Start/Approve/Reject/Reopen）并进入**互动**（`interactionMode=work`）。返回 Graph / 清 focus → **编排**。IPC：`set_interaction_mode` / `graph_clear_focus` / `graph_get_state` / activate / start / approve / reject / reopen / loop_* / template。事件：含 `interaction-mode-changed`、`graph-state-changed`、…、`node-session-reset`。AppStatus 含 `interactionMode` / `focusedNodeId` / `runningNodeIds` / `graphHitlCount` / `loopSummaries`。
+**Graph UI：** Chat-first；状态栏 **编排 | 互动** + **Graph**。Graph 为 overlay（建图成功 `graph-plan-committed` 后自动打开一次）；点击节点 → 节点会话（顶栏 Start/Approve/Reject/Reopen）并进入**互动**（`interactionMode=work`）。返回 Graph / 清 focus → **编排**。IPC：`set_interaction_mode` / `graph_clear_focus` / `graph_get_state` / activate / start / approve / reject / reopen / loop_pause / loop_resume / loop_list_history。事件：含 `interaction-mode-changed`、`graph-state-changed`、…、`node-session-reset`。AppStatus 含 `interactionMode` / `focusedNodeId` / `runningNodeIds` / `graphHitlCount` / `loopSummaries`。
 
 **启动校验（`main.rs` setup）：** 创建 `works/`、`.novel-agent/`；校验 `templates/` 存在；若 `works/default` 不存在则自动 scaffold；注册 `AppState`。
 

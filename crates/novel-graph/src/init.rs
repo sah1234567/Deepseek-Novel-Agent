@@ -1,10 +1,9 @@
 //! Ensure plan + graph-state exist under a work root.
 
+use crate::default_plan;
 use crate::error::GraphResult;
 use crate::persist::{load_plan, plan_exists, save_plan, save_state, state_path};
 use crate::tracker::GraphTracker;
-use crate::{default_plan, default_plan_json, GraphState};
-use std::fs;
 use std::path::Path;
 
 fn ensure_plan_on_disk(work_root: &Path) -> GraphResult<()> {
@@ -37,26 +36,10 @@ pub fn ensure_graph_initialized(work_root: &Path) -> GraphResult<GraphTracker> {
     Ok(t)
 }
 
-/// Copy bundled default plan JSON bytes into work if missing.
-/// Writes an empty skeleton — no nodes or loops. The LLM builds the workflow via PlanBuilder.
-pub fn write_default_plan_file(work_root: &Path) -> GraphResult<()> {
-    let p = work_root.join(crate::types::PLAN_GRAPH_REL);
-    if p.exists() {
-        return Ok(());
-    }
-    if let Some(parent) = p.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(p, default_plan_json())?;
-    // Empty skeleton has no nodes — Trcker::new would fail validation.
-    // Just write an empty state so graph-state.json exists.
-    save_state(work_root, &GraphState::default())?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use tempfile::TempDir;
 
     #[test]
@@ -78,16 +61,5 @@ mod tests {
             raw.trim() == "{not json",
             "plan was overwritten; content: {raw:?}"
         );
-    }
-
-    #[test]
-    fn write_default_plan_noop_when_exists() {
-        let tmp = TempDir::new().unwrap();
-        write_default_plan_file(tmp.path()).unwrap();
-        let plan_path = tmp.path().join("knowledge/meta/plan-graph.json");
-        let mtime = fs::metadata(&plan_path).unwrap().modified().unwrap();
-        write_default_plan_file(tmp.path()).unwrap();
-        let after = fs::metadata(&plan_path).unwrap().modified().unwrap();
-        assert_eq!(mtime, after);
     }
 }

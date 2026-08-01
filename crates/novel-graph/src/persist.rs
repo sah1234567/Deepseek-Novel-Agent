@@ -101,16 +101,6 @@ pub fn save_handoff_snapshot(
     Ok(())
 }
 
-pub fn load_handoff(work_root: &Path, node_id: &str) -> GraphResult<Option<NodeHandoff>> {
-    let p = work_root
-        .join(HANDOFFS_DIR_REL)
-        .join(format!("{node_id}.json"));
-    if !p.exists() {
-        return Ok(None);
-    }
-    Ok(Some(serde_json::from_str(&fs::read_to_string(p)?)?))
-}
-
 /// List snapshot handoff files for a node, newest first.
 pub fn list_handoff_snapshots(
     work_root: &Path,

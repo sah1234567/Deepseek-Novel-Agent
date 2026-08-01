@@ -58,6 +58,30 @@ impl CausalityGraph {
         self.traverse(event_id, depth, false)
     }
 
+    /// All node ids in insertion order.
+    pub fn node_ids(&self) -> Vec<String> {
+        self.graph.node_weights().map(|n| n.id.clone()).collect()
+    }
+
+    /// Number of outgoing edges for a node (0 = nothing depends on it).
+    pub fn outgoing_edges(&self, id: &str) -> usize {
+        match self.id_index.get(id) {
+            Some(&idx) => self.graph.edges(idx).count(),
+            None => 0,
+        }
+    }
+
+    /// Number of incoming edges for a node (0 = no cause recorded).
+    pub fn incoming_edges(&self, id: &str) -> usize {
+        match self.id_index.get(id) {
+            Some(&idx) => self
+                .graph
+                .edges_directed(idx, petgraph::Direction::Incoming)
+                .count(),
+            None => 0,
+        }
+    }
+
     fn traverse(&self, event_id: &str, depth: usize, forward: bool) -> Vec<CausalityNode> {
         let Some(&start) = self.id_index.get(event_id) else {
             return vec![];

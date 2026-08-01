@@ -4,6 +4,10 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+// Chapter-number parsing lives in novel-knowledge (leaf crate, shared with
+// foreshadow digest). Re-exported here to keep the 6+ internal call sites stable.
+pub use novel_knowledge::parse_chapter_num;
+
 /// Column index map built from the outline table header row.
 pub type OutlineColumnMap = HashMap<String, usize>;
 
@@ -85,35 +89,12 @@ pub fn default_outline_column_map() -> &'static OutlineColumnMap {
     })
 }
 
-fn chapter_num_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(
-        || match Regex::new(r"(?i)chapter[-_]?(\d+)|Ch(\d+)|第(\d+)章") {
-            Ok(re) => re,
-            Err(e) => panic!("chapter regex: {e}"),
-        },
-    )
-}
-
 fn table_row_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| match Regex::new(r"(?m)^\|([^|\n]+(?:\|[^|\n]+)*)\|$") {
         Ok(re) => re,
         Err(e) => panic!("table row regex: {e}"),
     })
-}
-
-/// Parse chapter number from paths like `chapter-031.md`, `Ch31`, `第31章`.
-pub fn parse_chapter_num(s: &str) -> u32 {
-    chapter_num_re()
-        .captures(s)
-        .and_then(|c| {
-            c.get(1)
-                .or_else(|| c.get(2))
-                .or_else(|| c.get(3))
-                .and_then(|m| m.as_str().parse().ok())
-        })
-        .unwrap_or(0)
 }
 
 pub fn list_character_names(store: &KnowledgeStore) -> Vec<String> {

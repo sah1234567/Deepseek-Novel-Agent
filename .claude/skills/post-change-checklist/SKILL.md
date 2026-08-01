@@ -57,10 +57,17 @@ bash scripts/ci-security-audit.sh
 
 | 改动范围 | 更新目标 |
 |----------|----------|
-| crate API/行为 | `docs/crates/<crate>.md` |
+| crate API/行为 | `docs/crates/<crate>.md`（12 个 crate 一一对应） |
+| Graph 编排 / plan schema / Loop | `docs/crates/novel-graph.md` |
+| Agent 循环 / Fork / 流式 Tool | `docs/crates/novel-core.md` |
+| LLM 客户端 / SSE / tool_args | `docs/crates/novel-deepseek.md` |
+| 工具注册 / 查询工具族 | `docs/crates/novel-tools.md` |
+| 记忆类型 / 提取 / prefetch | `docs/crates/novel-memory.md` |
 | 路径 / API json / AppConfig | `docs/crates/novel-config.md` |
 | 作品 IPC / AppStatus | `docs/crates/novel-server.md`、`FRAMEWORK.md` |
-| scaffold / templates / memory | `docs/crates/novel-knowledge.md` |
+| IPC 命令/事件契约 | `FRAMEWORK.md` §2.5.1 |
+| 知识契约 / 审计落盘 / findings | `docs/crates/novel-knowledge.md` §1.1.2 |
+| scaffold / templates | `docs/crates/novel-knowledge.md` |
 | compaction / metadata / DB sync | `docs/crates/novel-state.md`、`novel-compaction.md` |
 | tracing / 审计日志 | `docs/crates/novel-logging.md` |
 | Skill 规则 | `skills/<id>/` + `docs/crates/novel-skills.md` |

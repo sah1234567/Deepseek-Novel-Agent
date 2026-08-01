@@ -54,8 +54,6 @@ Waiting → Ready → Running ⇄ (作者对话/改产物)
 
 **扇出并行：** 多 `running_node_ids` 可同时执行；`focused_node_id` 仅作者焦点。写路径相交 → `parallel_blocked: write_overlap`，拒绝 start 并记 graph.jsonl。默认 `max_parallel_nodes = 4`。
 
-**set_loop_cursor：** 跳章前 demote 本轮所有活跃 station（Running/Ready/Verifying/AwaitingApproval → Waiting），清空 session/effective_spec，然后强制 entry Ready（若 skeleton deps 仍满足）。
-
 ### 1.3 Book Loop
 
 少节点游标循环，禁止 deps 成环。
@@ -111,9 +109,6 @@ spec / effective_spec
 | 入口 | 行为 |
 |------|------|
 | `ensure_graph_initialized` | plan 不存在 → 写默认骨架 + state；plan 存在但损坏 → **返回 Err**（不覆盖） |
-| `write_default_plan_file` | 仅缺失时写 plan + state |
-| `graph_preview_template`（IPC） | 返回 bundled 默认 plan JSON，**不写盘** |
-| `graph_apply_template`（IPC） | 写正式 plan + state（已有 plan 时需 `force`）→ emit `graph-plan-committed` |
 | `open_work` | 仅在 `plan_exists` 时才 `ensure_graph_initialized`——不静默落图 |
 | `init_novel_project` / `create_work` | 不 auto-seed plan |
 
@@ -137,17 +132,14 @@ spec / effective_spec
 | Command | 说明 |
 |--------|------|
 | `graph_get_state` | 全量 `GraphStateSnapshot`（含 `hasPlan` 标志） |
-| `graph_get_node` | 单节点 plan + runtime + objective |
-| `graph_get_loop` | 单 loop 详情 |
 | `graph_activate_node` | 设置 `focused_node_id` |
+| `graph_clear_focus` | 清除 `focused_node_id` |
 | `graph_start_node` | Ready → Running |
 | `graph_approve` / `graph_reject` / `graph_reopen` | 人审操作 |
 | `graph_loop_pause` / `graph_loop_resume` | 暂停/继续 auto advance |
-| `graph_loop_set_target` / `graph_loop_set_cursor` | 改 settings / 跳游标 |
 | `graph_loop_list_history` | 快照 handoff 历史（读归档 `{node_id}-snap-{key}.json`） |
-| `graph_preview_template` / `graph_apply_template` | 模板预览 + 应用 |
 
-**IPC Events（7 个）：**
+**IPC Events（6 个）：**
 
 | Event | 触发时机 |
 |-------|---------|
@@ -155,7 +147,7 @@ spec / effective_spec
 | `graph-loop-changed` | cursor/phase 变更 |
 | `graph-hitl` | HITL 角标变化 |
 | `graph-approval-required` | AwaitingApproval 出现 |
-| `graph-plan-committed` | 模板应用 / 正式图落盘 |
+| `graph-plan-committed` | 正式图落盘（GraphCommitPlan / PlanBuilder） |
 | `node-session-reset` | loop advance 清 session |
 
 **Graph 工具（注册于 `novel-tools`）：**
@@ -168,11 +160,7 @@ spec / effective_spec
 | `GraphMarkVerified` | → Verifying |
 | `GraphReopen` | REGATE + 可选 cascade |
 
-**REGATE 解析：** `parse_regate_directive(text)` 匹配 `REGATE: <node_id>` + 可选 `REASON: ...`；fail-closed（id 不匹配则拒绝）。
-
-### 1.9 Checkpoint
-
-`GraphCheckpoint { loop_id, cursor, frozen_at, artifact_paths }` 存于 `knowledge/meta/checkpoints/{loop_id}.json`。供赛季冻结游标与产物清单。
+**REGATE 解析：** `parse_regate_directive(text)` 匹配 `REGATE: <node_id>`；fail-closed（id 不匹配则拒绝）。
 
 ---
 
@@ -185,4 +173,3 @@ spec / effective_spec
 | `knowledge/meta/graph.jsonl` | 事件日志（achieved / loop_advanced / loop_completed / demote_on_edit） | `append_jsonl` |
 | `knowledge/meta/handoffs/{node_id}.json` | 节点最新 NodeHandoff | `save_handoff` |
 | `knowledge/meta/handoffs/{node_id}-snap-{key}.json` | 快照归档 NodeHandoff | `save_handoff_snapshot` / `list_handoff_snapshots` |
-| `knowledge/meta/checkpoints/{loop_id}.json` | 赛季冻结 | `save_checkpoint` / `load_checkpoint` |

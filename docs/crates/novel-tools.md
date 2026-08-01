@@ -30,9 +30,11 @@
 **11 个 builtin：** Read, Write, Edit, **Tail**, Grep, Glob, Bash, WebSearch, InvokeSkill, TodoWrite, AskUserQuestion
 
 **Novel 专属（含 Graph）：**
-CharacterSearch, PlotGraph, PlotGrid, ForeshadowTracker, Stats, Corkboard, CharacterRotate, **ForkSubAgent**, ImpactAnalysis, KnowledgeDerive, **AuditStatusQuery**, **AuditStatusUpdate**, TrackingQuery, RelationQuery, **PlanBuilder**, **GraphQuery**, **GraphAdvance**, **GraphSubmitForApproval**, **GraphMarkVerified**, **GraphReopen**, GraphApplyTemplate（已废弃）, **GraphCommitPlan**
+CharacterSearch, PlotGraph, PlotGrid, ForeshadowTracker, Stats, Corkboard, CharacterRotate, **ForkSubAgent**, ImpactAnalysis, KnowledgeDerive, **AuditStatusQuery**, **AuditStatusUpdate**, TrackingQuery, RelationQuery, **PlanBuilder**, **GraphQuery**, **GraphAdvance**, **GraphSubmitForApproval**, **GraphMarkVerified**, **GraphReopen**, **GraphCommitPlan**, **ChapterLint**, **WorkHealthCheck**, **ChapterDiff**
 
 **AuditStatusQuery / AuditStatusUpdate：** 读写 `knowledge/meta/audit-status.md`（Graph 审计台账证据）。
+
+**ChapterLint / WorkHealthCheck / ChapterDiff（确定性校验层，2026-08 新增）：** 全部只读——ChapterLint 反 AI 味七项确定性计数（参数与 `skills/audit-craft/SKILL.md` 一致）+ 章节连续性 + 细纲出场人物半确定对照；WorkHealthCheck 六项健康聚合（伏笔回收率/人物轮换/因果断头/审计状态/REGATE iteration/字数分布）+ 严重/一般/建议三级分级；ChapterDiff 两版章节行级 diff 摘要（REGATE 对比用）。实现：`novel/chapter_lint.rs` / `work_health_check.rs` / `chapter_diff.rs`。
 
 **Graph* 工具：** 查询 / 推进 / 提交审批 / 机审通过 / reopen。Write/Edit 经 `graph_hook`：`graph_gate_write`（enforce_gates 时校验可写集）+ `graph_record_write`（journal / demote_on_edit / `graph.jsonl` / UI 回调）。
 

@@ -1,5 +1,6 @@
 use crate::{
-    find_table_last_row, parse_frontmatter, CharacterFrontmatter, KnowledgeError, KnowledgeStore,
+    derive_foreshadow_digest, find_table_last_row, parse_frontmatter, truncate_chars,
+    CharacterFrontmatter, KnowledgeError, KnowledgeStore,
 };
 use std::collections::{BTreeMap, HashMap};
 
@@ -136,6 +137,109 @@ pub fn derive_relation_cross_index(store: &KnowledgeStore) -> Result<String, Kno
     Ok(out.join("\n"))
 }
 
+const WRITE_AFTER_HEADING: &str = "### 实际完成";
+const CORE_EVENT_PREFIX: &str = "- 核心事件: ";
+
+/// Extract the `- 核心事件: ` value from a fine outline's 写后记录 section.
+fn extract_core_event(content: &str) -> Option<String> {
+    let start = content.find(WRITE_AFTER_HEADING)?;
+    let section = &content[start..];
+    for line in section.lines().take(20) {
+        if let Some(rest) = line.strip_prefix(CORE_EVENT_PREFIX) {
+            let trimmed = rest.trim();
+            if !trimmed.is_empty() {
+                return Some(truncate_chars(trimmed, 40).to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Extract the first bullet value of a character's `## 当前状态快照` section
+/// (the derived snapshot's second line after `- 姓名: ...`).
+fn extract_snapshot_brief(content: &str) -> Option<String> {
+    let start = content.find(SNAPSHOT_HEADING)?;
+    let section = &content[start..];
+    for line in section.lines().skip(1).take(10) {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with("## ") {
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix("- ") {
+            let value = rest.trim();
+            if !value.is_empty() {
+                return Some(truncate_chars(value, 30).to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Derive a compact work-state digest (≤800 chars) for Progress injection.
+///
+/// Combines: recent chapter core events (fine-outline 写后记录, up to 3), current
+/// character snapshots (up to 4), and the active-foreshadow digest. Best-effort:
+/// missing files contribute nothing; `None` when there is nothing to show.
+pub fn derive_work_digest(store: &KnowledgeStore, current_chapter: u32) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+
+    // 1. Recent chapter core events, newest first (up to 3).
+    let mut events: Vec<String> = Vec::new();
+    let first = current_chapter.saturating_sub(3);
+    for ch in (first..current_chapter).rev() {
+        let rel = format!("knowledge/plot/细纲/chapter-{ch:03}-细纲.md");
+        if let Ok(content) = store.read_file(&rel) {
+            if let Some(ev) = extract_core_event(&content) {
+                events.push(format!("Ch{ch}: {ev}"));
+            }
+        }
+        if events.len() >= 3 {
+            break;
+        }
+    }
+    if !events.is_empty() {
+        parts.push(format!("最近章节: {}", events.join(" | ")));
+    }
+
+    // 2. Character snapshot briefs (up to 4, sorted by name).
+    let chars_dir = store.root.join("knowledge/characters");
+    if chars_dir.is_dir() {
+        let mut names: Vec<String> = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&chars_dir) {
+            for entry in entries.flatten() {
+                let fname = entry.file_name().to_string_lossy().to_string();
+                if fname.ends_with(".md") && !fname.starts_with('_') {
+                    names.push(fname.trim_end_matches(".md").to_string());
+                }
+            }
+        }
+        names.sort();
+        let mut snaps: Vec<String> = Vec::new();
+        for name in names.iter().take(4) {
+            let rel = format!("knowledge/characters/{name}.md");
+            if let Ok(content) = store.read_file(&rel) {
+                if let Some(brief) = extract_snapshot_brief(&content) {
+                    snaps.push(format!("{name}({brief})"));
+                }
+            }
+        }
+        if !snaps.is_empty() {
+            parts.push(format!("人物状态: {}", snaps.join(" | ")));
+        }
+    }
+
+    // 3. Active foreshadow digest (reuses derive_foreshadow_digest).
+    if let Some(fd) = derive_foreshadow_digest(store, &format!("Ch{current_chapter}")) {
+        parts.push(fd);
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,6 +294,43 @@ povCharacter: true
         assert!(cats
             .get("resolved")
             .is_some_and(|v| v.contains(&"F02".to_string())));
+    }
+
+    #[test]
+    fn work_digest_combines_events_characters_foreshadows() {
+        let tmp = TempDir::new().unwrap();
+        let store = KnowledgeStore::new(tmp.path());
+        std::fs::create_dir_all(tmp.path().join("knowledge/plot/细纲")).unwrap();
+        std::fs::create_dir_all(tmp.path().join("knowledge/characters")).unwrap();
+        std::fs::write(
+            tmp.path().join("knowledge/plot/细纲/chapter-012-细纲.md"),
+            "## 写后记录\n### 实际完成\n- 字数: 3120\n- 核心事件: 陈默在拍卖会拍得玉佩\n- 钩子: 苏雨桐认出玉佩\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("knowledge/characters/陈默.md"),
+            "---\nname: 陈默\n---\n## 当前状态快照\n- 姓名: 陈默\n- 身份: 筑基中期\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("knowledge/plot/伏笔追踪.md"),
+            "| 章节 | 伏笔ID | 操作 | 内容描述 | 状态 | 预计回收章 | 关联人物 |\n\
+             |------|--------|------|---------|------|-----------|----------|\n\
+             | Ch8 | F07 | 埋设 | 玉佩 | 待回收 | Ch13 | 陈默 |\n",
+        )
+        .unwrap();
+        let d = derive_work_digest(&store, 13).expect("digest");
+        assert!(d.contains("Ch12"), "recent event missing: {d}");
+        assert!(d.contains("拍卖会"), "event text missing: {d}");
+        assert!(d.contains("陈默"), "character missing: {d}");
+        assert!(d.contains("活跃伏笔"), "foreshadow missing: {d}");
+    }
+
+    #[test]
+    fn work_digest_none_when_empty_project() {
+        let tmp = TempDir::new().unwrap();
+        let store = KnowledgeStore::new(tmp.path());
+        assert!(derive_work_digest(&store, 1).is_none());
     }
 
     #[test]

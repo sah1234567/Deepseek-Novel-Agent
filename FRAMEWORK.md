@@ -1,5 +1,15 @@
 # Novel Agent — 完整架构框架
 
+> 项目入口：[README.md](README.md) · Crate 专题：[docs/README.md](docs/README.md) · 提示词：[prompt/](prompt/)
+
+**目录**
+
+1. [架构总览](#1-架构总览) — 分层 / 数据归属 / Crate 依赖 / 设计原则 / 前后端边界
+2. [数据流](#2-数据流) — 主流程 / 作品与会话 / Fork 子 Agent / System Prompt / 前端状态与 IPC（含命令事件全表）
+3. [技术栈](#3-技术栈)
+4. [Crate 文档索引](#4-crate-文档索引)
+5. [验收与发布](#5-验收与发布)
+
 ---
 
 ## 1. 架构总览
@@ -12,7 +22,7 @@ React Frontend (ui/src/)
 
 Tauri IPC（commands → engine_loop 单任务队列；graph_* 与 chat 并行注册）
 
-Rust Backend（10 个业务 crate + novel-server，单向依赖）
+Rust Backend（12 个 crate，单向依赖）
   Graph-Primary：`novel-graph` 持有 plan-graph + GraphTracker；聊天会话 node-scoped（focus / NodeObjective）。作者 **编排 | 互动** 双模式：编排侧用 Interview/Orchestrator 工具 + orchestrator 提示；互动侧（focus 节点）用 NodeExecution 工具 + node-execution 提示。
 ```
 
@@ -55,6 +65,7 @@ novel-server (Tauri IPC)
        ├─ novel-compaction (4-level)
        ├─ novel-config (paths, settings, api_config.json)
        ├─ novel-skills (agent skills/ only)
+       ├─ novel-memory (记忆类型/选择/提取/prefetch；↛ novel-knowledge)
        └─ novel-logging
 ```
 
@@ -63,27 +74,25 @@ novel-server (Tauri IPC)
 
 | 原则 | 说明 |
 |------|------|
-| **Graph-Primary 编排** | 全书推进由 `plan-graph.json` + `GraphTracker` 决定（Ready/Running/Achieved、Book Loop 游标）；模型在**当前节点**内 ReAct，不自主另选全局编排路径 |
-| **节点会话** | `focused_node_id` 绑定作者聊天；多 `running_node_ids` 可扇出并行（写路径不相交）；交接用 `NodeHandoff`（summary + files_touched + artifacts），非聊天/CoT 总线 |
-| **审计 = InvokeSkill** | 主路径：`audit-plan` / `audit-knowledge` / `audit-craft`；`AuditStatusUpdate` 写台账证据。**ForkSubAgent 非主审计路径**（可选隔离 helper；仍只读） |
-| **Workflow Skill** | `novel-planning` / `chapter-writing` / `revision` / `post-chapter-checklist` 为**节点工位手册**；顺序由 Graph deps/loop 决定，不替代 plan-graph |
-| **自主写作模式** | `skills/autonomous-writing/SKILL.md`（规则正文，新会话 Unattended 时提示 `InvokeSkill`；中途切换时作为用户消息注入）；`prompt/permission-mode-enter.md` / `permission-mode-exit.md`（中途切换前后缀）。含自主循环、审计降频、暂停条件 |
-| **Session 重建压缩** | 超阈值时：**先** archive 全量 → `refresh_system_dynamic_sections`（AGENTS/Workspace 冻结；Index/Memory/Progress/**Skills 摘要** 读盘刷新 + 权限模式重新检查）→ `[上下文刷新]` user（Skill 全文 + 摘要）→ 5 轮 ReAct。压缩摘要模板含「上一章衔接锚点」「活跃伏笔」字段加速恢复。`compaction-progress` → 前端 **CompactionBanner**（已接入）。连续 3 次失败静默 skip（重试 UI 为后续 issue） |
-| **Session 双轨存储** | `message_archive`（UI 全历史，按 `compaction_epoch`）+ `messages`（API 工作集）；前端 Turn 级懒加载 + 内存预算：`get_session_transcript_layout` + `get_session_message_turns` / `get_session_archive_turns`（`useTranscriptLoader`；贴底驻留 6 / 浏览 VIEW 6 / 硬顶 18 轮，`planMemoryReconcile` 统一预取与淘汰；贴底欠填向上预取） |
-| **中断与 token 估算** | `AbortController` 立即断开 SSE 流，drain 请求估算 prompt_tokens 保持 session 总数准确 |
-| **Skill 二级加载** | Agent 级 `skills/` + 可选作品级 `works/{名}/skills/`（同 id 作品覆盖 Agent）；摘要进 system prompt，正文经 InvokeSkill |
+| **Graph-Primary 编排** | 全书推进由 `plan-graph.json` + `GraphTracker` 决定；模型在**当前节点**内 ReAct，不自主另选全局编排路径 |
+| **节点会话** | `focused_node_id` 绑定作者聊天；多 `running_node_ids` 可扇出并行（写路径不相交）；交接用 `NodeHandoff`（summary + files_touched + artifacts） |
+| **审计 = InvokeSkill** | 主路径：`audit-plan` / `audit-knowledge` / `audit-craft` + `AuditStatusUpdate` 写台账。**ForkSubAgent 非主审计路径**（可选隔离 helper，仍只读）；审计报告落盘 `knowledge/meta/audits/`（[novel-knowledge.md §1.1.2](docs/crates/novel-knowledge.md)） |
+| **Workflow Skill** | `novel-planning` / `chapter-writing` / `revision` / `post-chapter-checklist` 为节点工位手册；顺序由 Graph deps/loop 决定 |
+| **自主写作模式** | `skills/autonomous-writing/SKILL.md`（新会话 Unattended 提示 InvokeSkill；中途切换经 `prompt/permission-mode-enter.md` / `-exit.md` 注入）。含自主循环、审计降频（阶段自适应）、暂停条件 |
+| **Session 重建压缩** | 超阈值：**先** archive 全量 → `refresh_system_dynamic_sections`（Index/Memory/Progress/Skills 读盘刷新）→ `[上下文刷新]` user → 5 轮 ReAct。摘要模板含「上一章衔接锚点」「活跃伏笔」；3 次失败静默 skip。详见 [novel-compaction](docs/crates/novel-compaction.md) |
+| **Session 双轨存储** | `message_archive`（UI 全历史，按 `compaction_epoch`）+ `messages`（API 工作集）；前端 Turn 级懒加载 + 内存预算（驻留 6 / VIEW 6 / 硬顶 18 轮） |
+| **中断与 token 估算** | `AbortController` 立即断开 SSE 流；中断后轻量请求（`max_tokens=1`）估算 prompt_tokens |
+| **Skill 二级加载** | Agent 级 `skills/` + 可选作品级（同 id 覆盖）；摘要进 system prompt，正文经 InvokeSkill |
 | **脚手架仅磁盘** | `templates/` 缺失 → `TemplatesNotFound`；无 embed fallback |
-| **压缩 DB 同步** | Compaction **先** `archive_session_messages` **再** `replace_session_messages`（工作集）；`invoked_skill_ids` 与 `read_skill_reference_paths` 存 `metadata_json`；建会话即 persist `(0,0)` system + `system_static_frozen` 快照 |
 | **Hook opt-in** | `default_hook_config` 默认空；用户 settings 可启用 PostToolUse Hook |
+| **确定性校验层** | 只读工具 `ChapterLint`（反 AI 味七项）/ `WorkHealthCheck`（六项健康聚合）/ `ChapterDiff`（REGATE 对比）——机械检查纯函数化，LLM 审计专注语义 |
+| **知识契约与闭环** | 知识文件结构契约 + 审计落盘 + findings→规则沉淀（rejected_path/style 记忆），详见 [novel-knowledge.md §1.1.2](docs/crates/novel-knowledge.md) |
 | **单队列 Engine** | 所有 IPC 经 `engine_loop` 串行 |
-| **流式 Tool 早执行** | arguments JSON 完整即 dispatch；Allow 立即入队执行；Ask 等 approve；Deny 流末注入 error |
-| **读盘经济** | `prompt/shared-base.md` §2 + `novel-tools` pipeline（`read_economy` 硬限）：knowledge/memory/plan/** >80 行拒绝注入；Grep 默认 80 匹配、`head_limit`/`offset` 分页、截断自动标注 pagination 信息；Read 256KB 硬限 |
-| **Tool 谓词方法 (OCP)** | 新增 Tool 可覆盖 predicate 方法替代硬编码名称匹配：`blocks_nested_fork`、`is_always_allowed`、`can_write_outside_plan_dir`、`allowed_in_plan_mode`、`tracks_skill_references`、`is_skill_invocation`、`errors_abort_siblings`、`extract_read_span` |
-| **权限引擎独立** | `check_permissions` 策略从 Tool trait 提取到 `permission.rs`，trait 默认为薄委托；避免 53 行策略引擎驻留 trait vtable |
-| **Turn 续跑预算** | 续跑时 inner turn 预算按**当前 turn 内**已消耗量计算，避免长会话因累计 assistant 消息数提前触及上限 |
-| **Segment 分段 UI** | 每次 LLM 响应结束为一个 segment；主聊天与子 Agent overlay 各自 finalize 独立气泡（CoT + 正文），通过 `fork_run_id` 区分归属 |
-| **聊天区布局** | 用户 / Agent / Subagent 为全宽 `message` 气泡；`AskUserQuestion` 为全宽卡片；普通工具为全宽 `message-tool` + 内嵌 `ToolUseCard`（虚线框）；`ForkSubAgent` 与 Agent 同构 `SubAgentForkCard`。长文本边界强制换行；当前 turn 锚点 `min-height` 折叠较早内容；上滚后 **Sticky 本轮用户提问** 可点回起点 |
-| **Session Todo UI** | `TodoWrite` → `session_todos`；**`session-todos-updated`** 即时刷新 StatusBar；按钮常驻；徽章仅计未完成；无未完成项时下拉空态；有未完成项时展示四类状态（样式区分）；`update_session_todo` 经校验后写入 |
+| **流式 Tool 早执行** | arguments JSON 完整即 dispatch；Allow 立即执行、Ask 等 approve、Deny 流末注入 error |
+| **读盘经济** | `prompt/shared-base.md` §2 + `read_economy` 硬限：knowledge 类 >80 行拒绝注入、Grep 默认 80 匹配、Read 256KB 上限 |
+| **Tool 谓词方法 (OCP)** | 新增 Tool 覆盖 predicate 方法（`is_always_allowed` / `can_write_outside_plan_dir` / `tracks_skill_references` 等）替代硬编码名称匹配 |
+| **权限引擎独立** | `check_permissions` 策略在 `permission.rs`，Tool trait 为薄委托 |
+| **Turn 续跑预算** | 续跑 inner turn 预算按当前 turn 内已消耗量计算，避免长会话提前触顶 |
 
 ### 1.5 前后端边界
 
@@ -110,11 +119,9 @@ send_message
 
 **Turn 暂停：** 待批准工具或待回答 AskUserQuestion 时暂停，不发送 TurnComplete；批准/拒绝/回答后继续 inner loop。
 
-**Fork 报告注入：** ForkSubAgent 工具路径完成后向主会话注入一条 `[子 Agent 完成: {type}]` 摘要（含 UI 元数据）；完整 transcript 写入 `fork_messages`，不进入主 LLM prompt。PostToolUse 路径（KnowledgeAuditor hook）**故意不注入**主会话，避免污染上下文，仅经 StatusBar / SubAgentOverlay 查看。
+**Fork 报告注入：** 工具路径完成后注入一条 `[子 Agent 完成: {type}]` 摘要；完整 transcript 写 `fork_messages`，不进入主 LLM prompt。PostToolUse 路径（KnowledgeAuditor hook）**故意不注入**主会话（避免污染上下文）。主 Agent 读取报告末尾 **`## 接下来（主 Agent 必读）`** 自行决策。
 
-主 Agent 读取报告末尾 **`## 接下来（主 Agent 必读）`** 建议，自行决定后续操作。
-
-**流式 Tool 时序：** SSE 流中 arguments JSON 完整即触发权限检查。Allow 立即执行并流中 poll 结果；Ask 写入 pending 等待用户确认；Deny 在流末注入 error result。流结束时按 id 去重，流末 ToolCallRequest 幂等。
+**流式 Tool 时序：** arguments JSON 完整即触发权限检查——Allow 立即执行并流中 poll；Ask 写入 pending；Deny 流末注入 error。流结束按 id 去重，流末 ToolCallRequest 幂等。
 
 ### 2.2 作品与会话
 
@@ -134,13 +141,13 @@ send_message
 | `turnNumber`（AppStatus） | 当前 engine 内用户 turn（≈ `total_turns`） | 内存态，发消息时 +1 |
 | `messages.turn_number` | 同一次用户消息触发的 assistant/tool 共享同一 turn | 持久化在 messages 表 |
 
-**Session Turn vs ReAct loop：** **Session Turn**（`turn_number`）= 用户一条消息及其触发的完整 inner loop；**ReAct loop**（`inner_turn`）= Turn 内单次 LLM→工具循环。一次用户消息可产生多次 LLM 调用（`api_call_count` 递增），但 `total_turns` 只 +1。
+**Session Turn vs ReAct loop：** **Session Turn**（`turn_number`）= 用户一条消息及完整 inner loop；**ReAct loop**（`inner_turn`）= Turn 内单次 LLM→工具循环。一次用户消息可多次 LLM 调用，但 `total_turns` 只 +1。
 
 **磁盘上的 `session_{uuid}/` 文件夹**（`.novel/logs/`）是审计 JSONL，不是 UI 会话列表的数据源。
 
-**IPC 注意：** Tauri v2 前端 `invoke` 参数用 **camelCase**（如 `{ sessionId }`），对应 Rust `session_id`。
+**IPC 注意：** 前端 `invoke` 参数 **camelCase**（如 `{ sessionId }`），对应 Rust `session_id`。
 
-**Read file cache（内存 + SQLite 子表）：** 每 path 一条 `ReadCacheEntry`（`EngineShared.read_file_cache` DashMap）；`session_read_cache` 子表持久化当前态（schema v3）；Resume 优先 anchor 校验后 hydrate，否则从 transcript 重放切片 rebuild；Compaction 后 rebuild + reconcile（非裸清空）。工具 `call` 为真相源；API 批末 `flush_dirty_read_cache_paths` 部分 UPSERT。规则：partial Read/Tail **窗口并集**（同 mtime）；单次 Edit 行域 ⊆ committed span；`replace_all` 有 cache 时跳过 R1 且 Edit 后 cache 升为整文件；Write 仍整文件 `WriteRefresh`；同路径 `file_op_locks` 串行 Read/Tail/Edit/Write。`AppStatus.sessionCacheHit/Miss` 为 **LLM token 缓存**，与 read file cache 无关。详见 [`docs/crates/novel-tools.md`](docs/crates/novel-tools.md) §1.4。
+**Read file cache（内存 + SQLite 子表）：** 每 path 一条 `ReadCacheEntry`（DashMap）+ `session_read_cache` 子表持久化；Resume anchor 校验后 hydrate，否则 transcript 重放 rebuild；Compaction 后 rebuild + reconcile。规则：partial Read/Tail 窗口并集；Edit 行域 ⊆ committed span（R1）；`replace_all` 升整文件；同路径 `file_op_locks` 串行。`AppStatus.sessionCacheHit/Miss` 是 **LLM token 缓存**，与 read file cache 无关。详见 [novel-tools.md §1.4](docs/crates/novel-tools.md)。
 
 ### 2.3 Fork 子 Agent
 
@@ -168,25 +175,19 @@ send_message
 
 **Subagent 写入门控：** `subagent_mutator_gate`（`subagent_queue` 未接线时拒绝 Write/Edit/TodoWrite；主会话始终 `subagent_queue: Some`）。
 
-**代码审查清单（禁止替 Agent 决策）：**
+**代码审查清单（禁止替 Agent 决策）：** 无按路径禁止 Write 的引擎逻辑（主 Agent 路径）；无 Write 后默认自动 KnowledgeAuditor 入队（除非用户 opt-in hooks）；无 `fork_handoff` 引擎解析驱动 Fork 链；Subagent 只读由 fork 角色 prompt + 执行层门控保证，LLM `tools` schema 按 catalog 过滤。
 
-- 无 `allow_chapter_write` / `validate_chapter_write` / 按路径禁止 Write（主 Agent 路径）
-- 无 Write 后默认自动 KnowledgeAuditor 入队（除非用户 opt-in hooks）
-- 无 `fork_handoff` / `## 引擎交接` 引擎解析驱动 Fork 链
-- Subagent 只读：fork 角色 prompt + **执行层门控**；LLM `tools` schema **按 catalog 过滤**（`tool_schemas_for_agent`），与主 Agent 可见集无关
-
-**UI 事件：** fork 实例经 scoped Tauri 事件更新前端 overlay（不 append 主 Chat `messages`）：
+**UI 事件（fork 经 scoped Tauri 事件更新 overlay，不 append 主 Chat）：**
 
 | 事件 | 用途 |
 |------|------|
 | `sub-agent-started` / `sub-agent-complete` | 更新 `forkRuns`；payload 含 `forkRunId`、`parentToolCallId`（有则 tool 路径，无则 hook） |
-| `sub-agent-stream` / `sub-agent-tool` | **仅 overlay 已打开且 `subscribe_fork_stream` 后** 由引擎 emit；listener 再按 `openForkRunId` 防御 dispatch |
+| `sub-agent-stream` / `sub-agent-tool` | **仅 overlay 已打开且 `subscribe_fork_stream` 后** emit；listener 按 `openForkRunId` 防御 dispatch |
 | `assistant-segment-complete` | 含可选 `forkRunId`；主聊天或 overlay 分段 finalize |
-| `subscribe_fork_stream` / `unsubscribe_fork_stream` IPC | overlay 打开/关闭时注册（不经 engine 队列）；session 切换时清空 |
-| `get_fork_messages` IPC | `openForkOverlay`：**先** `setOpenForkRunId` → subscribe → 从 SQLite hydrate（含 running） |
-| `interruptible-status-changed` | 主会话 `hasInterruptibleToolInProgress` 变更（替代 streaming 期间 500ms `get_app_status` 轮询） |
+| `subscribe_fork_stream` / `unsubscribe_fork_stream` / `get_fork_messages` IPC | overlay 打开/关闭注册（不经 engine 队列）；`get_fork_messages` 先 setOpenForkRunId → subscribe → SQLite hydrate |
+| `interruptible-status-changed` | 主会话 `hasInterruptibleToolInProgress` 变更（替代 streaming 期间 500ms 轮询） |
 
-**前端：** **tool 路径** — `ForkSubAgent` 在 `SegmentGroup` 内渲染 `SubAgentForkCard`（与 `AgentBubble` 同构：`message-assistant`，标题 `Subagent · {类型}`）。**hook 路径** — PostToolUse 触发的子 Agent 经 `HookForkCards` 列在 `ScrollViewport` **最底部**（不在 transcript 时间线内）。**进入** 打开 `SubAgentOverlay`（`TranscriptView mode=fork`，透传 `forkRuns` 与工具审批回调；overlay 内 approve/deny 仍走**主** engine 队列，非 fork 作用域）。返回内容在卡内 `details` 展开。`AppStatus.hook_running` 反映 drain 状态，**StatusBar 无单独 sub-agent chip**。Todo 在 StatusBar 下拉，非独立 TodoPanel。
+**前端渲染：** tool 路径在 `SegmentGroup` 内渲染 `SubAgentForkCard`（与 Agent 同构，标题 `Subagent · {类型}`）；hook 路径经 `HookForkCards` 列在 `ScrollViewport` 最底部（不在 transcript 时间线）。进入打开 `SubAgentOverlay`（透传 `forkRuns` 与审批回调；overlay 内 approve/deny 仍走**主** engine 队列）。`AppStatus.hook_running` 反映 drain 状态，StatusBar 无单独 sub-agent chip。
 
 ### 2.4 System Prompt 与动态上下文
 
@@ -200,8 +201,8 @@ send_message
 | AGENTS.md | 作品根 |
 | INDEX | `knowledge/INDEX.md`（≤2000 字） |
 | Skills | `skills/` 摘要 only（压缩时读盘刷新；正文经 InvokeSkill → `[上下文刷新]`） |
-| Memory | `memory/`（≤4KB） |
-| Progress | 章节数 + 未完成会话待办（`pending`/`in_progress`） |
+| Memory | `memory/`（≤4KB；含 rejected_paths 禁区记忆，Flash 选择器优先选出） |
+| Progress | 章节数 + 下一章 + 大纲计划章数 + **阶段**（开局/中期/收尾）+ 结构单元 + 未完成会话待办 + **审计台账**（PA/KA/CCA 通过至）+ **剧情状态 digest**（最近章节事件 + 人物快照 + 活跃伏笔，≤800 字，空作品不输出）+ **Graph 段**（focused NodeObjective / Loop 摘要 / Ready 节点） |
 
 **Compaction 后（API 工作集）：** system（AGENTS/Workspace 冻结 + Index/Memory/Progress/Skills 摘要 读盘刷新 + 权限检查决定是否注入自主模式指令）→ `[上下文刷新]` user（Skill 全文 + 会话摘要）→ 最近 5 轮 ReAct。压缩摘要含两个新增字段：「上一章衔接锚点」（原文末3句+细纲摘要）和「活跃伏笔」（未来5章待回收伏笔ID），加速压缩后恢复。Memory / INDEX / Progress **仅在 system 对应节**，不在 `[上下文刷新]`。
 
@@ -213,64 +214,96 @@ send_message
 
 | 路径 | 职责 |
 |------|------|
-| `types/messages.ts` | `UIMessage` / `ToolCall` / `ForkRunState` 等共享类型（组件与 transcript 直接引用） |
-| `ipc/commands.ts` / `ipc/events.ts` | Tauri command / event 名字符串常量（与 `src-tauri/commands.rs`、`event_payload` 对照） |
-| `transcript/eventPayloads.ts` | 事件 payload 类型（canonical，供 `mapEvents` / hooks 共用） |
+| `ipc/commands.ts` / `ipc/events.ts` | 命令 / 事件名字符串常量（与 `src-tauri`、`event_payload` 对照） |
+| `transcript/` | FSM 状态机 + 事件 payload 类型 + Turn 懒加载 / 内存预算纯函数（`machine` / `mapEvents` / `eventPayloads` / `turnMemoryPolicy` / `liveTail` / `loadPolicy` 三档：驻留 6 / VIEW 6 / 硬顶 18） |
 | `hooks/useAgentTauriListeners.ts` | Tauri listen 注册（自 `useAgent` 拆出） |
 | `hooks/useTranscriptLoader.ts` | layout bootstrap、Turn 懒加载 IPC、`planMemoryReconcile` → `EVICT_TURNS` 编排、贴底防抖收缩 |
-| `hooks/useSlotVisibility.ts` | 已加载 turn slot 可见性 `Set` + timeline envelope（供 `planMemoryWindow` focal） |
-| `hooks/useViewportContentFill.ts` | 贴底欠填 DOM 测量（`contentUnderflowRef`，loader 只读） |
-| `transcript/loadPolicy.ts` | Turn 内存三档常量（`TAIL_LOADED_TURNS` 6、`VIEW_LOADED_TURNS` 6、`MAX_LOADED_TURNS` 18、`TAIL_CONTENT_UNDERFLOW_PX` 48、`BOTTOM_ANCHOR_THRESHOLD_PX` 128、`TAIL_COMPACT_DEBOUNCE_MS` 400） |
-| `transcript/turnLoadPlan.ts` | 相邻 idle 窗口预取与分段 IPC 计划 |
-| `transcript/turnMemoryPolicy.ts` | 纯函数：`planMemoryReconcile` / `planMemoryWindow` / `planTailContentFill`、`isInBottomAnchorZone` |
-| `transcript/liveTail.ts` | 流式尾轮 orphan turn 选取、`MERGE_TURNS` / `BEGIN_TURN` reconcile |
-| `components/chat/AskUserQuestionBlock.tsx` / `ChatInputBar.tsx` | 自 `ChatPanel` 拆出的问答与输入栏 |
+| `components/chat/` | ChatPanel、TranscriptView、AskUserQuestionBlock、ChatInputBar、ToolUseCard、SubAgentForkCard |
+| `graph/` | Graph 画布（GraphCanvas、useGraphState、useLoopControls、HitlModal） |
+| `context/` + `hooks/useAgent.ts` | 全局 Agent 状态 Provider + TranscriptMachine 状态机 |
 
-**AppStatus：** 包含当前 session ID、权限模式、作品名、turn 序号、待办列表（`todos: { id, content, status }`）、token 统计（三分类累计 + 当前上下文）、项目初始化状态、`hook_running`（= `drain_in_progress`，**仅 API 字段，StatusBar 未展示**）、`hasInterruptibleToolInProgress` 等。
+**AppStatus：** session ID、权限模式、作品名、turn 序号、待办列表、token 统计、`hook_running`（= `drain_in_progress`，仅 API 字段）、`hasInterruptibleToolInProgress`。
 
-**状态刷新：** StatusBar **token 四字段**由 **`session-tokens-updated` 事件驱动**（主 Agent 与 SubAgent 每次 LLM `accumulate` 成功后推送；SubAgent 不覆盖 `context_tokens`）。**todos** 由 **`session-todos-updated` 事件驱动**（`TodoWrite` / `update_session_todo` 后推送全量列表）。`useAppStatus` 每 **30s** 轮询 `get_app_status` 作非 token / 非 todo 兜底；并在 `turn-complete`、`permission-mode-changed` 时全量 refresh turn 标志等。`hasInterruptibleToolInProgress` 由 **`interruptible-status-changed` 事件**驱动（`useAgent` listen），streaming 期间**不**轮询 `get_app_status`。会话切换由 `resumeSession` / `createSession` / `openWork` 等 invoke 调用方在成功后 `refresh()`，**不在** `session-resumed` 上 refresh（该事件早于 invoke 完成，会与 `sessionBusy` / transcript bootstrap 竞态）。
+**状态刷新：** token 四字段由 `session-tokens-updated` 事件驱动；todos 由 `session-todos-updated` 驱动；其余 `get_app_status` 每 30s 轮询 + `turn-complete` / `permission-mode-changed` refresh。会话切换由 invoke 调用方在成功后 `refresh()`，**不在** `session-resumed` 上 refresh（竞态，见 §2.5.1 脆弱点 3）。
 
-| 领域 | 主要 Command |
-|------|----------------|
-| 作品 | `list_works`, `create_work`, `open_work` |
-| 会话 | `create_session`, `resume_session`, `list_sessions`, `get_session_transcript_layout`, `get_session_message_turns`, `get_session_archive_turns` |
-| 聊天 | `send_message`, `interrupt`, `approve_tool`, `deny_tool`, `answer_question` |
-| 待办 | `update_session_todo`（StatusBar 点击循环 `pending` → `in_progress` → `completed` → …；经 `validate_todo_upsert` 后 `replace=false` 写入并 emit `session-todos-updated`） |
-| 文件 | `list_project_files`, `read_project_file`（当前 active 作品） |
-| 配置 | `get_api_config`, `set_api_config`（全局 json） |
-| 脚手架 | `init_novel_project` |
-| Fork 回放 | `get_fork_messages` |
+**invoke 参数：** camelCase（`resume_session({ sessionId })`、`answer_question({ toolCallId, answers: { selections, customText } })`）；命令/事件全表见 §2.5.1。特殊 payload：`tool-call-request` 的 `result` 阶段**不含** `toolName`；`ask-user-question` 的 `questions[]` 用 camelCase（`allowMultiple` / `allowCustom`）。
 
-**前端 invoke 参数：** camelCase（例：`resume_session({ sessionId })`、`get_session_message_turns({ sessionId: null, fromTurn, toTurn })`、`update_session_todo({ sessionId, todoId, status })`、`answer_question({ toolCallId, answers: { selections, customText } })`）。
+**前端 UX / 懒加载（详见 [docs/README.md §前端 UI 概要](docs/README.md)）：** `ScrollViewport` 近底跟随（128px）+ `pinAndScrollToBottom` + sticky-prompt-header + Turn 折叠；`[上下文刷新]` 渲染为单气泡 `ContextRefreshBubble`（折叠显示审计状态预览 + Skill 名）；压缩后时间轴 `archive → CompactionDivider → 刷新气泡 → active turns`。Turn 级懒加载：驻留 6 / VIEW 6 / 硬顶 18 轮，`planMemoryReconcile` 统一预取与淘汰（`EVICT_TURNS` 仅卸 FSM 正文，DB 保留）；`archives[].retainedMinTurn/MaxTurn` 记录压缩保留范围。`session-resumed` 仅清 streaming/fork，Transcript 重建在 invoke 完成 + `get_app_status` 更新 `sessionId` 后由 `useTranscriptLoader` 执行。
 
-**Tauri 事件 → 前端：**
+### 2.5.1 IPC 完整契约（命令表 / 事件表 / 链路 / 脆弱点）
 
-| 事件 | 消费方 | 说明 |
-|------|--------|------|
-| `stream-chunk` / `tool-call-request` / `assistant-segment-complete` | `useAgent` → Transcript FSM | `tool-call-request` 的 `result` 阶段**不含** `toolName` |
-| `ask-user-question` | `useAgent` | payload 中 `questions[]` 使用 **camelCase**（`allowMultiple` / `allowCustom`），由 `event_payload::ask_questions_for_ui` 转换 |
-| `turn-complete` | `useAgent` + `useProjectFiles` + `useTranscriptLoader` | 含 turn 级 token 字段（终局 payload 标记）；`phase: start` / `error` 分支；turn 结束 `onTurnComplete` → `useAppStatus` 单次 `get_app_status`（非 token 主路径）；`reloadActiveTail` 同步尾轮 |
-| `session-resumed` | `useAgent` + `useProjectFiles` | `useAgent` 清 streaming / fork；transcript 由 `status.sessionId` 变化驱动 `useTranscriptLoader.resetAndBootstrap` |
-| `session-tokens-updated` | `useAppStatus` | 每次 LLM 调用后推送；局部 patch `sessionCacheHit` / `sessionCacheMiss` / `sessionCompletion` / `contextTokens` |
-| `session-todos-updated` | `useAppStatus` | `TodoWrite` / `update_session_todo` 后推送全量 `todos`；局部 patch，不调用 `get_app_status` |
-| `permission-mode-changed` | `useAppStatus` | 全量 refresh |
-| `compaction-progress` | `useCompactionProgress` + `ipc/compactionDone` | Banner + `done` 时 `useTranscriptLoader` re-bootstrap（单次总线，避免双 listen） |
+**命令全表（36 个）：**（TS 调用点 → novel-server 实现）
 
-**聊天区 UX（纯前端）：** `ScrollViewport` 贴底滚动（近底区 `BOTTOM_ANCHOR_THRESHOLD_PX` 128px 内新气泡自动置底，`followBottomIfAnchored` 双 rAF 跟底；`pinAndScrollToBottom` 发送后强制贴底；`onBottomAnchorChange` 供尾部收缩防抖）；最后一轮 `transcript-turn-anchor` 仅在 **idle** 时占满视口高度（Turn 折叠）；流式 / turn 进行中不垫 `minHeight`；用户气泡紧挨上一轮、assistant/tool 在其下方生长；发送后 `pinAndScrollToBottom` + 近底跟随置底；时间轴仅渲染 loaded 窗口及邻接 idle 占位（避免 4rem×N 虚高）；用户气泡滚出视口上方时显示 **sticky-prompt-header**（点击平滑滚回本轮提问）。`AskUserQuestion` 全宽卡片插在 `pauseAfterSegmentId` 对应段 tools 之后。`[上下文刷新]` 渲染为 **单气泡** `ContextRefreshBubble`：默认折叠显示摘要预览（优先一行「审计状态」）与已激活 Skill 名；展开展示「审计状态」块（若有）+ 会话历史摘要（**非**单气泡合并 system / 5 轮 ReAct；system 不进 UI；Skill 正文不进 UI）。压缩后时间轴：`archive` → `CompactionDivider` → turn 0 刷新气泡 → 保留的 active turns。
+| 命令 | 前端调用点 | novel-server 实现 |
+|------|-----------|------------------|
+| send_message | useAgent.ts | turn.rs |
+| interrupt | useAgent.ts | turn.rs（不进 engine_loop） |
+| approve_tool / deny_tool / answer_question | useAgent.ts | turn.rs |
+| get_app_status | useAppStatus.ts | settings.rs |
+| set_permission_mode / set_interaction_mode | useAppStatus.ts | settings.rs |
+| init_novel_project | useAppStatus.ts | project.rs |
+| create_session / resume_session | useAppStatus.ts | session.rs（engine 替换） |
+| create_work / open_work | useAppStatus.ts | project.rs |
+| list_works / list_sessions | useAppStatus.ts | project.rs / session.rs |
+| list_project_files / read_project_file | useProjectFiles.ts | project.rs |
+| update_session_todo | useAppStatus.ts | settings.rs |
+| get_api_config / set_api_config | useAppStatus.ts | settings.rs |
+| get_fork_messages | useAgent.ts | session.rs |
+| subscribe_fork_stream / unsubscribe_fork_stream | useAgent.ts | fork.rs |
+| get_session_transcript_layout / _message_turns / _archive_turns | transcript/service.ts | session.rs |
+| graph_get_state | useGraphState.ts | commands/graph.rs |
+| graph_activate_node / graph_start_node / graph_clear_focus | useGraphState.ts | graph.rs |
+| graph_approve / graph_reject / graph_reopen | useGraphState.ts | graph.rs |
+| graph_loop_pause / graph_loop_resume / graph_loop_list_history | useLoopControls.ts / useGraphState.ts | graph.rs |
 
-**`session-resumed` 事件：** `create_session` / `resume_session` / 切换作品成功后触发；`useAgent` 清 streaming / fork 状态。Transcript 重建在 invoke 完成且 `get_app_status` 更新 `sessionId` 后，由 `useTranscriptLoader` 拉 layout 并加载 turn 0（若有）+ active 尾部 K 轮；`compaction-progress` done 时同样 `resetAndBootstrap`。
+> 2026-08 已移除 6 个死命令（后端实现 + src-tauri wrapper + main.rs 注册 + 前端映射 + 测试断言五层同步删除）：`graph_get_node`、`graph_get_loop`、`graph_loop_set_target`、`graph_loop_set_cursor`、`graph_preview_template`、`graph_apply_template`（git 历史可溯，未在前端调用）。同批清理：`GraphApplyTemplateTool`（agent 工具，已废弃且被排除出全部可见性清单）、`novel-graph` 的 `checkpoint` 模块 / `load_handoff` / `write_default_plan_file` / `set_loop_setting` / `set_loop_cursor` / `GraphNodeRuntime.session_id`。
 
-**Turn 级懒加载与内存：** 预算单位为 **turn**（一轮 user + 助手/tool 链），非单气泡数。`TranscriptView` 按 `turnSlots` 时间轴渲染 idle 占位；`IntersectionObserver` 触发 `onLoadTurn`；`turnLoadPlan` 在相邻 idle 窗口内预取（跨 compact 不截断），再按 `(kind, epoch)` 分段并行 IPC。bootstrap 与贴底稳定后驻留最近 **6** 轮（`TAIL_LOADED_TURNS`）；上滑浏览以可见 focal 为锚的 **6** 轮 VIEW 窗口（`VIEW_LOADED_TURNS`），超 **18** 轮 loaded 时溢出淘汰（`planMemoryWindow` 优先卸不可见且离 focal 最远；`active maxTurn` 永不淘汰）。贴底欠填（`useViewportContentFill` + `TAIL_CONTENT_UNDERFLOW_PX`）时 `planTailContentFill` 向上预取、禁止 evict。贴底区稳定 `TAIL_COMPACT_DEBOUNCE_MS` 后 `planMemoryReconcile` → `EVICT_TURNS`（流式 / turn 进行中 `compactionPaused` 暂停）。`useSlotVisibility` + `LoadedTurnBlock` 上报可见性与 envelope。`EVICT_TURNS` 仅卸 FSM 正文，DB 全量保留。流式尾轮 orphan 由 `liveTail` 渲染并 reconcile。`CompactionDivider` 为 UI 标记；`get_session_transcript_layout` 的 `archives[].retainedMinTurn`/`retainedMaxTurn` 记录该次压缩前保留进工作集的 turn 范围（`compaction-progress` `done` 事件同步携带）。
+**事件全表（22 个）：**
 
-### 2.5.1 清理作品会话库
+> fork 事件（`sub-agent-*` 等）的 payload 细节与订阅机制见 §2.3「UI 事件」表。
 
-清空全部作品的对话历史：`scripts/reset-work-databases.ps1`（或 `.sh`）。仅删 `works/**/.novel-agent/state.db*`，不影响 `knowledge/`、`chapters/`、`settings.json`。
+| 事件 | emit 源头 | 前端消费 |
+|------|----------|---------|
+| stream-chunk | event_payload/stream.rs | useAgentTauriListeners → RAF 批量 |
+| tool-call-request | event_payload/tool.rs | FSM TOOL |
+| turn-complete | stream.rs | reloadActiveTail + refresh |
+| ask-user-question | tool.rs | 暂停 FSM + 面板 |
+| assistant-segment-complete | stream.rs | 段渲染 |
+| session-tokens-updated | stream.rs | StatusBar patch |
+| session-todos-updated | stream.rs + settings.rs | todos patch |
+| session-resumed | engine_ipc.rs | 清流式状态 + 刷文件树 |
+| permission-mode-changed / interaction-mode-changed | engine_ipc.rs | 全量 refresh |
+| compaction-progress | event_payload/compaction.rs | Banner + resetAndBootstrap |
+| sub-agent-started / sub-agent-stream / sub-agent-tool / sub-agent-complete | event_payload/subagent.rs | Fork overlay |
+| interruptible-status-changed | event_payload/status.rs | 中断标志 |
+| graph-state-changed | graph_emit.rs + stream.rs | 拉 snapshot |
+| graph-plan-committed | tool_apply.rs（turn 后 flush）+ stream.rs | 开面板 |
+| graph-hitl / graph-approval-required | graph_emit.rs | HITL modal |
+| graph-loop-changed / node-session-reset | graph_emit.rs | Loop 面板 |
+
+**一条消息的完整链路：**
+
+`ChatInputBar` 提交 → `invoke("send_message")` → src-tauri 转发 → `EngineCommand::SendMessage` 入 mpsc → engine_loop 消费者 → `AgentEngine.handle_message_with_events`（turn 循环 + LLM 流式 + `StreamingToolDispatch` → `ToolExecutor` 执行）→ `Event` 流经 event_tx → `StreamCoalescer`（50ms 合并）→ `emit_core_event` → `app.emit` → 前端 `mountTauriListeners` → FSM → 渲染。
+
+**契约脆弱点（改动前必读）：**
+
+1. **双事件通道**：graph 事件有两个源头（IPC mutate 路径 `commands/graph.rs` + 工具路径 `events.rs`→`graph_emit.rs`），`graph-state-changed` payload 形状不一致（全量 snapshot vs `{source:"tool"}`）——前端必须自行 re-invoke `graph_get_state`
+2. **手写 `json!`**：event_payload 的 tool.rs/subagent.rs/compaction.rs/stream.rs 手写 payload，新增字段易漏——优先在 DTO struct 加字段
+3. **会话切换竞态**：engine 替换（create/resume/switch）与 `session-resumed` 事件存在竞态——前端不在 session-resumed 上 refresh，invoke 完成后 refresh（见 §2.5）
+4. **事件转发生命周期**：`spawn_event_forwarder` 每次 send/approve/deny/answer 新 spawn
+5. **DTO 双端镜像**：`AppStatus`（engine_loop.rs ↔ useAppStatus.ts）、`GraphStateSnapshot`（graph types）、`UiTurnBundle`（dto.rs ↔ service.ts）——改字段需两端同步 + `ui/src/test/acceptance/*.test.ts` 守护
+
+**新工具接入（无需前端改动）：**
+
+1. `crates/novel-tools/src/novel/<tool>.rs` 实现 `Tool` trait（trait_def.rs）
+2. `novel/mod.rs` 加 `mod` + `pub use`
+3. `lib.rs default_registry()` 注册（自动进 LLM 工具列表，hooks.rs 由 registry.names() 驱动）
+4. `tests_extra.rs` 惯例枚举补名
+5. 可选：`ui/src/utils/tools.ts` 加中文显示标签（缺省优雅降级为空串）
 
 ### 2.6 用户中断
 
-`AbortController` 贯穿 LLM 流与工具：Esc → 立即断开 SSE 流；发送新消息 → 中断当前流但不添加中断消息。
-
-中断后：partial assistant 持久化 + 缺失 tool_result 补填；emit `TurnComplete`（`was_interrupted: true`），**不**经 `Error` 事件弹错误横幅。为保持 session token 计数准确，中断后独立发送一条轻量请求（`max_tokens=1`）利用 prefix cache 获取 prompt_tokens 估算值——注意此请求的三分类拆分不等于原始请求，仅为估算。
+`AbortController` 贯穿 LLM 流与工具：Esc → 立即断开 SSE 流；发送新消息 → 中断当前流但不添加中断消息。中断后 partial assistant 持久化 + 缺失 tool_result 补填；emit `TurnComplete`（`was_interrupted: true`），**不**经 `Error` 事件。为保持 token 计数准确，中断后独立发一条轻量请求（`max_tokens=1`）估算 prompt_tokens（三分类拆分不精确，仅为估算）。
 
 ---
 
@@ -294,26 +327,12 @@ send_message
 
 ---
 
-## 5. 验收脚本
-
-```powershell
-# Windows 本地全量（frontend + rust + audit；GHA rust-windows 仅 frontend + rust，audit 在 Ubuntu job）
-.\scripts\ci-windows.ps1
-
-# 跨平台本地 CI
-.\scripts\ci-local.ps1
-```
-
-```bash
-# 仅 Rust + Tauri / 仅 nextest（Git Bash）
-bash scripts/ci-rust-gate.sh
-bash scripts/ci-rust-test.sh
-```
-
-见 [scripts/README.md](scripts/README.md)。
+## 5. 验收与发布
 
 开发：`cargo tauri dev`（Vite HMR）。Release：`cargo tauri build`。
 
-打包发布时须随应用部署 `templates/` 与 `skills/`（与开发态相同布局）。
+- **本地/CI 验收脚本与 GitHub Actions 门禁表**：见 [docs/README.md §CI/CD](docs/README.md)；完整脚本表见 [scripts/README.md](scripts/README.md)
+- **打包发布**：须随应用部署 `templates/` 与 `skills/`（与开发态相同布局）
+- **依赖安全**：`ci-frontend.sh` 要求 `pnpm audit` 无 critical；`ci-security-audit.sh` 使用 `cargo audit --deny warnings`，Tauri 桌面传递依赖的已知 advisory 列在 `.cargo/audit.toml`（GTK3/unic/glib），升级 Tauri 时需复查
+- **清理作品会话库**：`scripts/reset-work-databases.ps1`（或 `.sh`）— 仅删 `works/**/.novel-agent/state.db*`，不影响 `knowledge/`、`chapters/`、`settings.json`
 
-**依赖安全：** `ci-frontend.sh` 要求 `pnpm audit` 无 critical；`ci-security-audit.sh` 使用 `cargo audit --deny warnings`，Tauri 桌面传递依赖的已知 advisory 列在 `.cargo/audit.toml`（GTK3/unic/glib），升级 Tauri 时需复查。

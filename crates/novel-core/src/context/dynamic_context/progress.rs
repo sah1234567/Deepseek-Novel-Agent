@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use novel_knowledge::{format_progress_hint, KnowledgeStore};
+use novel_knowledge::{derive_work_digest, format_progress_hint, KnowledgeStore};
 use novel_state::Database;
 
 fn outline_path(project_root: &Path) -> PathBuf {
@@ -117,6 +117,19 @@ pub(crate) fn outline_chapter_count(project_root: &Path) -> Option<u32> {
     max_chapter_from_outline_content(&content)
 }
 
+/// Writing-stage label from progress ratio: 开局 <15%, 中期, 收尾 >85%.
+/// Unattended mode adapts audit frequency per stage (autonomous-writing SKILL).
+fn staging_label(completed: u32, total: u32) -> &'static str {
+    let ratio = completed as f32 / total as f32;
+    if ratio < 0.15 {
+        "开局"
+    } else if ratio > 0.85 {
+        "收尾"
+    } else {
+        "中期"
+    }
+}
+
 /// Build progress summary for system prompt dynamic layer.
 pub fn load_progress(project_root: &Path, session_id: &str, db: &Database) -> String {
     let chapters_dir = project_root.join("chapters");
@@ -137,6 +150,8 @@ pub fn load_progress(project_root: &Path, session_id: &str, db: &Database) -> St
     ];
     if let Some(t) = total {
         lines.push(format!("大纲计划章数: {t}"));
+        // Staging detection (Unattended audit-frequency adaptation key).
+        lines.push(format!("阶段: {}", staging_label(completed, t)));
     }
     if !unit_context.is_empty() {
         lines.push(unit_context);
@@ -153,6 +168,11 @@ pub fn load_progress(project_root: &Path, session_id: &str, db: &Database) -> St
     let store = KnowledgeStore::new(project_root);
     if let Some(hint) = format_progress_hint(&store) {
         lines.push(format!("审计台账: {hint}"));
+    }
+    // Work-state digest (recent events + character snapshots + active foreshadows).
+    // Best-effort: empty works contribute nothing (no Progress noise).
+    if let Some(digest) = derive_work_digest(&store, next) {
+        lines.push(digest);
     }
     if let Ok(Some(t)) = novel_graph::GraphTracker::load(project_root) {
         let snap = novel_graph::build_snapshot(&t);
@@ -364,7 +384,7 @@ content
         };
         novel_graph::save_plan(tmp.path(), &plan).expect("save plan");
         let mut t = novel_graph::GraphTracker::new(plan);
-        t.start_node("test-node", None).expect("start");
+        t.start_node("test-node").expect("start");
         t.set_focus(Some("test-node".into())).expect("focus");
         t.save(tmp.path()).expect("save state");
         let db = Database::open(tmp.path().join("t.db")).expect("db");

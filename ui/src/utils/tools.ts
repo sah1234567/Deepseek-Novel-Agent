@@ -158,6 +158,12 @@ export function formatToolInput(name: string, input: unknown): string {
       return "伏笔追踪";
     case "PlotGrid":
       return "情节网格";
+    case "ChapterLint":
+      return "章节确定性检查";
+    case "WorkHealthCheck":
+      return "作品健康检查";
+    case "ChapterDiff":
+      return "章节版本对比";
     default:
       return "";
   }

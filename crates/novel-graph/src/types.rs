@@ -254,7 +254,7 @@ fn default_true() -> bool {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LoopOnAdvance {
     pub reopen: Vec<String>,
-    /// Clear `session_id` on reopen stations when the loop advances (default true).
+    /// Schema-retained for plan-graph compatibility; runtime now always clears per-iteration state.
     #[serde(default = "default_true")]
     pub clear_node_sessions: bool,
     /// Clear cached `effective_spec` so the next start re-renders NodeObjective (default true).
@@ -377,8 +377,6 @@ pub struct GraphNodeRuntime {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub feedback: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loop_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effective_spec: Option<String>,
@@ -405,6 +403,10 @@ pub struct GraphLoopRuntime {
     pub paused_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_advance_at: Option<String>,
+    /// Previous iteration's advance_after handoff, preserved across loop advance
+    /// so the entry node receives continuity context on the next iteration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prev_iteration_handoff: Option<NodeHandoff>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

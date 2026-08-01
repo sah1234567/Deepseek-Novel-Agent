@@ -32,14 +32,28 @@ advance_after: sync-canon
 ```
 
 ### Batch Review Loop（每 N 章审查）
-在 Chapter Loop 基础上增加 `batch-review` 节点作为 advance_after，cursor 增加 `batch` counter。
+在 Chapter Loop 基础上增加 `batch-review` 节点作为 advance_after，cursor 增加 `batch` counter：
+
+```
+stations: [ensure-outline, write-chapter, sync-canon, batch-review]
+cursor.counters: { chapter: 1, round: 1, batch: 1 }
+advance: { increment: "chapter", step: 1, side_effects: [{op:"increment", counter:"round", by:1}, {op:"increment", counter:"batch", by:1}] }
+until: { type: "counter_gt", counter: "chapter", value_from: "targetChapters" }
+advance_after: batch-review
+```
+
+`batch-review` 节点（tag `batch_review`）行为：先 `WorkHealthCheck` 聚合健康度 → 对未审章批量执行 `audit-plan`/`audit-knowledge`+`audit-craft`（覆盖最近 N 章）→ `AuditStatusUpdate` 闭环。审计报告落盘 `knowledge/meta/audits/`。
 
 ### Volume Loop（卷级循环）
 ```
+stations: [volume-review, ensure-outline, write-chapter, sync-canon]
 cursor.counters: { volume: 1, chapter: 1 }
 advance: { increment: "volume", step: 1, side_effects: [{op:"reset", counter:"chapter"}] }
 until: { type: "counter_gt", counter: "volume", value: 5 }
+advance_after: sync-canon
 ```
+
+`volume-review` 节点（tag `volume_review`）行为：卷级统稿——`WorkHealthCheck` 全量健康报告 → 全局审计（需要独立上下文隔离时可 `ForkSubAgent`，见 audit skill「独立性原则」）→ 审计发现标注 `[可泛化]`/`[一次性]` → 报告落盘 `knowledge/meta/volume-review.md`。
 
 ## PlanBuilder 使用范例
 

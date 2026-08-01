@@ -92,8 +92,10 @@ mod novel_tools_tests {
             "GraphSubmitForApproval",
             "GraphMarkVerified",
             "GraphReopen",
-            "GraphApplyTemplate",
             "GraphCommitPlan",
+            "ChapterLint",
+            "WorkHealthCheck",
+            "ChapterDiff",
         ];
         for name in names {
             assert!(reg.get(name).is_some(), "missing tool {name}");

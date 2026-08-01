@@ -32,6 +32,43 @@
 - `mark_audited` — Subagent 完成时引擎写入 `已审计`
 - `query_summary` / `query_chapter` / `list_pending` — 供 `AuditStatusQuery` 与 `format_progress_hint`（system Progress 段）
 
+**状态五枚举语义（`| 章 | 细纲PA | 正文KA | 文笔CCA | 最后更新 | 备注 |`）：**
+
+| 状态 | 写入方 | 语义 |
+|------|--------|------|
+| `未审` | 引擎（新行默认） | 尚未审计 |
+| `已审计` | 引擎 `mark_audited`（子 Agent 报告注入后自动） | 审计已跑完，**不等于通过**；会出现在 `AuditStatusQuery(pending)` 中 |
+| `已通过` | 主 Agent 修复后 `AuditStatusUpdate` / Edit | 审计闭环完成；`query_summary` 的「已通过至 ChN」只统计此状态 |
+| `待复审` | 主 Agent | 需要重新审计（如作者改稿后） |
+| `不适用` | 主 Agent | 跳过审计；不计入 pending |
+
+注意：`已审计` 未修复的章节仍会被 pending 列出——这是设计（已审计≠已通过）。
+
+### 1.1.2 知识契约与所有权约定（knowledge-contract）
+
+各知识文件的结构契约与所有权约定。契约表与实现代码逐字对齐（代码为 SSOT；改代码先改文档）。
+
+**伏笔追踪表（`knowledge/plot/伏笔追踪.md`）**——首张 markdown 表为数据表，表头 8 列 `| 章节 | 伏笔ID | 操作 | 内容描述 | 状态 | 预计回收章 | 关联人物 |`（单元格索引：章节=1、伏笔ID=2、状态=5、预计回收章=6、关联人物=7；行内 <8 单元格被跳过）。**状态三枚举（子串匹配）**：`待回收` → pending；`已回收` / `已废弃` → 移出 pending。解析只扫首张表，遇下一个 `## ` 或 EOF 停止；追加式维护，禁止覆写旧行。解析实现在 `foreshadow.rs`（`parse_pending_foreshadows` / `categorize_foreshadows` / `build_foreshadow_output`），`ForeshadowTracker` 工具（novel-tools）与 Progress 注入共用。
+
+**人物卡（`knowledge/characters/*.md`）**——frontmatter 必含 `name`（与文件名 stem 一致）；`## 当前状态快照` 为派生段（`derive_character_snapshot` 重建，禁止手工维护）；演变日志表（身份/修为/性格/出场记录）首列章节号；文件名 `_` 开头不视为人物卡。`_关系与称呼索引.md` 为派生文件，由 `derive_relation_cross_index` 重建，禁止手工 Edit。
+
+**追踪表（`knowledge/shared-systems/`）**——FILE_MAP（`tracking_query.rs`）：scene→`场景追踪.md`、prop→`道具追踪.md`、faction→`势力追踪.md`、timeline→`时间线.md`、power→`战力系统.md`、ability→`功法技能.md`；每表在 `## {X}演变日志` 小节下，末行为当前状态，追加式维护。
+
+**章节文件（`chapters/chapter-NNN.md`）**——NNN 3 位补零连续无跳号；正文约束（反 AI 味七项，参数见 `skills/audit-craft/SKILL.md`）：`然后` ≤3 次/章、`不是…(而)是…` 禁用、破折号 ≤1 次/章、禁止结构化序号与 Markdown 标记；字数 2000–4000。**版本化约定：** REGATE 修复前把当前版本快照到 `knowledge/meta/versions/chapter-NNN-{ts}.md`（目录已 gitignore），修复后用 `ChapterDiff` 工具对比新旧两版确认修改范围。
+
+**Ownership 表：**
+
+| 目录/文件 | 所有者 |
+|-----------|--------|
+| `knowledge/meta/graph-state.json`、`plan-graph.json` | tools-only（GraphTracker/PlanBuilder 读写，Agent 禁止直接 Edit） |
+| `knowledge/INDEX.md`、`_关系与称呼索引.md`、人物卡 `## 当前状态快照` | derived（KnowledgeDerive 重建；直接 Edit → WARNING 改用 KnowledgeDerive） |
+| 伏笔追踪 / 因果链 / 各演变日志表 / `audit-status.md` | append-only（只追加，不覆写历史） |
+| `knowledge/meta/audits/`、`knowledge/meta/findings/` | append-only（见下） |
+
+**审计报告落盘约定**——审计完成后报告全文 Write 到 `knowledge/meta/audits/chapter-NNN-{pa|ka|cca}.md`（多章按章归档；重跑覆盖）；每条问题标注 `[可泛化]`（值得沉淀为规则的错误模式）或 `[一次性]`。
+
+**findings 落盘与闭环**——`knowledge/meta/findings/chapter-NNN.md` 追加式，条目 = {类型, 章节, 原文证据, 修复动作, 可泛化}。消费：每 10 章一次（`AuditStatusUpdate` 通过至 N%10==0 时）由 GeneralPurpose 提取器扫描 `extract_generalizable_findings`（本 crate），重复 ≥2 次的 `[可泛化]` 模式沉淀为 `memory/rejected_paths/` 或 `memory/style/` 记忆，并标注「已沉淀」避免重复沉淀。
+
 ### 1.2 Frontmatter
 
 `parse_frontmatter<T>` — YAML + Markdown body
@@ -51,8 +88,10 @@ CharacterFrontmatter：name, aliases, category, first_appearance, last_update, s
 | 模块 | 职责 |
 |------|------|
 | `character` | 人物 frontmatter 类型 |
-| `causality` | 因果图 |
+| `causality` | 因果图（add_edge 环检测、traverse、断头边查询） |
 | `evolution_log` | 演变日志 append、末行查询 |
+| `foreshadow` | 伏笔追踪表解析 + 分类输出 + digest（§1.1.2 契约的实现） |
+| `findings` | 审计发现 `[可泛化]` 提取（闭环数据源） |
 | `index` | `rebuild_index`, `ensure_index` |
 | `derive` | 派生快照（纯函数，不自动写盘） |
 | `scaffold` / `scaffold_templates` | 新建作品目录树 |
@@ -64,11 +103,13 @@ CharacterFrontmatter：name, aliases, category, first_appearance, last_update, s
 ### 1.6 derive — 派生快照
 
 纯函数，不自动写盘：
-- `derive_character_snapshot`
-- `derive_foreshadow_categories`
-- `derive_relation_cross_index`
+- `derive_character_snapshot` — 人物卡「当前状态快照」重建
+- `derive_foreshadow_categories` — 伏笔按 pending/resolved/abandoned 分组
+- `derive_relation_cross_index` — `_关系与称呼索引.md` 重建
+- `derive_foreshadow_digest`（foreshadow.rs）— ≤500 字活跃伏笔摘要（Progress 注入）
+- `derive_work_digest` — 剧情状态快照：最近章节事件 + 人物快照 + 伏笔摘要（Progress 注入；空作品返回 None 不产生噪音）
 
-由 Agent 或 **KnowledgeDerive** 工具调用。
+由 Agent、**KnowledgeDerive** 工具调用，或由 novel-core 的 `load_progress`（Progress 段）直接调用（digest 两个函数）。
 
 ### 1.7 scaffold — 项目初始化
 

@@ -5,8 +5,7 @@
 
 use novel_graph::{
     build_snapshot, check_write_allowed, ensure_graph_initialized, parse_plan,
-    parse_regate_directive, save_checkpoint, write_default_plan_file, GraphCheckpoint,
-    GraphTracker, NodeStatus,
+    parse_regate_directive, GraphTracker, NodeStatus,
 };
 use std::fs;
 use tempfile::TempDir;
@@ -32,7 +31,7 @@ fn ready_after_deps_achieved() {
         t.state.nodes.get("world-bible").unwrap().status,
         NodeStatus::Ready
     );
-    t.start_node("world-bible", None).unwrap();
+    t.start_node("world-bible").unwrap();
     t.set_pending_summary("world-bible", "Created bible and hero card.".into())
         .unwrap();
     t.record_file_touch(
@@ -61,7 +60,7 @@ fn ready_after_deps_achieved() {
 #[test]
 fn handoff_requires_summary() {
     let (tmp, mut t) = setup();
-    t.start_node("world-bible", None).unwrap();
+    t.start_node("world-bible").unwrap();
     let err = t.approve(tmp.path(), "world-bible");
     assert!(err.is_err());
 }
@@ -79,7 +78,7 @@ fn loop_advance_on_sync_canon() {
         t.state.nodes.get_mut(id).unwrap().pending_summary = Some("ok".into());
     }
     t.recompute_ready();
-    t.start_node("sync-canon", None).unwrap();
+    t.start_node("sync-canon").unwrap();
     t.set_pending_summary("sync-canon", "synced".into())
         .unwrap();
     t.record_file_touch("sync-canon", "knowledge/INDEX.md", "update")
@@ -134,47 +133,9 @@ fn ensure_initialized_writes_files() {
 }
 
 #[test]
-fn write_default_plan_noop_when_plan_exists() {
-    let (tmp, _) = setup();
-    let plan_mtime = fs::metadata(tmp.path().join("knowledge/meta/plan-graph.json"))
-        .unwrap()
-        .modified()
-        .unwrap();
-    write_default_plan_file(tmp.path()).unwrap();
-    let after = fs::metadata(tmp.path().join("knowledge/meta/plan-graph.json"))
-        .unwrap()
-        .modified()
-        .unwrap();
-    assert_eq!(plan_mtime, after);
-}
-
-#[test]
-fn checkpoint_roundtrip() {
-    let tmp = TempDir::new().unwrap();
-    let mut counters = std::collections::HashMap::new();
-    counters.insert("chapter".into(), 3_i64);
-    let cp = GraphCheckpoint {
-        loop_id: "book-body".into(),
-        cursor: novel_graph::Cursor {
-            counters,
-            tags: Default::default(),
-        },
-        frozen_at: "2026-01-01T00:00:00Z".into(),
-        artifact_paths: vec!["chapters/chapter-003.md".into()],
-    };
-    save_checkpoint(tmp.path(), &cp).unwrap();
-    let loaded = novel_graph::load_checkpoint(tmp.path(), "book-body")
-        .unwrap()
-        .expect("exists");
-    assert_eq!(loaded.cursor.counters.get("chapter"), Some(&3));
-    assert_eq!(loaded.artifact_paths.len(), 1);
-}
-
-#[test]
 fn parse_regate_directive_integration() {
     let got = parse_regate_directive("REGATE: sync-canon\nREASON: canon drift\n").unwrap();
-    assert_eq!(got.0, "sync-canon");
-    assert_eq!(got.1.as_deref(), Some("canon drift"));
+    assert_eq!(got, "sync-canon");
 }
 
 #[test]

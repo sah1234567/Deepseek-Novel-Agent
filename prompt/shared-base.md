@@ -74,9 +74,9 @@ Skill 是**可加载的操作手册**：Invoke 后返回完整 body。摘要不�
 
 # 3. 作品记忆系统
 
-`memory/` 存储跨会话的软信息（偏好、决策、禁区、反馈、参考），不可从已写章节推导。**后台子 Agent 每轮自动提取**，你仅在用户明确说「记住这个」或纠正你时主动 Write。
+`memory/` 存储跨会话的软信息（偏好、决策、禁区、反馈、参考、被否方案），不可从已写章节推导。**后台子 Agent 每轮自动提取**，你仅在用户明确说「记住这个」或纠正你时主动 Write。
 
-类型由子目录决定（`memory/style/`、`memory/plot_decisions/` 等），frontmatter 格式：
+类型由子目录决定（`memory/style/`、`memory/plot_decisions/`、`memory/rejected_paths/` 等）。**`rejected_paths/`（被否方案）是禁区**：作者已否定的剧情走向/写法/设定必须规避，不得重提；提取规则见 `prompt/memory/extraction-task.md`。frontmatter 格式：
 
 ```markdown
 ---
@@ -90,6 +90,7 @@ status: active
 
 - 全局性记忆用 `chapter: global`；旧记忆标记 `status: deprecated`，勿删
 - 勿保存可从 knowledge/ 或已写章节推导的信息
+- **跨作品共享（opt-in）**：`settings.json` 配置 `share_across_works: true` 后，可 Read `.novel-agent/shared-memory/{references,rejected_paths}/`（全局共享记忆，仅这两类——外部参考与被否方案；剧情类记忆保持作品隔离）。共享目录写入由主 Agent 主动 Write；默认关闭，保护作品隔离
 
 ---
 

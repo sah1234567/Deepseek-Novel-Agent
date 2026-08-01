@@ -13,6 +13,11 @@ pub struct ProjectSettings {
     pub permissions: PermissionsConfig,
     #[serde(default)]
     pub agent: AgentConfig,
+    /// Opt-in cross-work learning (docs/crates/novel-config.md §1.6.1): when true, the
+    /// agent may read `.novel-agent/shared-memory/{references,rejected_paths}/`
+    /// (global, across works). Default off — protects work isolation.
+    #[serde(default)]
+    pub share_across_works: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

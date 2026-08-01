@@ -79,3 +79,7 @@ API Key **不在** per-work `settings.json` 中持久化。全局读写：`load_
 - `thinking_enabled`：控制 DeepSeek reasoning 模式（默认 true），可通过 `NOVEL_THINKING_ENABLED` 环境变量覆盖
 
 支持的环境变量覆盖：`NOVEL_API_BASE`、`NOVEL_MODEL`、`NOVEL_COMPACTION_THRESHOLD`、`NOVEL_THINKING_ENABLED`、`NOVEL_MAX_OUTPUT_TOKENS`、`NOVEL_CONTEXT_WINDOW_SIZE`
+
+### 1.6.1 跨作品共享（share_across_works，opt-in）
+
+`ProjectSettings` 顶层字段 `share_across_works: bool`（默认 `false`）。开启后 agent 可读 `.novel-agent/shared-memory/{references,rejected_paths}/`（全局共享记忆，仅这两类——外部参考与被否方案；剧情类记忆保持作品隔离）。共享目录写入由主 Agent 主动 Write；默认关闭，保护作品隔离。

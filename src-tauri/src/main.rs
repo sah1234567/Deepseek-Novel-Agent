@@ -65,8 +65,6 @@ fn main() {
             commands::get_api_config,
             commands::set_api_config,
             commands::graph_get_state,
-            commands::graph_get_node,
-            commands::graph_get_loop,
             commands::graph_activate_node,
             commands::graph_clear_focus,
             commands::graph_start_node,
@@ -75,11 +73,7 @@ fn main() {
             commands::graph_reopen,
             commands::graph_loop_pause,
             commands::graph_loop_resume,
-            commands::graph_loop_set_target,
-            commands::graph_loop_set_cursor,
             commands::graph_loop_list_history,
-            commands::graph_preview_template,
-            commands::graph_apply_template,
         ])
         .run(tauri::generate_context!());
     if let Err(e) = result {

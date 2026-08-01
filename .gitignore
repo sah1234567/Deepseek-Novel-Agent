@@ -22,6 +22,9 @@ works/*
 # API Key 与本地 Agent 配置（用 env 或 Settings 自行配置）
 .novel-agent/api_config.json
 
+# 章节版本化快照（REGATE 对比用，非产物）
+**/knowledge/meta/versions/
+
 # ── 环境 / 日志 ──────────────────────────────────────────────
 .env
 .env.*

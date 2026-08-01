@@ -134,12 +134,12 @@ UI 与 Tauri 命令/DTO **同 PR** 切换；不长期双发双收。
 
 | 层 | 命令 |
 |----|------|
-| **A. Rust 后端** | `bash scripts/ci-rust-static.sh`；`bash scripts/ci-clippy.sh`；`bash scripts/ci-rust-test.sh` |
+| **A. Rust 后端** | `bash scripts/ci-rust-gate.sh`（内部含 fmt/clippy/nextest/tauri/CRAP 全链，见 CLAUDE.md CI Gates；单步调试可用 ci-rust-static / ci-clippy / ci-rust-test） |
 | **B. Tauri 壳** | `bash scripts/ci-tauri.sh` |
 | **C. 前端** | `bash scripts/ci-frontend.sh` |
-| **DB / 迁移** | 相关 crate nextest；必要时手工验证迁移 + metadata roundtrip |
-| **可选 CRAP** | 改 `crates/` 后：`ci-lcov` → `ci-crap`（见 [`cargo-crap`](../cargo-crap/SKILL.md)） |
-| **可选 冒烟** | IPC/Fork/事件流：见 [`smoke-post-change`](../smoke-post-change/SKILL.md) |
+| **DB / 迁移** | 相关 crate nextest；**本次 diff 含迁移文件或新 metadata 字段时**手工验证迁移 + metadata roundtrip |
+| **CRAP** | 改 `crates/` 生产代码后必跑：`ci-lcov` → `ci-crap`（见 [`cargo-crap`](../cargo-crap/SKILL.md)） |
+| **冒烟** | 触及 IPC/Fork/事件流：见 [`smoke-post-change`](../smoke-post-change/SKILL.md) |
 
 **禁止 `cargo test`。**
 
@@ -162,9 +162,10 @@ UI 与 Tauri 命令/DTO **同 PR** 切换；不长期双发双收。
 - `path`：从「…」改为「…」
 
 ### 验证
-- A：ci-rust-gate — 通过 / 跳过
+- A：ci-rust-gate — 通过 / 跳过（未触达 crates 生产代码）
 - B：ci-tauri — 通过 / 跳过
 - C：ci-frontend — 通过 / 跳过
+- CRAP：通过 / 跳过（未改 crates 生产代码）
 - 冒烟：smoke-ipc-fork — 通过 / 跳过
 
 ### 清单

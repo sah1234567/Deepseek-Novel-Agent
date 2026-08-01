@@ -18,7 +18,7 @@ skills/<id>/
     └── variant-b.md
 ```
 
-**SKILL.md YAML frontmatter 字段：** `name`（必填），`description`（必填，首要触发机制），`when_to_use`（触发条件），`allowed-tools`（工具权限声明）。
+**SKILL.md YAML frontmatter 字段：** `name`（必填），`description`（必填，首要触发机制，含触发词——**触发词单一来源**，when_to_use 不重复），`when_to_use`（触发场景句，不含触发词列表），`allowed-tools`（**可选**建议性工具清单——仅文档性声明，loader 只解析 name/description/when_to_use 三字段，不执行工具过滤；子 Agent 工具过滤由 `FORK_AGENT_CATALOG` 的 suggested_tools 决定。通用六工具组（Read/Write/Edit/Glob/Grep/Bash）的流派类 skill 已省略该字段，仅差异化工具清单保留），可选 `skill_kind`（workflow / strategy / reference）。
 
 ### 1.2 渐进式加载（三级）
 
@@ -48,10 +48,11 @@ Skill 统一维护在 agent 根 `skills/` 目录（新作品脚手架不再创�
 | `chapter-writing` | 两层推进：细纲阶段→正文阶段；含重写/批量/偏离处理；反 AI 味约束 |
 | `revision` | ImpactAnalysis 级联改稿；改大纲/改细纲/删章分支 |
 | `post-chapter-checklist` | 正文写后收尾核对 + `audit-knowledge` / `audit-craft` |
-| `audit-plan` / `audit-knowledge` / `audit-craft` | Graph 审计主路径 SSOT（`skills/audit-*/SKILL.md` 全文；Fork 可选加载同一份） |
+| `audit-plan` / `audit-knowledge` / `audit-craft` | Graph 审计主路径 SSOT（`skills/audit-*/SKILL.md` 全文；Fork 可选加载同一份）；报告末尾须含 `## 接下来（节点 Agent 必读）` |
+| `publish-checklist` | 发布/完结前检查（平台适配 + 全书完整性） |
 | `research` | 调研节点 / GeneralPurpose 调研映射 |
 
-顺序由 **plan-graph deps / Loop** 决定；Workflow body 末尾含 **`## 本阶段完成后`**。`prompt/orchestrator.md` 描述 Graph-Primary 编排（编排 SSOT = plan-graph，非全局 Skill 状态机）。frontmatter 可选 `skill_kind: workflow`。
+顺序由 **plan-graph deps / Loop** 决定。Workflow body 末尾须有明确的**完成收尾节**（如 `## 本阶段完成后` / `## 输出结构` / 编号收尾清单——各 skill 可自定义小节名，但必须给出"完成后做什么、如何收尾"的明确指引）。`prompt/orchestrator.md` 描述 Graph-Primary 编排（编排 SSOT = plan-graph，非全局 Skill 状态机）。
 
 ### 1.6 内置流派
 
@@ -82,7 +83,7 @@ Skill 统一维护在 agent 根 `skills/` 目录（新作品脚手架不再创�
 | 组件 | 要求 |
 |------|------|
 | Skill `description` | 首要触发机制，写清「何时 Invoke」 |
-| Workflow Skill body | 步骤 SOP + **`## 本阶段完成后`**（主 Agent 经 InvokeSkill 读到） |
+| Workflow Skill body | 步骤 SOP + **完成收尾节**（如 `## 本阶段完成后` / `## 输出结构`；主 Agent 经 InvokeSkill 读到） |
 | Subagent prompt | 角色约束 + 工作流程 + **`## 最终输出（必须写进返回正文）`** + **`## 「接下来」写作参考`** |
 | Subagent 返回报告 | Checker/Analyzer **必须**在报告末尾输出 **`## 接下来（主 Agent 必读）`**（主 Agent 读不到 prompt 文件） |
 | `prompt/orchestrator.md` | Graph-Primary：plan-graph 编排 + 节点内 InvokeSkill；ForkSubAgent 非主审计路径；不写「引擎将自动…」 |

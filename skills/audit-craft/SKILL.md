@@ -1,6 +1,9 @@
 ---
 name: audit-craft
-description: "正文写完后 Invoke：只读审计对话质量、叙事节奏、情感轨迹、设定一致性与反 AI 味；输出报告，节点 Agent 再 Edit / AuditStatusUpdate；与 audit-knowledge 闭环后 GraphSubmitForApproval。原 ChapterCraftAnalyzer。"
+description: 对话/节奏/情感/设定综合分析——只读审计对话质量、叙事节奏、情感轨迹、设定一致性与反 AI 味；输出报告，节点 Agent 再 Edit / AuditStatusUpdate；与 audit-knowledge 闭环后 GraphSubmitForApproval。正文写完后 Invoke。触发词："审文笔"、"查 AI 味"。
+when_to_use: 正文写完后、需综合分析文笔质量时使用
+skill_kind: workflow
+allowed-tools: Read, Grep, CharacterSearch, RelationQuery, TrackingQuery, ForeshadowTracker, Stats, Tail
 ---
 # audit-craft — 对话 / 节奏 / 情感综合分析（只读）
 
@@ -11,6 +14,16 @@ description: "正文写完后 Invoke：只读审计对话质量、叙事节奏�
 - **禁止 fork 任何子 Agent**
 - 最终输出必须是自然语言，禁止 JSON / ```json 代码块
 - 只读，不修改文件
+
+## 独立性原则（Fork 审计）
+
+当以 Fork 隔离方式执行本审计时（`ForkSubAgent(ChapterCraftAnalyzer)`），独立性是硬约束：
+
+- **只基于工件 + 本 Skill 的审计标准做判断**——工件 = 正文/人物卡/追踪文件本身；标准 = 本 Skill 的检查项
+- **不接收、不依赖主 Agent 的任何判断、分数、结论**（防止锚定偏差——审计结论必须来自你实际读到的文件）
+- 判断依据全部来自你实际 Read / Grep / 查询到的文件内容，不得假设
+
+主路径（节点内 InvokeSkill）审计由主 Agent 直接执行，本原则不适用。
 
 ## 工具使用铁律（违反即浪费 ReAct 轮次）
 
@@ -234,11 +247,12 @@ task 含多个章节路径时：**逐章**分析（对话/节奏/情感/设定�
 
 ## 「接下来」写作参考
 
-本节须**原文写入**报告末尾，供节点 Agent 编排；按本轮结论写出 1～5 条自然语言后续建议：
+本节须**原文写入**报告末尾，供节点 Agent 编排；按本轮结论写出 1～6 条自然语言后续建议：
 
-1. 将摘要与关键问题（对话 / 节奏 / 情感 / 设定一致性）转述给用户。
-2. 若需改稿：节点 Agent 应按本报告问题清单 Edit 对应章节（报告中引文为说明性摘要，Edit 前须 Read 核对 exact 原文）。设定矛盾优先于文笔问题修复——称呼错误、POV 越界、战力跳级必须先改。
-3. 优先修复：称呼矛盾、POV 越界、major 情感转折缺铺垫、无归属对话、对话率 >70%。
-4. 执行忠实度 / 知识库遗漏由 InvokeSkill(`audit-knowledge`) 负责；勿建议节点 Agent 再次 InvokeSkill(`audit-craft`) 或 Fork 重复同一章分析。
-5. 若问题仅为轻微 AI 味且用户未要求改稿：汇报结论即可，不必强制 Edit。
-6. 若节点 Agent 已按报告改稿 → `AuditStatusUpdate`（或 Edit 台账）：对应章 `文笔CCA=已通过`；与 audit-knowledge 闭环后 `GraphSubmitForApproval`。
+1. **报告落盘**：报告全文 Write 到 `knowledge/meta/audits/chapter-NNN-cca.md`（多章按章归档；重跑覆盖）。每条问题标注 `[可泛化]`（值得沉淀为规则的错误模式）或 `[一次性]`；仅 `[可泛化]` 项进入 `knowledge/meta/findings/`
+2. 将摘要与关键问题（对话 / 节奏 / 情感 / 设定一致性）转述给用户。
+3. 若需改稿：节点 Agent 应按本报告问题清单 Edit 对应章节（报告中引文为说明性摘要，Edit 前须 Read 核对 exact 原文）。设定矛盾优先于文笔问题修复——称呼错误、POV 越界、战力跳级必须先改。
+4. 优先修复：称呼矛盾、POV 越界、major 情感转折缺铺垫、无归属对话、对话率 >70%。
+5. 执行忠实度 / 知识库遗漏由 InvokeSkill(`audit-knowledge`) 负责；勿建议节点 Agent 再次 InvokeSkill(`audit-craft`) 或 Fork 重复同一章分析。
+6. 若问题仅为轻微 AI 味且用户未要求改稿：汇报结论即可，不必强制 Edit。
+7. 若节点 Agent 已按报告改稿 → `AuditStatusUpdate`（或 Edit 台账）：对应章 `文笔CCA=已通过`；与 audit-knowledge 闭环后 `GraphSubmitForApproval`。

@@ -4,7 +4,7 @@ description: >-
   用 cargo-crap 计算 Rust 函数的 CRAP（Change Risk Anti-Patterns）分数：圈复杂度 × 覆盖率。
   项目脚本分两步：`ci-lcov` 生成 lcov.info（慢，改代码后跑一次），`ci-crap` 仅跑 cargo crap（快，可反复）。
   覆盖 `.cargo-crap.toml`、过期 lcov 假阳性、Windows PowerShell 陷阱、baseline 回归、超标函数修复。
-  用户提到 CRAP、cargo crap、lcov、ci-crap、ci-lcov 时使用。
+  用户提到 CRAP、cargo crap、lcov、ci-crap、ci-lcov 时使用。本 skill 是 CRAP 门禁步骤的权威参考。
 ---
 
 # cargo-crap：CRAP 复杂度 × 覆盖率分析
@@ -24,7 +24,7 @@ bash scripts/ci-crap.sh
 .\scripts\ci-lcov.ps1; .\scripts\ci-crap.ps1
 ```
 
-> **Windows 勿用** `./scripts/ci-crap.sh`：`.sh` 关联 `git-bash.exe` 会弹新窗，当前终端无输出。用 `.\scripts\ci-crap.ps1`。
+> **Windows：** 入口用 `.\scripts\ci-crap.ps1`（内部调 Git Bash）；交互式 Git Bash 中亦可直接 `bash scripts/ci-crap.sh`（与 CLAUDE.md「Windows 用 Git Bash 跑 .sh」口径一致）。
 
 ## 两步脚本
 
@@ -60,8 +60,8 @@ bash scripts/ci-crap.sh
 **信号（stderr 警告）：**
 ```
 warning: N source files had no matching entry in the LCOV report
-  crates\novel-tools\src\permission.rs
-  crates\novel-knowledge\src\text_util.rs
+  crates\novel-knowledge\src\findings.rs
+  crates\novel-tools\src\novel\chapter_lint.rs
 ```
 
 **原因：** 新文件/移动文件在旧 lcov 中覆盖率为 0%，CC 15–20 → CRAP 200–300+。
@@ -76,20 +76,27 @@ warning: N source files had no matching entry in the LCOV report
 
 **快速自检：** `git diff` 触达 `crates/` 且未跑过 `ci-lcov` → 先 lcov 再 crap。
 
-### 坑 3：Windows `ci-lcov.ps1` 误报
+### 坑 3：Windows `ci-lcov.ps1` 误报 / OOM 崩溃
 
-`cargo llvm-cov` stderr 的 `info: cargo-llvm-cov currently setting cfg(coverage)` 可能被 PowerShell `Stop` 策略截断。脚本已用 `Continue` 包裹。若仍失败：
+**stderr 误报：** `cargo llvm-cov` 的 `info: cargo-llvm-cov currently setting cfg(coverage)` 可能被 PowerShell `Stop` 策略截断。脚本已用 `Continue` 包裹。若仍失败：
 
 ```powershell
 $env:NEXTEST_PROFILE = "ci"
 cargo llvm-cov nextest --workspace --all-features --lcov --output-path lcov.info
 ```
 
-成功标志：`Finished report saved to lcov.info`。
+**OOM 崩溃（Windows 特有）：** instrument-coverage 编译大 crate（如 novel-core 测试目标）在高并行下 rustc 内存耗尽崩溃——症状：`handle_alloc_error` / exit `0xc0000409`，随后 `error[E0786]: found invalid metadata files` 或 `crate X required to be available in rlib format, but was not found`（崩溃残留）。缓解（脚本已内置）：
+
+- `CARGO_BUILD_JOBS=2`（降并行）+
+- `CARGO_INCREMENTAL=0`（关增量，避免 rmeta-only 残留）
+- `--exclude novel-agent`（src-tauri 的 tauri-build 在 instrument-coverage 下不稳定，且已被 `.cargo-crap.toml` 排除）
+- `--features tauri`（novel-server 的 event_payload/dto 模块是 `#[cfg(feature="tauri")]`，不开则无覆盖数据 → CRAP 假阳性）
+
+清 `target/llvm-cov-target` 后重跑。成功标志：`Finished report saved to lcov.info`。
 
 ### 坑 4：`.sh` 脚本报 `pipefail: invalid option`
 
-CRLF 行尾导致。修复：`git checkout -- scripts/ci-*.sh`
+CRLF 行尾导致。`ci-lcov.sh` / `ci-crap.sh` 已内置 `if (set -o pipefail)` 防护（不会报错）；若其他 `.sh` 脚本复现，修复：`git checkout -- scripts/<脚本名>.sh`。
 
 ### 坑 5：工具未安装
 
@@ -126,19 +133,32 @@ cargo crap --lcov lcov.info --workspace --baseline baseline.json --fail-regressi
 
 v0.2.x 能识别函数移动（报告 Moved，非 New+Removed）。适合存量代码难以一次性清零的场景。
 
-## `.cargo-crap.toml`（项目已配置）
+## `.cargo-crap.toml`（项目已配置，以磁盘文件为准）
 
 ```toml
 threshold = 20
 missing = "pessimistic"   # 0% 覆盖 → CRAP 极敏感
-exclude = ["src-tauri", "**/tests/integration/**", ...]
+exclude = [
+  "**/src-tauri/**",           # Tauri 壳（IPC 胶水，业务在 session_api/event_payload/dto）
+  "**/tauri/commands/**",
+  "**/tauri/engine_loop.rs",
+  "**/tauri/events.rs",
+  "**/tauri/graph_emit.rs",
+  "**/tauri/mod.rs",
+  "**/build.rs",
+  "**/tests/**",               # 测试目录一律排除（须带 **/ 前缀）
+  "**/tests/integration/**",
+  "**/engine/tests.rs",        # src/ 下内联 #[cfg(test)] 模块
+  "**/turn/loop/tests.rs",
+  "**/db/tests.rs",
+]
 ```
 
 | 场景 | 做法 |
 |------|------|
 | 存量难清零 | baseline + `--fail-regression` |
 | 收紧门禁 | 降 `threshold` 或改 `CRAP_THRESHOLD` 环境变量 |
-| integration 测试 | `**/tests/integration/**` 排除（**须带** `**/` 前缀） |
+| 新增排除项 | 追加到 `.cargo-crap.toml` 的 `exclude`（**须带** `**/` 前缀），禁止把生产文件塞入 |
 
 ## 手动命令
 
@@ -175,4 +195,4 @@ CRAP(m) = comp(m)² × (1 − cov(m)/100)³ + comp(m)
 4. **修复：** 按 CC/Coverage 表对症；修后必须 `ci-lcov` → `ci-crap`
 5. **不绕过：** 不调高 threshold、不加 `--allow`、不把生产文件加 exclude
 
-**通过标准：** `ci-crap` exit 0，输出含 `none exceed CRAP threshold`。
+**通过标准：** `ci-crap` exit 0，且输出**无** `✗ N function(s) exceed CRAP threshold` 行（有该行即超标，exit 非 0）。

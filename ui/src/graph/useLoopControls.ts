@@ -2,7 +2,7 @@ import { useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { IPC_COMMANDS } from "../ipc/commands";
 
-/** Pause / resume Book Loop. Target/cursor/getLoop IPC are backend-ready via `IPC_COMMANDS` but not yet exposed in this hook. */
+/** Pause / resume Book Loop. */
 export function useLoopControls(onMutate?: () => Promise<unknown>) {
   const after = useCallback(async () => {
     if (onMutate) await onMutate();

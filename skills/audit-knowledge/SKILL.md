@@ -1,6 +1,9 @@
 ---
 name: audit-knowledge
-description: "正文写完后 Invoke：只读审计场景忠实度、意外事件与收尾完整性（不重复 audit-plan 维度）；输出报告，节点 Agent 再 Edit / AuditStatusUpdate。原 KnowledgeAuditor。"
+description: 正文执行忠实度审计——只读审计场景忠实度、意外事件与收尾完整性（不重复 audit-plan 维度）；输出报告，节点 Agent 再 Edit / AuditStatusUpdate。正文写完后 Invoke。触发词："审计正文"、"检查忠实度"。
+when_to_use: 正文写完后、需核验正文是否忠实执行细纲与收尾完整性时使用
+skill_kind: workflow
+allowed-tools: Read, Grep, CharacterSearch, RelationQuery, TrackingQuery, ForeshadowTracker, PlotGraph, Corkboard, Tail, AuditStatusQuery
 ---
 # audit-knowledge — 正文执行忠实度审计（只读）
 
@@ -13,6 +16,16 @@ description: "正文写完后 Invoke：只读审计场景忠实度、意外事�
 - **禁止 fork 任何子 Agent**
 - **禁止 Write/Edit** 任何文件
 - 最终输出必须是自然语言，禁止 JSON / ```json 代码块
+
+## 独立性原则（Fork 审计）
+
+当以 Fork 隔离方式执行本审计时（`ForkSubAgent(KnowledgeAuditor)`），独立性是硬约束：
+
+- **只基于工件 + 本 Skill 的审计标准做判断**——工件 = 正文/细纲/追踪文件本身；标准 = 本 Skill 的检查项
+- **不接收、不依赖主 Agent 的任何判断、分数、结论**（防止锚定偏差——审计结论必须来自你实际读到的文件）
+- 判断依据全部来自你实际 Read / 查询到的文件内容，不得假设
+
+主路径（节点内 InvokeSkill）审计由主 Agent 直接执行，本原则不适用。
 
 ## 工具使用铁律（违反即浪费 ReAct 轮次）
 
@@ -135,9 +148,10 @@ task 含多个章节路径时：**逐章**执行场景对照与收尾检查，�
 
 ## 「接下来」写作参考
 
-1. 场景遗漏 → 节点 Agent 应 Edit 正文补充缺失场景，或 AskUserQuestion 确认是否跳过
-2. 场景部分执行 → 节点 Agent 应 Read 对应正文段，按偏差说明 Edit 对齐细纲
-3. 意外事件 → 节点 Agent 应 Edit append 到对应追踪文件
-4. 收尾遗漏 → 节点 Agent 应 Edit 补充细纲「写后记录」和「知识库更新确认」
-5. 设定一致性 / 对话质量 / 叙事节奏 / 反AI味 由 InvokeSkill(`audit-craft`) 负责；**不要**建议节点 Agent 再次 InvokeSkill(`audit-knowledge`) 或 Fork 重复同类审计
-6. 修复完成后 → 节点 Agent 应 `AuditStatusUpdate`（或 Edit 台账）：对应章 `正文KA=已通过`
+1. **报告落盘**：报告全文 Write 到 `knowledge/meta/audits/chapter-NNN-ka.md`（多章按章归档；重跑覆盖）。每条问题标注 `[可泛化]`（值得沉淀为规则的错误模式）或 `[一次性]`；仅 `[可泛化]` 项进入 `knowledge/meta/findings/`
+2. 场景遗漏 → 节点 Agent 应 Edit 正文补充缺失场景，或 AskUserQuestion 确认是否跳过
+3. 场景部分执行 → 节点 Agent 应 Read 对应正文段，按偏差说明 Edit 对齐细纲
+4. 意外事件 → 节点 Agent 应 Edit append 到对应追踪文件
+5. 收尾遗漏 → 节点 Agent 应 Edit 补充细纲「写后记录」和「知识库更新确认」
+6. 设定一致性 / 对话质量 / 叙事节奏 / 反AI味 由 InvokeSkill(`audit-craft`) 负责；**不要**建议节点 Agent 再次 InvokeSkill(`audit-knowledge`) 或 Fork 重复同类审计
+7. 修复完成后 → 节点 Agent 应 `AuditStatusUpdate`（或 Edit 台账）：对应章 `正文KA=已通过`

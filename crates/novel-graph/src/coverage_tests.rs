@@ -3,10 +3,10 @@
 #[cfg(test)]
 mod tracker_coverage {
     use crate::{
-        check_write_allowed, ensure_graph_initialized, list_handoff_snapshots, load_handoff,
-        save_handoff_snapshot, save_plan, write_default_plan_file, Acceptance, AdvanceRule,
-        CounterOp, Cursor, GraphTracker, LoopOnAdvance, MachineAcceptance, NodeHandoff, NodeStatus,
-        PlanGraph, PlanNode, Until, WorkflowLoop,
+        check_write_allowed, ensure_graph_initialized, list_handoff_snapshots,
+        save_handoff_snapshot, save_plan, Acceptance, AdvanceRule, CounterOp, Cursor, FileTouch,
+        GraphTracker, LoopOnAdvance, MachineAcceptance, NodeHandoff, NodeStatus, PlanGraph,
+        PlanNode, Until, WorkflowLoop,
     };
     use std::collections::HashMap;
     use tempfile::TempDir;
@@ -242,24 +242,6 @@ mod tracker_coverage {
     }
 
     #[test]
-    fn set_loop_setting_requires_known_loop() {
-        let (_tmp, mut t) = tracker();
-        assert!(t
-            .set_loop_setting("missing-loop", "targetChapters", serde_json::json!(10))
-            .is_err());
-        t.set_loop_setting("book-body", "targetChapters", serde_json::json!(12))
-            .unwrap();
-        assert_eq!(
-            t.state
-                .settings
-                .settings
-                .get("targetChapters")
-                .and_then(|v| v.as_i64()),
-            Some(12)
-        );
-    }
-
-    #[test]
     fn gate_allows_when_disabled() {
         let (_tmp, mut t) = tracker();
         t.state.settings.enforce_gates = false;
@@ -272,7 +254,7 @@ mod tracker_coverage {
         t.state.nodes.get_mut("world-bible").unwrap().status = NodeStatus::Achieved;
         t.state.nodes.get_mut("outline").unwrap().status = NodeStatus::Achieved;
         t.recompute_ready();
-        t.start_node("ensure-fine-outline", None).unwrap();
+        t.start_node("ensure-fine-outline").unwrap();
         let paths = t.writable_paths("ensure-fine-outline").unwrap();
         let path = paths
             .first()
@@ -299,59 +281,8 @@ mod tracker_coverage {
         let (_tmp, mut t) = tracker();
         t.state.nodes.get_mut("world-bible").unwrap().status = NodeStatus::Achieved;
         t.recompute_ready();
-        t.start_node("outline", None).unwrap();
+        t.start_node("outline").unwrap();
         assert!(check_write_allowed(&t, "secrets/passwords.txt", Some("outline")).is_err());
-    }
-
-    #[test]
-    fn write_default_plan_and_load_handoff_roundtrip() {
-        let tmp = TempDir::new().unwrap();
-        write_default_plan_file(tmp.path()).unwrap();
-        assert!(tmp.path().join("knowledge/meta/plan-graph.json").exists());
-        write_default_plan_file(tmp.path()).unwrap(); // no-op second call
-                                                      // With empty skeleton, no nodes exist. Build one manually.
-        let mut plan = classic_plan();
-        // Only keep world-bible for this test
-        plan.nodes = vec![PlanNode {
-            id: "world-bible".into(),
-            title: "世界观".into(),
-            spec: Some("build world bible".into()),
-            tags: vec!["world_bible".into()],
-            acceptance: Acceptance {
-                machine: MachineAcceptance::None,
-                human: Some(crate::HumanGate {
-                    required: true,
-                    on_reject: crate::OnReject::Continue,
-                    prompt: Some("批准？".into()),
-                    review: vec![],
-                }),
-            },
-            artifacts: vec![crate::ArtifactRef {
-                path: Some("knowledge/shared-systems/背景设定.md".into()),
-                role: crate::ArtifactRole::PrimaryDeliverable,
-                path_template: None,
-            }],
-            ..Default::default()
-        }];
-        plan.loops.clear();
-        save_plan(tmp.path(), &plan).unwrap();
-        let mut t = GraphTracker::new(plan);
-        t.save(tmp.path()).unwrap();
-        t.start_node("world-bible", None).unwrap();
-        t.set_pending_summary("world-bible", "bible done".into())
-            .unwrap();
-        t.record_file_touch(
-            "world-bible",
-            "knowledge/shared-systems/背景设定.md",
-            "create",
-        )
-        .unwrap();
-        t.state.nodes.get_mut("world-bible").unwrap().status = NodeStatus::AwaitingApproval;
-        t.approve(tmp.path(), "world-bible").unwrap();
-        let h = load_handoff(tmp.path(), "world-bible")
-            .unwrap()
-            .expect("handoff");
-        assert!(h.summary.contains("bible"));
     }
 
     #[test]
@@ -399,58 +330,6 @@ mod tracker_coverage {
     }
 
     #[test]
-    fn set_loop_cursor_demotes_stations_and_readies_entry() {
-        let (_tmp, mut t) = tracker();
-        for id in ["world-bible", "outline"] {
-            t.state.nodes.get_mut(id).unwrap().status = NodeStatus::Achieved;
-        }
-        t.recompute_ready();
-        t.state.nodes.get_mut("ensure-fine-outline").unwrap().status = NodeStatus::Running;
-        t.state.nodes.get_mut("write-chapter").unwrap().status = NodeStatus::Ready;
-        t.state.running_node_ids = vec!["ensure-fine-outline".into()];
-
-        let mut counters = HashMap::new();
-        counters.insert("chapter".into(), 5_i64);
-        counters.insert("volume".into(), 1_i64);
-        counters.insert("round".into(), 5_i64);
-        t.set_loop_cursor("book-body", counters).unwrap();
-
-        assert_eq!(
-            t.state.nodes.get("write-chapter").unwrap().status,
-            NodeStatus::Waiting
-        );
-        assert_eq!(
-            t.state.nodes.get("ensure-fine-outline").unwrap().status,
-            NodeStatus::Ready
-        );
-        assert!(!t
-            .state
-            .running_node_ids
-            .iter()
-            .any(|id| id == "ensure-fine-outline"));
-        assert_eq!(
-            t.state
-                .loops
-                .get("book-body")
-                .unwrap()
-                .cursor
-                .counters
-                .get("chapter"),
-            Some(&5)
-        );
-        assert_eq!(
-            t.state
-                .loops
-                .get("book-body")
-                .unwrap()
-                .cursor
-                .counters
-                .get("round"),
-            Some(&5)
-        );
-    }
-
-    #[test]
     fn loop_advance_clears_focus_when_focused_station_reopened() {
         let (tmp, mut t) = tracker();
         for id in [
@@ -463,7 +342,7 @@ mod tracker_coverage {
             t.state.nodes.get_mut(id).unwrap().pending_summary = Some("ok".into());
         }
         t.recompute_ready();
-        t.start_node("sync-canon", None).unwrap();
+        t.start_node("sync-canon").unwrap();
         t.set_focus(Some("sync-canon".into())).unwrap();
         t.set_pending_summary("sync-canon", "synced".into())
             .unwrap();
@@ -493,7 +372,7 @@ mod tracker_coverage {
             .unwrap()
             .human_intervened = true;
         t.recompute_ready();
-        t.start_node("sync-canon", None).unwrap();
+        t.start_node("sync-canon").unwrap();
         t.set_pending_summary("sync-canon", "synced".into())
             .unwrap();
         assert!(t.approve(tmp.path(), "sync-canon").unwrap().is_some());
@@ -504,18 +383,12 @@ mod tracker_coverage {
     }
 
     #[test]
-    fn set_loop_cursor_unknown_loop_errors() {
-        let (_tmp, mut t) = tracker();
-        assert!(t.set_loop_cursor("missing-loop", HashMap::new()).is_err());
-    }
-
-    #[test]
     fn human_intervened_forces_awaiting_approval_even_if_plan_human_false() {
         let (_tmp, mut t) = tracker();
         t.state.nodes.get_mut("world-bible").unwrap().status = NodeStatus::Achieved;
         t.state.nodes.get_mut("outline").unwrap().status = NodeStatus::Achieved;
         t.recompute_ready();
-        t.start_node("ensure-fine-outline", None).unwrap();
+        t.start_node("ensure-fine-outline").unwrap();
         t.set_pending_summary("ensure-fine-outline", "fine outline ok".into())
             .unwrap();
         t.submit_for_approval("ensure-fine-outline").unwrap();
@@ -588,5 +461,83 @@ mod tracker_coverage {
         // Just verify Cursor API works
         assert_eq!(cursor.counters.get("chapter"), Some(&5));
         let _ = settings;
+    }
+
+    #[test]
+    fn loop_advance_preserves_prev_iteration_handoff_for_entry_node() {
+        let (tmp, mut t) = tracker();
+
+        // Achieve all nodes before sync-canon (the advance_after of book-body loop).
+        // Set handoff on external dep nodes (outline feeds into ensure-fine-outline).
+        for id in [
+            "world-bible",
+            "outline",
+            "ensure-fine-outline",
+            "write-chapter",
+        ] {
+            let rt = t.state.nodes.get_mut(id).unwrap();
+            rt.status = NodeStatus::Achieved;
+            rt.pending_summary = Some(format!("{id} done"));
+            // Simulate a prior achieve: handoff must be set for upstream_handoffs to see it.
+            rt.handoff = Some(NodeHandoff {
+                node_id: id.to_string(),
+                summary: format!("{id} handoff content"),
+                files_touched: vec![FileTouch {
+                    path: format!("{id}-output.md"),
+                    op: "create".into(),
+                }],
+                artifacts: vec![format!("{id}-output.md")],
+                achieved_at: Some("2026-01-01T00:00:00Z".into()),
+            });
+        }
+        t.recompute_ready();
+        t.start_node("sync-canon").unwrap();
+        t.record_file_touch("sync-canon", "knowledge/characters/hero.md", "update")
+            .unwrap();
+        t.set_pending_summary("sync-canon", "canon updated for ch1".into())
+            .unwrap();
+
+        // Advance the loop.
+        let adv = t.approve(tmp.path(), "sync-canon").unwrap();
+        assert!(adv.is_some(), "sync-canon should advance book-body");
+
+        // Verify prev_iteration_handoff was saved on the loop runtime.
+        let loop_rt = t.state.loops.get("book-body").unwrap();
+        let prev = loop_rt
+            .prev_iteration_handoff
+            .as_ref()
+            .expect("prev_iteration_handoff must be saved on advance");
+        assert_eq!(prev.node_id, "sync-canon");
+        assert!(prev.summary.contains("ch1"));
+        assert!(prev
+            .files_touched
+            .iter()
+            .any(|f| f.path.contains("hero.md")));
+
+        // Verify the entry node's objective block includes the previous iteration handoff.
+        let obj = t.node_objective_block("ensure-fine-outline").unwrap();
+
+        // KV-cache ordering: upstream handoffs BEFORE spec, prev_iteration AFTER spec.
+        let pos_upstream = obj.find("## Upstream handoffs").unwrap();
+        let pos_spec = obj.find("fine outline ch").unwrap();
+        let pos_prev = obj.find("## Previous iteration summary").unwrap();
+
+        assert!(
+            pos_upstream < pos_spec,
+            "stable upstream handoffs must come BEFORE variable spec for KV-cache reuse\n\
+             upstream at {pos_upstream}, spec at {pos_spec}"
+        );
+        assert!(
+            pos_spec < pos_prev,
+            "variable spec must come BEFORE prev-iteration handoff \
+             (both are variable, but prev is completely new each round)\n\
+             spec at {pos_spec}, prev at {pos_prev}"
+        );
+
+        // Content assertions.
+        assert!(obj.contains("## Previous iteration summary"));
+        assert!(obj.contains("### From node sync-canon"));
+        assert!(obj.contains("canon updated for ch1"));
+        assert!(obj.contains("knowledge/characters/hero.md"));
     }
 }

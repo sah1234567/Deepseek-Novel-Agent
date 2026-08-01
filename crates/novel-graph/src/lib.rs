@@ -5,7 +5,6 @@
 //! Generic DAG+Loop workflow execution engine.
 //! Depends only on `novel-config` (+ serde stack). Must not depend on novel-core/tools/server.
 
-mod checkpoint;
 mod error;
 mod gate;
 mod init;
@@ -20,15 +19,12 @@ mod validate;
 #[cfg(test)]
 mod coverage_tests;
 
-pub use checkpoint::{
-    checkpoint_path, load_checkpoint, save_checkpoint, GraphCheckpoint, CHECKPOINTS_DIR_REL,
-};
 pub use error::{GraphError, GraphResult};
 pub use gate::check_write_allowed;
-pub use init::{ensure_graph_initialized, write_default_plan_file};
+pub use init::ensure_graph_initialized;
 pub use persist::{
-    append_jsonl, list_handoff_snapshots, load_handoff, load_plan, load_state, plan_exists,
-    plan_path, save_handoff, save_handoff_snapshot, save_plan, save_state, state_path,
+    append_jsonl, list_handoff_snapshots, load_plan, load_state, plan_exists, plan_path,
+    save_handoff, save_handoff_snapshot, save_plan, save_state, state_path,
 };
 pub use regate::parse_regate_directive;
 pub use snapshot::{build_snapshot, empty_snapshot};

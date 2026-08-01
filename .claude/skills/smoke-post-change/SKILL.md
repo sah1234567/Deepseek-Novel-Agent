@@ -18,8 +18,8 @@ description: >-
 
 | 命中路径 | 原因 |
 |----------|------|
-| `crates/novel-core/src/engine_loop.rs` | 事件转发、子 Agent drain |
-| `crates/novel-core/src/turn_loop.rs` | Fork 创建、interrupt |
+| `crates/novel-core/src/engine/**`（run_loop / lifecycle） | 事件转发、子 Agent drain |
+| `crates/novel-core/src/turn/loop/**`、`subagent/**` | Fork 创建、interrupt、drain |
 | `crates/novel-server/src/tauri/` | command/event 注册、IPC 通道 |
 | `src-tauri/` | Tauri 壳层事件桥接 |
 | `ui/src/**/*.ts(x)` 中的 `listen(` / `emit(` | 前端事件订阅 |
@@ -58,7 +58,7 @@ bash scripts/smoke-ipc-fork.sh /path/to/tauri-dev-log.txt
 
 扫描目标：
 - **FAIL:** `PostMessage failed` / `0x80070718`（IPC 配额耗尽）
-- **WARN:** `engine_loop_exited`（非预期的 engine 退出——人工判断）
+- **WARN:** `engine_loop_exited` — 判定：UI 仍存活（应用窗口未退出）但 engine 通道关闭 = 非预期（拦截）；应用整体退出 = 预期（忽略）
 
 ### Phase 2b — 手动 WebView2（无日志时）
 

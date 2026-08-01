@@ -39,7 +39,7 @@ description: >-
 |--------|------|------|
 | 忽略 Promise | `async fn` 调用不加 `await` 或 `.catch()` | 显式处理或注释说明有意 fire-and-forget |
 | `any` / `@ts-ignore` | 新增 `any` 类型、`@ts-ignore` 注释 | 定义具体类型；`unknown` + type guard |
-| 多次 WS / 直连 | 组件直接 `new WebSocket()` | 统一走 Tauri `invoke`/`listen`；单一 `GameTransport` 出口 |
+| 多次 WS / 直连 | 组件直接 `new WebSocket()` | 统一走 Tauri `invoke`/`listen`（`ipc/commands.ts` + `ipc/events.ts` 常量，监听集中在 `useAgentTauriListeners`） |
 | 巨型组件 | 一个组件管理数据加载 + 事件监听 + UI 渲染 | 逻辑抽到 hook，组件只渲染（见 [`engineering-principles`](../engineering-principles/SKILL.md)） |
 | Props 透传 | 透传整个 domain 对象 | Props 只声明实际需要的字段（最小暴露） |
 | 配置散落 | 硬编码 URL/端口/超时 | 统一从 `AppConfig` 或 env 读取 |
@@ -60,6 +60,10 @@ bash scripts/ci-frontend.sh
 
 若改动触及前端 `listen`/`emit` 或 IPC 事件流，见 [`smoke-post-change`](../smoke-post-change/SKILL.md)。
 
+### 文档同步
+
+改 IPC/类型/事件后按改动范围更新：`docs/crates/novel-server.md`、`FRAMEWORK.md` §2.5.1（命令/事件契约）；能力概览 → `README.md`、`docs/README.md`。
+
 ### 汇报模板
 
 ```markdown
@@ -72,3 +76,12 @@ bash scripts/ci-frontend.sh
 - [x] 测试补写：<已补 / 不适用>
 - [x] 文档已更新：<文件列表>
 ```
+
+### 关联 Skill
+
+| Skill | 用途 |
+|-------|------|
+| [`refactor-cleanup`](../refactor-cleanup/SKILL.md) | 步骤 1 委托：死代码/兼容层/注释清理 |
+| [`smoke-post-change`](../smoke-post-change/SKILL.md) | 步骤 5 可选：listen/emit 改动时 IPC 冒烟 |
+| [`engineering-principles`](../engineering-principles/SKILL.md) | 审查基准：TS 反模式与组件设计原则 |
+| [`post-change-checklist`](../post-change-checklist/SKILL.md) | 跨层改动时改用本编排器 |

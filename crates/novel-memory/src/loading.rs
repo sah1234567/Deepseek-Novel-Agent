@@ -8,8 +8,8 @@ use std::path::Path;
 /// Load memory/ files into a Markdown block for the system prompt.
 ///
 /// Scans `memory/` subdirectories (style/, plot_decisions/,
-/// character_guardrails/, feedback/, references/), reads frontmatter via
-/// [`parse_frontmatter`], filters out inactive files via
+/// character_guardrails/, feedback/, references/, rejected_paths/), reads
+/// frontmatter via [`parse_frontmatter`], filters out inactive files via
 /// [`MemoryStatus::is_active`], then loads body content ≤ `max_bytes`.
 /// Type is derived from the directory — flat root files are ignored.
 pub fn load_memory(project_root: &Path, max_bytes: usize) -> String {

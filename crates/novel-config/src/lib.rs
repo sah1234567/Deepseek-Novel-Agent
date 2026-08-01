@@ -108,6 +108,8 @@ mod tests {
         s.validate().unwrap();
         assert_eq!(s.model.provider, Provider::Deepseek);
         assert_eq!(s.model.context_window_size, 1_000_000);
+        // Cross-work sharing is opt-in — defaults off.
+        assert!(!s.share_across_works);
     }
 
     #[rstest]
